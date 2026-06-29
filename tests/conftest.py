@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+os.environ.setdefault("HERMES_HOME", str(PROJECT_ROOT / ".pytest-cache" / "hermes-home"))
 PLUGIN_DIR = PROJECT_ROOT / "engine" / "marketing-os"
 PLUGIN_PARENT = PLUGIN_DIR.parent
 sys.path.insert(0, str(PLUGIN_PARENT))  # market-os 包的父目录
