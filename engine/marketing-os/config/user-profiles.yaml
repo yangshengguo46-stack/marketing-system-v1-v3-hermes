@@ -1,0 +1,32 @@
+# 用户画像配置 — 驱动个性化热点匹配和选题建议
+# 可以配置多个画像（对应不同的账号/人设）
+
+profiles:
+  - id: "default"
+    name: "默认画像"
+    category: "科技"
+    niche: "AI应用/独立开发"
+    profession: "技术创业者"
+    interests: "AI, 大模型, 视频生成, 开源, 独立开发, SaaS"
+    platforms:
+      - douyin
+      - bilibili
+    style: "教学型"
+    audience: "25-35岁科技从业者和创业者"
+    content_types:
+      - "技术解读"
+      - "产品拆解"
+      - "创业思考"
+
+  # 示例: 可以加更多画像
+  # - id: "lifestyle"
+  #   name: "生活方式号"
+  #   category: "生活方式"
+  #   niche: "数码产品评测"
+  #   profession: "数码博主"
+  #   interests: "手机, 电脑, 摄影, 智能家居"
+  #   platforms:
+  #     - douyin
+  #     - xiaohongshu
+  #   style: "评测型"
+  #   audience: "20-35岁数码爱好者"

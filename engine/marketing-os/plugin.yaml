@@ -1,0 +1,10 @@
+name: marketing-os
+version: "0.1.0"
+description: 智能营销系统 — 热点抓取、趋势分析、内容建议、账号管理、短视频创作接入
+author: yucheng
+hermes_min_version: "0.14.0"
+toolsets:
+  - marketing-os
+hooks:
+  - on_session_start
+  - on_session_end

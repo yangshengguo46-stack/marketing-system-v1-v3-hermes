@@ -1,0 +1,37 @@
+# JavaScript / Electron
+node_modules/
+dist/
+release/
+*.blockmap
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-cache/
+backend/build/
+backend/dist/
+backend/*.spec
+
+# Local runtime and secrets
+.env
+.env.*
+!.env.example
+data/
+runtime-data/
+engine/marketing-os/config/*.json
+!engine/marketing-os/config/intelligence-config.json
+engine/marketing-os/config/monitor_data/
+
+# Upstream runtime checkout is tracked as its own repository boundary.
+runtime/hermes-agent/
+
+# Local agent tooling installed for development, not product runtime.
+.agents/
+skills-lock.json
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
