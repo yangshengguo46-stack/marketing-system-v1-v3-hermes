@@ -10,7 +10,7 @@
 2. 不以新增字段、页面、Fake、单测数量或本地占位执行器冒充产品完成。
 3. 先核验开源方案；采用前记录版本/commit、许可证、数据流、秘密、失败回退和卸载路径。
 4. 不恢复已删除的旧插件、外部 Chrome/CDP、后端 Cookie、CLI 单轮 Agent 或运行时自动安装。
-5. 不直接修改 Hermes 上游；优先 adapter/gateway。必须 fork 时先单独提交 ADR 和最小 patch。
+5. （2026-07-02 用户修订）允许直接修改 Hermes fork 源码；仍优先 adapter/gateway，确需 patch 时改动最小化、附回归测试并登记 `runtime/HERMES_UPSTREAM.md`；约束详见 `00-gap-overview.md` 第四节。
 6. 不跨模块顺手重构。发现关联问题只在相应台账新增阻断证据，等待复核后再排期。
 7. `code done`、`automated verified`、`human verified` 三种证据分开记录。
 
@@ -18,6 +18,7 @@
 
 | 顺序 | 文档 | 模块 | 当前入口任务 |
 |---:|---|---|---|
+| 0 | `00-gap-overview.md` | 差距总览与补齐路线（2026-07-02） | — |
 | 1 | `01-mcp-browser-account.md` | MCP 浏览器、登录、多账号隔离 | MCP-01 |
 | 2 | `02-data-trends-research.md` | 公共热点、登录态采集、行业研究与证据 | DATA-01 |
 | 3 | `03-agent-runtime-tasks.md` | Hermes、计划、长任务、审批与恢复 | RUN-01 |
