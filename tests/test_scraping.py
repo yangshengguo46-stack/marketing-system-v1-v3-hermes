@@ -1,9 +1,8 @@
 """热点抓取工具 — 后端架构测试"""
 
 import json
-import pytest
-from unittest.mock import patch, MagicMock
-from tools.scraping import (
+from unittest.mock import patch
+from marketing_tools.scraping import (
     scrape_douyin_trending, scrape_weibo_trending, scrape_bilibili_popular,
     scrape_xiaohongshu_trending, scrape_zhihu_trending,
     aggregate_all_trending, list_scraping_backends,
@@ -36,7 +35,7 @@ def _mock_fetch_success(platform, count):
 
 
 class TestScrapingTools:
-    @patch("tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
+    @patch("marketing_tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
     def test_douyin_returns_data(self, mock_fetch):
         result = json.loads(scrape_douyin_trending({"count": 2}))
         assert result["success"] is True
@@ -45,14 +44,14 @@ class TestScrapingTools:
         assert len(result["data"]) == 2
         assert result["data"][0]["title"] == "AI大模型新突破引发行业震动"
 
-    @patch("tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
+    @patch("marketing_tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
     def test_weibo_returns_data(self, mock_fetch):
         result = json.loads(scrape_weibo_trending({"count": 2}))
         assert result["success"] is True
         assert result["platform"] == "weibo"
         assert len(result["data"]) == 2
 
-    @patch("tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
+    @patch("marketing_tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
     def test_bilibili_returns_data(self, mock_fetch):
         result = json.loads(scrape_bilibili_popular({"count": 2}))
         assert result["success"] is True
@@ -67,7 +66,7 @@ class TestScrapingTools:
             parsed = json.loads(result)
             assert isinstance(parsed, dict)
 
-    @patch("tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
+    @patch("marketing_tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
     def test_aggregate_with_selected_platforms(self, mock_fetch):
         result = json.loads(aggregate_all_trending({"platforms": ["weibo"]}))
         assert result["platforms_scraped"] == ["weibo"]
@@ -76,7 +75,7 @@ class TestScrapingTools:
 
     def test_output_schema_for_analyze_trends(self):
         """aggregate 输出能被 analyze_trends 消费"""
-        with patch("tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success):
+        with patch("marketing_tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success):
             result = json.loads(aggregate_all_trending({}))
         assert "results" in result
         for platform, data in result["results"].items():
@@ -91,12 +90,9 @@ class TestBackendList:
         result = json.loads(list_scraping_backends())
         assert "backends" in result
         backends = result["backends"]
-        assert len(backends) >= 4
+        assert len(backends) == 2
         names = [b["name"] for b in backends]
-        assert "agent_reach" in names
-        assert "hot_topics_api" in names
-        assert "mediacrawler" in names
-        assert "browser_cdp" in names
+        assert names == ["bilibili_public", "hot_topics_api"]
 
 
 class TestBackendFallback:

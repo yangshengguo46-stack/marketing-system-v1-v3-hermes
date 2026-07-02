@@ -3,7 +3,7 @@ from enum import Enum
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from tools.channel_context import pre_gateway_dispatch
+from marketing_tools.channel_context import pre_gateway_dispatch
 
 
 class Platform(Enum):

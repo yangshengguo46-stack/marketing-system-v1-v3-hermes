@@ -10,9 +10,10 @@
     "dev:web": "vite",
     "dev:electron": "electron .",
     "build:backend": "node scripts/build-backend.mjs",
-    "build": "npm run build:backend && vite build && node scripts/build-electron.mjs",
-    "build:mac": "npm run build:backend && vite build && node scripts/build-electron.mjs --mac",
-    "build:win": "npm run build:backend && vite build && node scripts/build-electron.mjs --win",
+    "prepare:mcp-runtime": "node scripts/prepare-mcp-runtime.mjs",
+    "build": "npm run build:backend && vite build && npm run prepare:mcp-runtime && node scripts/build-electron.mjs",
+    "build:mac": "npm run build:backend && vite build && npm run prepare:mcp-runtime && node scripts/build-electron.mjs --mac",
+    "build:win": "npm run build:backend && vite build && npm run prepare:mcp-runtime && node scripts/build-electron.mjs --win",
     "preview": "vite preview",
     "runtime:bootstrap": "./scripts/bootstrap-hermes-runtime.sh",
     "runtime:status": "./scripts/run-hermes-source.sh status",
@@ -22,6 +23,7 @@
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@fontsource-variable/geist": "^5.2.9",
+    "@playwright/mcp": "0.0.77",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.21.0",
@@ -83,8 +85,12 @@
         "to": "backend"
       },
       {
-        "from": "engine/marketing-os",
-        "to": "hermes-plugins/marketing-os"
+        "from": "engine",
+        "to": "engine"
+      },
+      {
+        "from": "build/mcp-runtime",
+        "to": "mcp-runtime"
       }
     ]
   }

@@ -9,6 +9,7 @@ import Accounts from '@/pages/Accounts'
 import Suggestions from '@/pages/Suggestions'
 import Creator from '@/pages/Creator'
 import { Analytics, PublishCenter, Workflow } from '@/pages/Operations'
+import { Memory } from '@/pages/Memory'
 import { hermes } from '@/api/client'
 
 type WorkspaceProps = { onNavigate?: (page: string) => void }
@@ -22,6 +23,7 @@ const PAGES: Record<string, ComponentType<WorkspaceProps>> = {
   analytics: Analytics,
   workflow: Workflow,
   accounts: Accounts,
+  memory: Memory,
 }
 
 export default function App() {
@@ -39,14 +41,20 @@ export default function App() {
   }, [])
 
   const PageComponent = PAGES[page] || Overview
+  const navigate = (nextPage: string) => {
+    if (page === 'accounts' && nextPage !== 'accounts') {
+      window.marketingOS?.closeAllLoginBrowsers().catch(() => {})
+    }
+    setPage(nextPage)
+  }
 
   return (
     <TooltipProvider delay={300}>
       <div className="app-shell dark">
-        <AppSidebar current={page} onNavigate={setPage} hermesStatus={hermesStatus} />
+        <AppSidebar current={page} onNavigate={navigate} hermesStatus={hermesStatus} />
         <TopBar page={page} />
         <main className="workspace">
-          <div className="workspace-inner"><PageComponent key={`${page}-${hermesStatus}`} onNavigate={setPage} /></div>
+          <div className="workspace-inner"><PageComponent key={page} onNavigate={navigate} /></div>
         </main>
         <AgentPanel page={page} status={hermesStatus} />
       </div>

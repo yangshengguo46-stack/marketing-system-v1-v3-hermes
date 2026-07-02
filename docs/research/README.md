@@ -13,6 +13,8 @@
 | `02-agent-harness-frontier-2026.md` | Agent 执行循环、持久任务、审批、权限、上下文与可观测性 |
 | `03-hermes-source-audit.md` | 新下载 Hermes 源码的能力盘点和采用/改造/替换决策 |
 | `04-ledger-gap-matrix.md` | 研究结论与 `AGENT_CORE_LEDGER.md` 的逐项映射 |
+| `05-open-source-capability-landscape-2026.md` | 浏览器、短视频、营销、记忆、长任务、发布、评测和视频能力的开源候选与采用边界 |
+| `../ledgers/README.md` | 冻结总台账之后，各子板块唯一可更新的执行台账索引 |
 | `../architecture/REBUILD_BASELINE.md` | 新架构的可执行基线与首轮实施顺序 |
 
 ## 证据等级
@@ -28,4 +30,3 @@
 - 供应商实现可替换；用户事实、账号 DNA、实验、发布结果和技能版本必须掌握在本地数据模型中。
 - 任何自动学习都必须保留来源、时间、适用范围、置信度、修订关系和撤销路径。
 - 原始 Cookie、密码、Token、API Key 永不进入记忆、向量索引、轨迹或技能。
-

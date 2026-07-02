@@ -1,63 +1,127 @@
-import { AudioWaveform, Check, ChevronRight, Circle, MoreHorizontal, Play, RefreshCw, Sparkles } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Check, ChevronRight, Circle, FileText, Film, Image, PenTool, Plus, Trash2, X } from 'lucide-react'
+import { api } from '@/api/client'
 
-const STEPS = [
-  { name: '创意', detail: 'AI 创业的三个错误认知', state: 'done' },
-  { name: '脚本', detail: '45 秒观点教程 · 326 字', state: 'done' },
-  { name: '配音', detail: '专业自然 · 男声 03', state: 'working' },
-  { name: '分镜', detail: '等待配音完成', state: 'waiting' },
-  { name: '视频', detail: '等待生成', state: 'waiting' },
-  { name: '封面与字幕', detail: '等待生成', state: 'waiting' },
-]
+interface ContentAsset {
+  id: string; title: string; type: string; status: string
+  platform?: string; account_id?: string; version: number
+  content: Record<string, unknown>; metrics: Record<string, unknown>
+  created_at: string; updated_at: string
+}
+
+const TYPE_ICONS: Record<string, typeof FileText> = { script: FileText, video: Film, image: Image, caption: PenTool }
+const TYPE_LABELS: Record<string, string> = { script: '脚本', video: '视频', image: '图片', caption: '文案' }
+const STATUS_LABELS: Record<string, string> = { draft: '草稿', review: '待审', approved: '已通过', published: '已发布', metrics_collected: '有数据', archived: '已归档' }
+const STATUS_COLORS: Record<string, string> = { draft: '#6b7280', review: '#f59e0b', approved: '#3b82f6', published: '#62c4a0', metrics_collected: '#8b5cf6', archived: '#4b5563' }
+const STATUSES = ['', 'draft', 'review', 'approved', 'published']
 
 export default function Creator() {
+  const [assets, setAssets] = useState<ContentAsset[]>([])
+  const [filter, setFilter] = useState('')
+  const [showCreate, setShowCreate] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+  const [newType, setNewType] = useState('script')
+  const [expanded, setExpanded] = useState<string | null>(null)
+
+  const fetchAssets = async () => {
+    try {
+      const status = filter || undefined
+      const result = await api.contentAssets(status)
+      setAssets((result as ContentAsset[]) || [])
+    } catch { setAssets([]) }
+  }
+  useEffect(() => { fetchAssets() }, [filter])
+
+  const handleCreate = async () => {
+    if (!newTitle.trim()) return
+    try {
+      await api.createContentAsset({ title: newTitle, type: newType })
+      setNewTitle(''); setShowCreate(false)
+      fetchAssets()
+    } catch {}
+  }
+
+  const handleStatus = async (id: string, status: string) => {
+    try { await api.transitionContentAsset(id, status); fetchAssets() } catch {}
+  }
+
+  const handleDelete = async (id: string) => {
+    try { await api.deleteContentAsset(id); fetchAssets() } catch {}
+  }
+
   return (
     <div className="factory-page animate-fade-up">
       <div className="standard-page-header">
-        <div><span className="page-kicker">CONTENT FACTORY</span><h1>内容工厂</h1><p>AI 正在把创意变成可发布内容。</p></div>
-        <button className="secondary-action"><MoreHorizontal size={17} /></button>
+        <div><h1>内容资产</h1><p>选题→草稿→审批→发布→指标回收 全链路管理</p></div>
+        <button className="primary-action" onClick={() => setShowCreate(true)}><Plus size={15} /> 新建草稿</button>
       </div>
 
-      <div className="factory-layout">
-        <aside className="pipeline-panel">
-          <div className="pipeline-title"><span>生产流程</span><small>2 / 6 完成</small></div>
-          <div className="pipeline-progress"><div /></div>
-          <div className="pipeline-steps">
-            {STEPS.map((step, index) => (
-              <button className={`pipeline-step ${step.state} ${index === 2 ? 'selected' : ''}`} key={step.name}>
-                <span className="step-index">{step.state === 'done' ? <Check size={12} /> : step.state === 'working' ? <RefreshCw size={12} /> : <Circle size={9} />}</span>
-                <span><strong>{step.name}</strong><small>{step.detail}</small></span>
-                <ChevronRight size={14} />
-              </button>
-            ))}
-          </div>
-        </aside>
+      {showCreate && (
+        <div className="content-create-bar">
+          <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="标题…" onKeyDown={(e) => e.key === 'Enter' && handleCreate()} />
+          <select value={newType} onChange={(e) => setNewType(e.target.value)}>
+            {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <button className="primary-action" onClick={handleCreate}>创建</button>
+          <button className="icon-button" onClick={() => setShowCreate(false)}><X size={14} /></button>
+        </div>
+      )}
 
-        <section className="production-workspace">
-          <div className="production-header">
-            <div><span className="page-kicker">VOICE GENERATION</span><h2>配音</h2></div>
-            <span className="working-badge"><i /> 生成中</span>
-          </div>
-          <div className="voice-preview">
-            <div className="wave-visual" aria-label="音频波形">
-              {Array.from({ length: 42 }).map((_, index) => <i key={index} style={{ height: `${16 + ((index * 17) % 46)}px` }} />)}
-            </div>
-            <div className="voice-controls">
-              <button className="play-button" title="播放预览"><Play size={17} fill="currentColor" /></button>
-              <div><strong>专业自然 · 男声 03</strong><span>00:00 / 00:45</span></div>
-              <AudioWaveform size={20} />
-            </div>
-          </div>
-          <div className="generation-status">
-            <Sparkles size={17} />
-            <div><strong>正在优化语气和停顿</strong><p>已完成文本清理，正在生成最终音频。预计还需 1 分钟。</p></div>
-            <span>68%</span>
-          </div>
-          <div className="script-preview">
-            <div className="script-header"><span>当前脚本</span><button><RefreshCw size={13} /> 重新生成</button></div>
-            <p><mark>99% 的人理解错了 AI 创业。</mark> 真正的机会，不是再做一个聊天机器人，而是找到一个每天都在重复发生、又没人愿意解决的具体问题……</p>
-          </div>
-        </section>
+      <div className="memory-tabs">
+        {STATUSES.map((s) => (
+          <button key={s || 'all'} className={`tab ${filter === s ? 'active' : ''}`} onClick={() => setFilter(s)}>
+            {s ? STATUS_LABELS[s] : '全部'}
+          </button>
+        ))}
       </div>
+
+      {assets.length === 0 ? (
+        <p className="memory-empty">暂无内容资产。点击"新建草稿"或让 Agent 帮你创建选题和脚本。</p>
+      ) : (
+        <div className="memory-list">
+          {assets.map((a) => {
+            const Icon = TYPE_ICONS[a.type] || FileText
+            const isOpen = expanded === a.id
+            return (
+              <div key={a.id} className="memory-card">
+                <div className="memory-card-header">
+                  <span className="memory-kind-badge" style={{background:`${STATUS_COLORS[a.status]}20`,color:STATUS_COLORS[a.status]}}>
+                    <Icon size={10} /> {TYPE_LABELS[a.type] || a.type}
+                  </span>
+                  <span style={{fontSize:8,color:STATUS_COLORS[a.status],fontWeight:600}}>{STATUS_LABELS[a.status] || a.status}</span>
+                  {a.platform && <span className="memory-account">{a.platform}</span>}
+                  <span className="memory-confidence">v{a.version}</span>
+                  <button className="icon-button small" onClick={() => setExpanded(isOpen ? null : a.id)}>
+                    <ChevronRight size={12} style={{transform: isOpen ? 'rotate(90deg)' : ''}} />
+                  </button>
+                  <button className="icon-button small" onClick={() => handleDelete(a.id)}><Trash2 size={11} /></button>
+                </div>
+                <p className="memory-content">{a.title}</p>
+                {isOpen && (
+                  <div className="content-detail">
+                    <div className="content-detail-actions">
+                      {a.status === 'draft' && <button className="tab active" onClick={() => handleStatus(a.id, 'review')}>提交审核</button>}
+                      {a.status === 'review' && <><button className="tab active" onClick={() => handleStatus(a.id, 'approved')}>通过</button><button className="tab" onClick={() => handleStatus(a.id, 'draft')}>退回</button></>}
+                      {a.status === 'approved' && <button className="tab active" onClick={() => handleStatus(a.id, 'published')}>标记已发布</button>}
+                    </div>
+                    {a.content && Object.keys(a.content).length > 0 && (
+                      <pre className="content-json">{JSON.stringify(a.content, null, 2).slice(0, 500)}</pre>
+                    )}
+                    {a.metrics && Object.keys(a.metrics).length > 0 && (
+                      <div className="content-metrics">
+                        <span className="section-eyebrow">指标数据</span>
+                        {Object.entries(a.metrics).map(([k, v]) => (
+                          <span key={k} className="metric-chip">{k}: {String(v)}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

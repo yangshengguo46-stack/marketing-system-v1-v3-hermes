@@ -4,16 +4,14 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("HERMES_HOME", str(PROJECT_ROOT / ".pytest-cache" / "hermes-home"))
-PLUGIN_DIR = PROJECT_ROOT / "engine" / "marketing-os"
-PLUGIN_PARENT = PLUGIN_DIR.parent
-sys.path.insert(0, str(PLUGIN_PARENT))  # market-os 包的父目录
-sys.path.insert(0, str(PLUGIN_DIR))     # 直接导入 tools.xxx
-os.environ.setdefault("MARKETING_OS_PLUGIN_DIR", str(PLUGIN_DIR))
+ENGINE_ROOT = PROJECT_ROOT / "engine"
+MARKETING_ROOT = ENGINE_ROOT / "marketing-os"
+sys.path.insert(0, str(ENGINE_ROOT))
+sys.path.insert(0, str(MARKETING_ROOT))
 
 MOCK_TRENDS = {
     "results": {
@@ -71,12 +69,3 @@ def user_profile():
         "style": "教学型",
         "audience": "25-35岁科技从业者",
     }
-
-
-@pytest.fixture
-def mock_hermes_ctx():
-    """模拟 Hermes plugin register ctx"""
-    ctx = MagicMock()
-    ctx.register_tool = MagicMock()
-    ctx.register_hook = MagicMock()
-    return ctx

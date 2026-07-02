@@ -20,7 +20,7 @@ if [[ ! -x "$VENV/bin/python" ]]; then
   uv venv "$VENV" --python 3.13
 fi
 
-uv pip install --python "$VENV/bin/python" -e "$HERMES_SOURCE"
+uv pip install --python "$VENV/bin/python" -e "$HERMES_SOURCE[mcp]"
 
 if [[ -f "$SECRET_DIR/provider-config.yaml" && ! -f "$RUNTIME_HOME/config.yaml" ]]; then
   cp "$SECRET_DIR/provider-config.yaml" "$RUNTIME_HOME/config.yaml"

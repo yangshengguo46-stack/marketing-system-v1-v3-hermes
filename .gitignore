@@ -3,6 +3,8 @@ node_modules/
 dist/
 release/
 *.blockmap
+build/
+.playwright-mcp/
 
 # Python
 .venv/
@@ -22,6 +24,8 @@ data/
 runtime-data/
 engine/marketing-os/config/*.json
 !engine/marketing-os/config/intelligence-config.json
+!engine/marketing-os/config/mcp-servers.json
+!engine/marketing-os/config/playwright-mcp-tools.snapshot.json
 engine/marketing-os/config/monitor_data/
 
 # Upstream runtime checkout is tracked as its own repository boundary.

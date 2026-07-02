@@ -21,13 +21,22 @@ declare global {
       getHermesStatus: () => Promise<{ running: boolean; port: number }>
       restartHermes: () => Promise<{ status: string }>
       onHermesStatus: (cb: (data: { status: string; port?: number; error?: string }) => void) => () => void
-      openLoginBrowser: (platform: string) => Promise<void>
-      closeLoginBrowser: (platform: string) => Promise<void>
-      getLoginCookies: (platform: string) => Promise<{ platform: string; count: number }>
-      scrapeIndustry: (platform: string, keyword: string) => Promise<{ platform: string; keyword: string; items: Array<{ rank: number; title: string; url: string }>; collected_at: string }>
-      syncAccountSession: (platform: string, username: string) => Promise<Record<string, number>>
+      openLoginBrowser: (platform: string, accountId?: string) => Promise<{ platform: string; account_id: string }>
+      mcpLoginStart: (accountId: string, platform: string) => Promise<MCPLoginAttempt>
+      mcpLoginStatus: (accountId: string) => Promise<MCPLoginAttempt>
+      mcpLoginCancel: (accountId: string, attemptId?: string) => Promise<MCPLoginAttempt>
+      mcpBrowserTakeover: (accountId: string) => Promise<MCPBrowserState>
+      mcpBrowserBackground: (accountId: string) => Promise<MCPBrowserState>
+      mcpBrowserStop: (accountId: string) => Promise<MCPBrowserState>
+      closeLoginBrowser: (platform: string, accountId?: string) => Promise<{ closed: boolean }>
+      closeAllLoginBrowsers: () => Promise<{ closed: boolean }>
+      navigateLoginBrowser: (platform: string, accountId: string, action: 'back' | 'reload' | 'home' | 'focus') => Promise<{ url: string }>
+      getLoginCookies: (platform: string, accountId: string) => Promise<{ platform: string; count: number; account_id: string }>
+      scrapeIndustry: (platform: string, keyword: string, accountId: string) => Promise<{ platform: string; keyword: string; items: Array<{ rank: number; title: string; url: string }>; collected_at: string }>
+      syncAccountSession: (platform: string, username: string, accountId: string) => Promise<Record<string, number>>
       runIntelligence: () => Promise<IntelligenceReport>
       onIntelligenceProgress: (cb: (report: IntelligenceReport) => void) => () => void
+      onTrendingUpdated: (cb: (result: { status: string; trends_count?: number; error?: string }) => void) => () => void
       getChannelStatus: () => Promise<MessagingChannelStatus>
       connectChannel: (platform: MessagingPlatform) => Promise<{ connected: boolean }>
       testChannel: (platform: MessagingPlatform) => Promise<{ success: boolean; detail?: string }>
@@ -35,8 +44,36 @@ declare global {
       onChannelProgress: (cb: (event: MessagingChannelEvent) => void) => () => void
       onLoginOpened: (cb: (data: { platform: string; url: string }) => void) => () => void
       onLoginClosed: (cb: (data: { platform: string }) => void) => () => void
-      onLoginCookies: (cb: (data: { platform: string; count: number; username: string; label: string }) => void) => () => void
+      onLoginCookies: (cb: (data: { platform: string; account_id: string; count: number; username: string; label: string }) => void) => () => void
+      onLoginQr: (cb: (data: { platform: string; qrImage: string }) => void) => () => void
+      onLoginError: (cb: (data: { platform: string; message: string }) => void) => () => void
+      onLoginInteraction: (cb: (data: { platform: string; kind: 'qrcode' | 'verification' | 'interactive' }) => void) => () => void
+      streamAgentEvents: (taskId: string) => Promise<{ started: boolean; task_id: string }>
+      stopAgentEvents: (taskId: string) => Promise<{ stopped: boolean; task_id: string }>
+      onAgentEvent: (cb: (event: LiveAgentEvent) => void) => () => void
+      checkAccountHealth: (platform: string, username: string, accountId: string) => Promise<{ status: string; detail: string }>
+      clearAccountSession: (platform: string, accountId: string) => Promise<{ cleared: boolean }>
+      runNetworkDiagnostic: () => Promise<{ results: Array<{ target: string; status: string; detail: string }>; summary: string }>
+      executeApprovedCapability: (approvalId: string, scope: 'once' | 'session' | 'permanent') => Promise<unknown>
     }
+  }
+
+  interface MCPLoginAttempt {
+    login_attempt_id?: string
+    account_id: string
+    platform?: string
+    status: 'idle' | 'starting' | 'browser_open' | 'authenticated' | 'cancelled' | 'timed_out' | 'error'
+    reason?: string
+    account?: Account
+  }
+
+  interface MCPBrowserState {
+    account_id: string
+    platform?: string
+    status: string
+    headless?: boolean | null
+    takeover?: boolean
+    stopped?: boolean
   }
 
   type MessagingPlatform = 'weixin' | 'feishu'
@@ -76,6 +113,7 @@ declare global {
     rank: number
     title: string
     heat?: string
+    heat_value?: string | number
     source_platform: Platform
   }
 
@@ -84,9 +122,8 @@ declare global {
     platform: Platform
     username: string
     label: string
-    bitwarden_id?: string
     created_at: string
-    status: 'active' | 'expired'
+    status: 'connected' | 'disconnected' | 'expired' | 'error'
     stats: Record<string, unknown>
   }
 
@@ -125,5 +162,51 @@ declare global {
     steps: IntelligenceStep[]
     errors: Array<{ scope: string; target: string; message: string }>
     summary: Record<string, unknown>
+  }
+
+  interface MemoryEntry {
+    id: string
+    kind: string
+    user_id: string
+    account_id?: string | null
+    platform?: string | null
+    content: string
+    evidence: Record<string, unknown>[]
+    confidence: number
+    status: string
+    rejection_reason?: string | null
+    observed_at: string
+    valid_from?: string | null
+    valid_to?: string | null
+    created_at: string
+  }
+
+  interface PlanStep {
+    id: string
+    description: string
+    tool_guess: string | null
+    status: 'pending' | 'running' | 'completed' | 'skipped' | 'failed'
+  }
+
+  interface LiveAgentEvent {
+    type: string
+    task_id?: string
+    label?: string
+    detail?: unknown
+    status?: string
+    tool?: string
+    approval_id?: string
+    capability?: string
+    risk_summary?: string
+    arguments?: Record<string, unknown>
+    decision?: string
+    reason?: string
+    error?: string
+    reply?: string
+    plan?: PlanStep[]
+    plan_step_id?: string
+    plan_total?: number
+    plan_version?: number
+    resume_step?: string
   }
 }

@@ -3,21 +3,19 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { api, PLATFORM_NAMES, PLATFORM_COLORS } from '@/api/client'
-import { LockKeyhole, RefreshCw, Search, TrendingUp } from 'lucide-react'
+import { Radio, TrendingUp } from 'lucide-react'
 
 const PLATFORM_TABS = [
   { id: 'all', label: '全部平台' },
   { id: 'weibo', label: '微博' },
   { id: 'douyin', label: '抖音' },
   { id: 'bilibili', label: 'B站' },
+  { id: 'zhihu', label: '知乎' },
 ]
 
 export default function Trending() {
   const [data, setData] = useState<Record<string, unknown> | null>(null)
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [collecting, setCollecting] = useState(false)
-  const [keyword, setKeyword] = useState('')
   const [error, setError] = useState('')
   const [activeTab, setActiveTab] = useState('all')
 
@@ -29,45 +27,21 @@ export default function Trending() {
       .catch((reason) => setError(String(reason?.message || reason || '趋势数据加载失败')))
       .finally(() => setLoading(false))
   }, [])
-  useEffect(() => { load() }, [])
-
-  const refresh = async () => {
-    setRefreshing(true)
-    setError('')
-    try {
-      await api.refreshTrending()
-      await load()
-    } catch (reason) {
-      setError(String((reason as Error)?.message || reason || '热点抓取失败'))
-    } finally {
-      setRefreshing(false)
-    }
-  }
-
-  const collectIndustry = async () => {
-    const query = keyword.trim()
-    if (!query) return
-    if (!window.marketingOS) {
-      setError('登录态行业采集只能在桌面应用中使用')
-      return
-    }
-    setCollecting(true)
-    setError('')
-    try {
-      const collected = await window.marketingOS.scrapeIndustry('douyin', query)
-      await api.importTrending(collected)
-      await load()
-    } catch (reason) {
-      setError(String((reason as Error)?.message || reason || '行业热点采集失败'))
-    } finally {
-      setCollecting(false)
-    }
-  }
+  useEffect(() => {
+    load()
+    const unsubscribe = window.marketingOS?.onTrendingUpdated(() => load())
+    const timer = window.setInterval(load, 60_000)
+    return () => { unsubscribe?.(); window.clearInterval(timer) }
+  }, [load])
 
   const allTrends = (data?.top_trends as TrendItem[]) || []
   const trends = activeTab === 'all'
     ? allTrends
     : allTrends.filter((trend) => trend.source_platform === activeTab)
+  const platformCounts = allTrends.reduce<Record<string, number>>((counts, trend) => {
+    counts[trend.source_platform] = (counts[trend.source_platform] || 0) + 1
+    return counts
+  }, {})
 
   return (
     <div className="animate-fade-up space-y-8">
@@ -77,32 +51,26 @@ export default function Trending() {
           <h2 className="text-2xl font-bold tracking-tight">趋势中心</h2>
           <p className="text-sm text-muted-foreground mt-1">跨平台实时热搜 · 多维度聚合</p>
         </div>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing} className="gap-1.5">
-          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} /> {refreshing ? '抓取中' : '刷新'}
-        </Button>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />后台自动更新</div>
       </div>
 
       <div className="flex gap-2">
         {PLATFORM_TABS.map((t) => (
           <Button key={t.id} variant={activeTab === t.id ? 'default' : 'ghost'} size="sm" onClick={() => setActiveTab(t.id)}
             className={activeTab === t.id ? '' : 'text-muted-foreground'}>
-            {t.label}
+            {t.label}{t.id === 'all' ? ` ${allTrends.length}` : platformCounts[t.id] ? ` ${platformCounts[t.id]}` : ''}
           </Button>
         ))}
       </div>
 
       <Card>
         <CardContent className="flex items-center gap-3 px-4 py-3">
-          <LockKeyhole className="h-4 w-4 text-emerald-500" />
+          <Radio className="h-4 w-4 text-emerald-500" />
           <div className="flex-1">
-            <div className="text-sm font-medium">使用已登录的抖音会话采集行业内容</div>
-            <div className="text-xs text-muted-foreground">Cookie 只保存在桌面应用内，不会传给 Python 后端。</div>
+            <div className="text-sm font-medium">公共热点持续更新，账号会话仅作为增强数据源</div>
+            <div className="text-xs text-muted-foreground">应用启动后自动刷新，单个平台失败时继续展示其余来源或上次有效缓存。</div>
           </div>
-          <div className="flex items-center gap-2 rounded-md border px-3 h-9 min-w-[260px]">
-            <Search className="h-3.5 w-3.5 text-muted-foreground" />
-            <input value={keyword} onChange={(event) => setKeyword(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && collectIndustry()} placeholder="例如：美妆、餐饮、AI 教育" className="min-w-0 flex-1 bg-transparent text-sm outline-none" />
-          </div>
-          <Button onClick={collectIndustry} disabled={!keyword.trim() || collecting}>{collecting ? '采集中…' : '登录态采集'}</Button>
+          <Badge variant="outline">{data?.stale ? '使用有效缓存' : data?.cached_at ? '数据已同步' : '等待首次同步'}</Badge>
         </CardContent>
       </Card>
 
@@ -117,8 +85,7 @@ export default function Trending() {
           <CardContent className="flex flex-col items-center justify-center py-20">
             <TrendingUp className="h-12 w-12 text-muted-foreground/20 mb-4" />
             <h3 className="text-lg font-semibold mb-2">等待首次抓取</h3>
-            <p className="text-sm text-muted-foreground mb-6">点击刷新按钮触发多平台热点自动抓取</p>
-            <Button onClick={refresh} disabled={refreshing}><RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />立即抓取</Button>
+            <p className="text-sm text-muted-foreground">后台正在尝试公共数据源，成功后会自动出现在这里。</p>
           </CardContent>
         </Card>
       ) : (
@@ -137,7 +104,7 @@ export default function Trending() {
                   style={{color: PLATFORM_COLORS[t.source_platform], borderColor: `${PLATFORM_COLORS[t.source_platform]}30`}}>
                   {PLATFORM_NAMES[t.source_platform]}
                 </Badge>
-                {t.heat && <span className="text-xs text-muted-foreground min-w-[64px] text-right tabular-nums">{t.heat}</span>}
+                {(t.heat || t.heat_value) && <span className="text-xs text-muted-foreground min-w-[64px] text-right tabular-nums">{t.heat || t.heat_value}</span>}
               </CardContent>
             </Card>
           ))}

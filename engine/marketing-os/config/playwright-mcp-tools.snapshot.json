@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "verified_at": "2026-07-01",
+  "package": "@playwright/mcp@0.0.77",
+  "transport": "stdio",
+  "all_tools": [
+    "browser_close",
+    "browser_resize",
+    "browser_console_messages",
+    "browser_handle_dialog",
+    "browser_evaluate",
+    "browser_file_upload",
+    "browser_drop",
+    "browser_fill_form",
+    "browser_press_key",
+    "browser_type",
+    "browser_navigate",
+    "browser_navigate_back",
+    "browser_network_requests",
+    "browser_network_request",
+    "browser_run_code_unsafe",
+    "browser_take_screenshot",
+    "browser_snapshot",
+    "browser_click",
+    "browser_drag",
+    "browser_hover",
+    "browser_select_option",
+    "browser_tabs",
+    "browser_wait_for"
+  ],
+  "selected": {
+    "browser_close": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "browser_navigate": {
+      "type": "object",
+      "properties": {"url": {"type": "string"}},
+      "required": ["url"],
+      "additionalProperties": false
+    },
+    "browser_snapshot": {
+      "type": "object",
+      "properties": {
+        "target": {"type": "string"},
+        "filename": {"type": "string"},
+        "depth": {"type": "number"},
+        "boxes": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "browser_click": {
+      "type": "object",
+      "properties": {
+        "element": {"type": "string"},
+        "target": {"type": "string"},
+        "doubleClick": {"type": "boolean"},
+        "button": {"type": "string", "enum": ["left", "right", "middle"]},
+        "modifiers": {"type": "array", "items": {"type": "string", "enum": ["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]}}
+      },
+      "required": ["target"],
+      "additionalProperties": false
+    },
+    "browser_tabs": {
+      "type": "object",
+      "properties": {
+        "action": {"type": "string", "enum": ["list", "new", "close", "select"]},
+        "index": {"type": "number"},
+        "url": {"type": "string"}
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    },
+    "browser_wait_for": {
+      "type": "object",
+      "properties": {
+        "time": {"type": "number"},
+        "text": {"type": "string"},
+        "textGone": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "parameter_risks_deferred_to_mcp_05": {
+    "browser_snapshot": ["filename writes to disk and must be rejected"],
+    "browser_tabs": ["action=new with url is navigation and needs origin policy"],
+    "browser_click": ["right/middle/double click and modifiers need narrower policy"],
+    "browser_wait_for": ["time needs a bounded maximum"],
+    "browser_navigate": ["URL needs scheme and platform-origin allowlist"]
+  }
+}

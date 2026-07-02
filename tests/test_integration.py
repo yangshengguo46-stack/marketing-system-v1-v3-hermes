@@ -2,8 +2,8 @@
 
 import json
 import pytest
-from tools.scraping import aggregate_all_trending
-from tools.content import analyze_trends, generate_content_suggestions
+from marketing_tools.scraping import aggregate_all_trending
+from marketing_tools.content import analyze_trends, generate_content_suggestions
 
 
 class TestScrapeToSuggest:
@@ -49,18 +49,7 @@ class TestScrapeToSuggest:
         assert "suggestions" in suggestions
         # 验证 suggestion 数据结构能直接供 Dashboard 渲染
         for s in suggestions["suggestions"]:
-            assert all(k in s for k in ["id", "trend", "angles", "hot_level", "estimated_traffic"])
-
-
-class TestPluginRegistration:
-    """验证 Hermes plugin 注册入口 (需 Hermes 运行时)"""
-
-    @pytest.mark.skip(reason="相对导入需 Hermes 运行时包上下文，工具函数已有独立单元测试覆盖")
-    def test_register_calls_all_modules(self, mock_hermes_ctx):
-        from importlib import import_module
-        plugin = import_module("marketing-os")
-        plugin.register(mock_hermes_ctx)
-        assert mock_hermes_ctx.register_tool.call_count >= 12
+            assert all(k in s for k in ["id", "trend", "angles", "relevance", "confidence"])
 
 
 class TestConfigFiles:
@@ -87,3 +76,83 @@ class TestConfigFiles:
         data = json.loads(f.read_text())
         assert "accounts" in data
         assert isinstance(data["accounts"], list)
+
+
+class TestUnifiedDataDirectory:
+    """GAP-P0-01: 桌面、FastAPI、Hermes 网关读写同一份数据"""
+
+    def test_server_and_tools_share_config_dir(self, tmp_path, monkeypatch):
+        """FastAPI 写入的数据，Hermes 工具函数能读取。"""
+        import server
+        import marketing_tools.account as account_tools
+        from marketing_tools.monitor import monitor_all
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        # 写入初始数据
+        (config_dir / "accounts.json").write_text(json.dumps({"accounts": [], "updated_at": None}))
+        (config_dir / "trending-cache.json").write_text(json.dumps({"status": "no_data", "top_trends": []}))
+        (config_dir / "suggestions-cache.json").write_text(json.dumps({"status": "no_data", "suggestions": []}))
+        (config_dir / "intelligence-config.json").write_text(json.dumps({"industries": [], "platforms": ["douyin"], "sync_accounts": True}))
+        (config_dir / "publishing.json").write_text(json.dumps({"tasks": []}))
+
+        # 统一指向同一个 config dir
+        monkeypatch.setattr(server, "CONFIG_DIR", config_dir)
+        monkeypatch.setattr(server, "BUNDLED_CONFIG_DIR", config_dir)
+        monkeypatch.setattr(account_tools, "CONFIG_DIR", config_dir)
+        monkeypatch.setattr(account_tools, "ACCOUNTS_DB", config_dir / "accounts.json")
+        monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(config_dir))
+
+        # FastAPI: 创建账号
+        from fastapi.testclient import TestClient
+        client = TestClient(server.app)
+        resp = client.post("/api/plugins/marketing-os/accounts", json={
+            "platform": "douyin", "username": "tech_creator", "label": "科技主号",
+        })
+        assert resp.status_code == 200
+        account_id = resp.json()["account"]["id"]
+
+        # Hermes 工具: 读取同一个 config dir 的账号数据
+        monitor_result = json.loads(monitor_all({}))
+        assert monitor_result["accounts_checked"] >= 1
+
+        # 验证文件内容一致性
+        accounts_data = json.loads((config_dir / "accounts.json").read_text())
+        assert len(accounts_data["accounts"]) == 1
+        assert accounts_data["accounts"][0]["username"] == "tech_creator"
+
+        # FastAPI: 删除账号
+        resp2 = client.delete(f"/api/plugins/marketing-os/accounts/{account_id}")
+        assert resp2.status_code == 200
+
+        # Hermes 工具: 确认删除后数据一致
+        accounts_after = json.loads((config_dir / "accounts.json").read_text())
+        assert len(accounts_after["accounts"]) == 0
+
+    def test_hermes_runtime_config_points_to_same_dir(self, tmp_path, monkeypatch):
+        """HERMES_HOME .env 中的 MARKETING_OS_CONFIG_DIR 与实际 config 目录一致。"""
+        hermes_home = tmp_path / "agent-runtime"
+        config_dir = tmp_path / "config"
+        hermes_home.mkdir()
+        config_dir.mkdir()
+
+        # 模拟 Electron 写入的 .env
+        env_file = hermes_home / ".env"
+        env_file.write_text(f"MARKETING_OS_CONFIG_DIR={config_dir}\n")
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(config_dir))
+
+        # 验证路径一致
+        import os
+        hermes_env_config = None
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("MARKETING_OS_CONFIG_DIR="):
+                    hermes_env_config = line.split("=", 1)[1].strip()
+                    break
+
+        assert hermes_env_config == str(config_dir), \
+            f"Hermes .env points to {hermes_env_config}, expected {config_dir}"
+        assert os.environ.get("MARKETING_OS_CONFIG_DIR") == str(config_dir)

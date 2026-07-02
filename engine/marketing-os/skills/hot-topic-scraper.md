@@ -1,38 +1,24 @@
 # hot-topic-scraper
 
 ## 目标
-每日自动抓取主流内容平台热搜榜，返回结构化热点数据。
 
-## 触发方式
-- Cron 定时: 每天 08:00
-- 手动: `/hot-topic-scraper`
+把 Electron 登录会话或公共无 Cookie 数据源采集的热点整理为可追溯证据。
 
-## 执行流程
+## 边界
 
-### 第一步：并行抓取各平台热搜
-使用以下工具并行抓取（平台根据配置可调整）：
-1. `scrape_douyin_trending(count=30)` — 抖音热搜
-2. `scrape_weibo_trending(count=50)` — 微博热搜
-3. `scrape_bilibili_popular(count=30)` — B站热门
-4. `scrape_xiaohongshu_trending(cookie=...)` — 小红书（需登录）
+- 登录态行业搜索由 Electron 隐藏会话执行，二维码和必要交互只出现在应用内部。
+- 公共热点后端不得读取 Cookie、启动 Chrome、CDP 或外部应用。
+- Cron 只创建触发事件，由持久 `AgentTask` 恢复执行。
 
-### 第二步：等待结果
-各平台返回结构化 JSON，包含榜单排名、标题、热度值。
+## 流程
 
-### 第三步：聚合输出
-调用 `aggregate_all_trending(platforms=["douyin", "weibo", "bilibili"])` 统一聚合。
+1. 读取巡检行业和平台配置。
+2. 优先使用 Electron 已登录会话采集目标行业。
+3. 无登录态数据时，明确降级到公共无 Cookie 热榜。
+4. 保存标题、平台、来源后端、URL、排名、采集时间和失败信息。
+5. Hermes Agent 在用户和账号上下文中完成语义归并与相关性判断。
 
-## 输出格式
-```json
-{
-  "douyin": [{"rank": 1, "title": "...", "heat": "..."}],
-  "weibo": [{"rank": 1, "title": "...", "heat": "..."}],
-  "bilibili": [{"rank": 1, "title": "...", "play": "..."}]
-}
-```
+## 失败原则
 
-## 注意事项
-- 抖音 DOM 选择器可能变化，如果抓取失败，尝试用 page.content() 全文解析
-- 小红书需要 cookie 登录态，没有则跳过
-- B站 API 需要带 Referer: https://www.bilibili.com header
-- 抓取间隔不少于 30 秒，避免被反爬
+- 验证码、登录过期、代理失败和页面结构变化分别报告。
+- 没有真实数据时返回空结果，不生成“预计流量”或伪热点。

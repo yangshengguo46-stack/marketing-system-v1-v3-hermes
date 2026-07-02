@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "servers": {
+    "playwright_browser": {
+      "role": "browser",
+      "enabled": false,
+      "transport": "stdio",
+      "command": null,
+      "args": [],
+      "tools": {
+        "include": [
+          "browser_navigate",
+          "browser_snapshot",
+          "browser_click",
+          "browser_wait_for",
+          "browser_tabs",
+          "browser_close"
+        ]
+      },
+      "timeout": 120,
+      "connect_timeout": 30,
+      "blocked_reason": "真实工具发现已通过；等待 MCP-07 登录状态识别及 MCP-09 双账号验收，当前不得启用",
+      "source": {
+        "project": "Microsoft Playwright MCP Server",
+        "repository": "https://github.com/microsoft/playwright-mcp",
+        "package": "@playwright/mcp@0.0.77",
+        "license": "Apache-2.0",
+        "verification": "tools-verified-2026-07-01",
+        "schema_snapshot": "playwright-mcp-tools.snapshot.json"
+      }
+    },
+    "web_fetch": {
+      "role": "fetch",
+      "enabled": false,
+      "transport": "stdio",
+      "command": null,
+      "args": [],
+      "tools": {
+        "include": [
+          "fetch",
+          "fetch_text",
+          "fetch_json"
+        ]
+      },
+      "timeout": 30,
+      "connect_timeout": 10,
+      "blocked_reason": "官方参考 server 未安装；固定版本和 SBOM 需按 MCP-02 流程验证；fetch URL 必须经过 origin allowlist 策略",
+      "source": {
+        "project": "MCP Fetch Server",
+        "repository": "https://github.com/modelcontextprotocol/servers",
+        "package": "@anthropic/mcp-server-fetch",
+        "license": "MIT",
+        "verification": "pending-2026-07-02"
+      }
+    },
+    "local_filesystem": {
+      "role": "filesystem",
+      "enabled": false,
+      "transport": "stdio",
+      "command": null,
+      "args": [],
+      "tools": {
+        "include": [
+          "read_file",
+          "write_file",
+          "list_directory",
+          "create_directory",
+          "search_files"
+        ]
+      },
+      "timeout": 30,
+      "connect_timeout": 10,
+      "blocked_reason": "官方参考 server 未安装；必须配置受控根目录白名单（仅限导出/报告/素材目录），禁止访问 profile/system/engine 路径；写文件需 L1 以上审批",
+      "source": {
+        "project": "MCP Filesystem Server",
+        "repository": "https://github.com/modelcontextprotocol/servers",
+        "package": "@anthropic/mcp-server-filesystem",
+        "license": "MIT",
+        "verification": "pending-2026-07-02"
+      }
+    },
+    "sqlite_analytics": {
+      "role": "sqlite_readonly",
+      "enabled": false,
+      "transport": "stdio",
+      "command": null,
+      "args": [],
+      "tools": {
+        "include": [
+          "read_query"
+        ]
+      },
+      "timeout": 15,
+      "connect_timeout": 5,
+      "blocked_reason": "SQLite MCP 未安装固定版本；只允许 read_query 连接 agent_core.db 副本，禁止写/DDL/attach/其他 DB；结果需脱敏",
+      "source": {
+        "project": "MCP SQLite Server",
+        "repository": "https://github.com/modelcontextprotocol/servers",
+        "package": "@anthropic/mcp-server-sqlite",
+        "license": "MIT",
+        "verification": "pending-2026-07-02"
+      }
+    },
+    "local_transcription": {
+      "role": "transcription",
+      "enabled": false,
+      "transport": "stdio",
+      "command": null,
+      "args": [],
+      "tools": {
+        "include": [
+          "transcribe_audio",
+          "list_models",
+          "get_transcription_status"
+        ]
+      },
+      "timeout": 300,
+      "connect_timeout": 10,
+      "blocked_reason": "faster-whisper MCP wrapper 需自研或 fork 社区实现；MIT 许可证+本机运行不外发；模型下载和 GPU/CPU 性能需桌面端基准；输入文件需经过来源校验",
+      "source": {
+        "project": "faster-whisper (local transcription)",
+        "repository": "https://github.com/SYSTRAN/faster-whisper",
+        "package": "faster-whisper>=1.0",
+        "license": "MIT",
+        "verification": "pending-2026-07-02"
+      }
+    }
+  }
+}

@@ -3,7 +3,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { api, PLATFORM_NAMES, PLATFORM_COLORS } from '@/api/client'
-import { BellRing, Check, ChevronRight, Globe2, Loader2, MessageCircle, RefreshCw, Send, ShieldCheck, Trash2 } from 'lucide-react'
+import { Activity, BellRing, ChevronRight, ExternalLink, Globe2, Loader2, LogOut, MessageCircle, RefreshCw, Send, ShieldCheck, Trash2 } from 'lucide-react'
 
 const DOMESTIC_PLATFORMS: Platform[] = [
   'douyin', 'wechat_channels', 'xiaohongshu', 'kuaishou', 'bilibili', 'weibo', 'zhihu',
@@ -19,9 +19,14 @@ export default function Accounts() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading] = useState(true)
   const [loggingIn, setLoggingIn] = useState<string | null>(null)
+  const [loginAccountId, setLoginAccountId] = useState<string | null>(null)
+  const [loginAttemptId, setLoginAttemptId] = useState<string | null>(null)
+  const [loginMode, setLoginMode] = useState<'electron' | 'mcp'>('electron')
+  const [loginInteraction, setLoginInteraction] = useState<'qrcode' | 'verification' | 'interactive'>('interactive')
   const [syncing, setSyncing] = useState<string | null>(null)
+  const [takingOver, setTakingOver] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ tone: 'error' | 'warning'; message: string } | null>(null)
-  const savedPlatforms = useRef(new Set<string>())
+  const savedLogins = useRef(new Set<string>())
 
   const load = () => {
     api.accounts()
@@ -32,15 +37,43 @@ export default function Accounts() {
   useEffect(() => { load() }, [])
 
   useEffect(() => {
+    if (loginMode !== 'mcp' || !loginAccountId || !mOS) return
+    const timer = window.setInterval(() => {
+      mOS.mcpLoginStatus(loginAccountId).then((attempt) => {
+        if (attempt.status === 'authenticated') {
+          window.clearInterval(timer)
+          if (attempt.platform) localStorage.removeItem(`mcp-pending-account:${attempt.platform}`)
+          setLoggingIn(null)
+          setLoginAccountId(null)
+          setLoginAttemptId(null)
+          load()
+          return
+        }
+        if (attempt.status === 'timed_out' || attempt.status === 'error' || attempt.status === 'cancelled') {
+          window.clearInterval(timer)
+          if (attempt.status !== 'cancelled') {
+            setNotice({ tone: 'error', message: attempt.status === 'timed_out' ? '登录等待超时，请重新扫码。' : (attempt.reason || 'MCP 登录窗口异常关闭。') })
+          }
+          setLoggingIn(null)
+          setLoginAccountId(null)
+          setLoginAttemptId(null)
+        }
+      }).catch(() => {})
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [loginMode, loginAccountId])
+
+  useEffect(() => {
     if (!mOS) return
-    const unsubscribe = mOS.onLoginCookies((data) => {
+    const unsubCookies = mOS.onLoginCookies((data) => {
       if (data.count === 0) {
         setNotice({ tone: 'error', message: `没有读取到 ${PLATFORM_NAMES[data.platform]} 的登录凭据，请确认登录完成后再试。` })
         return
       }
-      if (savedPlatforms.current.has(data.platform)) return
-      savedPlatforms.current.add(data.platform)
+      if (savedLogins.current.has(data.account_id)) return
+      savedLogins.current.add(data.account_id)
       api.addAccount({
+        account_id: data.account_id,
         platform: data.platform,
         username: data.username || `${data.platform}_session`,
         label: data.label || `${PLATFORM_NAMES[data.platform]}账号`,
@@ -48,30 +81,110 @@ export default function Accounts() {
         const payload = result as { warning?: string }
         if (payload.warning) setNotice({ tone: 'warning', message: payload.warning })
         setLoggingIn(null)
+        setLoginAccountId(null)
         load()
       }).catch((reason) => {
-        savedPlatforms.current.delete(data.platform)
+        savedLogins.current.delete(data.account_id)
+        mOS.clearAccountSession(data.platform, data.account_id).catch(() => {})
         setNotice({ tone: 'error', message: String(reason?.message || reason || '账号保存失败') })
       })
     })
-    return unsubscribe
+
+    const unsubClosed = mOS.onLoginClosed?.((data: { platform: string }) => {
+      setLoggingIn(null)
+      setLoginAccountId(null)
+    })
+
+    const unsubError = mOS.onLoginError?.((data: { platform: string; message: string }) => {
+      setNotice({ tone: 'error', message: data.message })
+      setLoggingIn(null)
+      setLoginAccountId(null)
+    })
+
+    const unsubInteraction = mOS.onLoginInteraction?.((data) => {
+      setLoginInteraction(data.kind)
+    })
+
+    return () => {
+      unsubCookies()
+      unsubClosed?.()
+      unsubError?.()
+      unsubInteraction?.()
+    }
   }, [])
 
-  const startLogin = (platform: string) => {
+  const startLogin = async (platform: string, accountId?: string) => {
     if (!mOS) return
-    savedPlatforms.current.delete(platform)
+    if (accountId) savedLogins.current.delete(accountId)
     setNotice(null)
     setLoggingIn(platform)
-    mOS.openLoginBrowser(platform)
+    setLoginAccountId(accountId || null)
+    setLoginInteraction('interactive')
+    try {
+      if (platform === 'douyin') {
+        const pendingKey = `mcp-pending-account:${platform}`
+        const pendingAccountId = localStorage.getItem(pendingKey)
+        const scopedAccountId = accountId || pendingAccountId || `acct_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+        if (!accountId) localStorage.setItem(pendingKey, scopedAccountId)
+        try {
+          const attempt = await mOS.mcpLoginStart(scopedAccountId, platform)
+          if (attempt.status === 'browser_open' || attempt.status === 'starting') {
+            setLoginMode('mcp')
+            setLoginAccountId(scopedAccountId)
+            setLoginAttemptId(attempt.login_attempt_id || null)
+            return
+          }
+          throw new Error(attempt.reason || 'MCP 登录未能启动')
+        } catch (mcpReason) {
+          const message = String((mcpReason as Error)?.message || mcpReason || '')
+          // Feature flag defaults off; preserve the proven Electron login path.
+          if (!message.includes('MCP login is not enabled')) throw mcpReason
+        }
+      }
+      setLoginMode('electron')
+      const opened = await mOS.openLoginBrowser(platform, accountId)
+      setLoginAccountId(opened.account_id)
+    } catch (reason: unknown) {
+      setLoggingIn(null)
+      setLoginAccountId(null)
+      setNotice({ tone: 'error', message: String((reason as Error)?.message || reason || '登录页加载失败') })
+    }
   }
 
-  const finishLogin = () => {
-    if (loggingIn && mOS) mOS.closeLoginBrowser(loggingIn)
+  const cancelLogin = () => {
+    if (mOS && loggingIn) {
+      if (loginMode === 'mcp' && loginAccountId) mOS.mcpLoginCancel(loginAccountId, loginAttemptId || undefined).catch(() => {})
+      else mOS.closeLoginBrowser(loggingIn, loginAccountId || undefined)
+    }
+    setLoggingIn(null)
+    setLoginAccountId(null)
+    setLoginAttemptId(null)
   }
 
-  const remove = (id: string) => api.deleteAccount(id).then(load).catch((reason) => {
-    setNotice({ tone: 'error', message: String(reason?.message || reason || '账号删除失败') })
-  })
+  const remove = async (account: Account) => {
+    setNotice(null)
+    try {
+      await mOS.clearAccountSession(account.platform, account.id)
+      await api.deleteAccount(account.id)
+      if (localStorage.getItem('agent-active-account-id') === account.id) {
+        localStorage.removeItem('agent-active-account-id')
+      }
+      await load()
+    } catch (reason) {
+      setNotice({ tone: 'error', message: String((reason as Error)?.message || reason || '账号删除失败') })
+    }
+  }
+
+  const logout = async (account: Account) => {
+    setNotice(null)
+    try {
+      await mOS.clearAccountSession(account.platform, account.id)
+      await api.updateAccountStatus(account.id, 'disconnected')
+      await load()
+    } catch (reason) {
+      setNotice({ tone: 'error', message: String((reason as Error)?.message || reason || '退出登录失败') })
+    }
+  }
 
   const sync = async (id: string) => {
     setSyncing(id)
@@ -79,13 +192,26 @@ export default function Accounts() {
     try {
       const account = accounts.find((item) => item.id === id)
       if (!account || !mOS) throw new Error('账号会话不可用')
-      const stats = await mOS.syncAccountSession(account.platform, account.username)
+      const stats = await mOS.syncAccountSession(account.platform, account.username, account.id)
       await api.updateAccountStats(id, stats)
       await load()
     } catch (reason) {
       setNotice({ tone: 'error', message: String((reason as Error)?.message || reason || '账号指标同步失败') })
     } finally {
       setSyncing(null)
+    }
+  }
+
+  const takeover = async (account: Account) => {
+    if (!mOS) return
+    setTakingOver(account.id)
+    setNotice(null)
+    try {
+      await mOS.mcpBrowserTakeover(account.id)
+    } catch (reason) {
+      setNotice({ tone: 'error', message: String((reason as Error)?.message || reason || '无法打开账号浏览器') })
+    } finally {
+      setTakingOver(null)
     }
   }
 
@@ -112,16 +238,27 @@ export default function Accounts() {
 
       {loggingIn && (
         <Card className="border-primary/30 bg-primary/5">
-          <CardContent className="flex items-center gap-4 px-5 py-4">
-            <Loader2 className="h-5 w-5 text-primary animate-spin" />
-            <div className="flex-1">
-              <div className="text-sm font-semibold">正在登录 {PLATFORM_NAMES[loggingIn]}...</div>
-              <div className="text-xs text-muted-foreground">请在登录窗口中完成授权</div>
+          <CardContent className="login-popup-status">
+            <div className="login-browser-status">
+              <span className="login-live-dot" />
+              <div>
+                <strong>{PLATFORM_NAMES[loggingIn]} 登录窗口已打开</strong>
+                <small>{loginInteraction === 'verification'
+                  ? '请在登录窗口完成短信、滑块或安全验证'
+                  : loginInteraction === 'qrcode'
+                    ? `请在登录窗口用 ${PLATFORM_NAMES[loggingIn]} App 扫码`
+                    : '请在弹出的官方页面中自行扫码登录'}</small>
+              </div>
             </div>
-            <Button variant="outline" size="sm" onClick={finishLogin}><Check className="h-4 w-4 mr-1.5" />完成登录</Button>
+            <div className="login-popup-actions">
+              {loginMode === 'electron' && <Button variant="outline" size="sm" disabled={!loginAccountId} onClick={() => loginAccountId && mOS.navigateLoginBrowser(loggingIn, loginAccountId, 'focus')}><ExternalLink />显示登录窗口</Button>}
+              <Button variant="ghost" size="sm" onClick={cancelLogin}>取消</Button>
+            </div>
           </CardContent>
         </Card>
       )}
+
+      <NetworkDiagnostic />
 
       <MessagingChannels />
 
@@ -132,12 +269,15 @@ export default function Accounts() {
             {accounts.map((account) => (
               <div className="connected-row" key={account.id}>
                 <PlatformMark platform={account.platform} />
-                <div className="connected-identity"><strong>{account.label || PLATFORM_NAMES[account.platform]}</strong><span>@{account.username}</span></div>
+                <div className="connected-identity"><strong>{account.label || PLATFORM_NAMES[account.platform]}</strong><span>@{account.username} · {account.id.slice(-6)}</span></div>
                 <div className="account-stat"><strong>{formatMetric(account.stats?.followers)}</strong><span>粉丝</span></div>
                 <div className="account-stat"><strong>{formatMetric(account.stats?.total_views)}</strong><span>累计播放</span></div>
-                <Badge variant="outline" className="border-emerald-500/30 text-emerald-500 gap-1.5"><i className="w-1.5 h-1.5 rounded-full bg-emerald-500" />在线</Badge>
+                <AccountHealthBadge account={account} />
+                <Button variant="outline" size="sm" onClick={() => startLogin(account.platform, account.id)}>重新登录</Button>
+                {account.platform === 'douyin' && <Button variant="outline" size="sm" disabled={takingOver === account.id} onClick={() => takeover(account)}>{takingOver === account.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}接管</Button>}
                 <Button variant="ghost" size="icon" className="h-8 w-8" title="同步账号指标" disabled={syncing === account.id} onClick={() => sync(account.id)}><RefreshCw className={`h-4 w-4 text-muted-foreground ${syncing === account.id ? 'animate-spin' : ''}`} /></Button>
-                <Button variant="ghost" size="icon" className="h-8 w-8" title="移除账号" onClick={() => remove(account.id)}><Trash2 className="h-4 w-4 text-muted-foreground" /></Button>
+                {account.status === 'connected' && <Button variant="ghost" size="icon" className="h-8 w-8" title="退出登录并保留账号资料" onClick={() => logout(account)}><LogOut className="h-4 w-4 text-muted-foreground" /></Button>}
+                <Button variant="ghost" size="icon" className="h-8 w-8" title="删除账号及本地登录会话" onClick={() => remove(account)}><Trash2 className="h-4 w-4 text-muted-foreground" /></Button>
               </div>
             ))}
           </div>
@@ -313,12 +453,12 @@ function PlatformGroup({ eyebrow, title, description, platforms, accounts, disab
       </div>
       <div className="platform-grid">
         {platforms.map((platform) => {
-          const connected = accounts.some((account) => account.platform === platform)
+          const connectedCount = accounts.filter((account) => account.platform === platform).length
           return (
-            <button className="platform-connect-card" key={platform} disabled={disabled || connected} onClick={() => onConnect(platform)}>
+            <button className="platform-connect-card" key={platform} disabled={disabled} onClick={() => onConnect(platform)}>
               <PlatformMark platform={platform} />
-              <span className="platform-name"><strong>{PLATFORM_NAMES[platform]}</strong><small>{connected ? '已连接' : '连接账号'}</small></span>
-              {connected ? <Check size={15} className="platform-connected" /> : <ChevronRight size={15} />}
+              <span className="platform-name"><strong>{PLATFORM_NAMES[platform]}</strong><small>{connectedCount ? `已连接 ${connectedCount} 个 · 添加账号` : '连接账号'}</small></span>
+              <ChevronRight size={15} />
             </button>
           )
         })}
@@ -332,6 +472,87 @@ function PlatformMark({ platform }: { platform: Platform }) {
     <span className="platform-mark" style={{ backgroundColor: PLATFORM_COLORS[platform] }}>
       {PLATFORM_NAMES[platform]?.slice(0, 1)}
     </span>
+  )
+}
+
+function AccountHealthBadge({ account }: { account: Account }) {
+  const [health, setHealth] = useState<{ status: string; detail: string; checked_at?: string } | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  const check = async () => {
+    if (!mOS?.checkAccountHealth) return
+    setChecking(true)
+    try {
+      setHealth(await mOS.checkAccountHealth(account.platform, account.username, account.id))
+    } catch {
+      setHealth({ status: 'error', detail: '检查失败' })
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  // Check on mount
+  useEffect(() => { check() }, [account.id])
+
+  const config = {
+    online: { color: 'border-emerald-500/30 text-emerald-500', dot: 'bg-emerald-500', label: '在线' },
+    expired: { color: 'border-red-500/30 text-red-500', dot: 'bg-red-500', label: '已过期' },
+    no_cookies: { color: 'border-amber-500/30 text-amber-500', dot: 'bg-amber-500', label: '未登录' },
+    degraded: { color: 'border-amber-500/30 text-amber-500', dot: 'bg-amber-500', label: '异常' },
+    error: { color: 'border-red-500/30 text-red-500', dot: 'bg-red-500', label: '未知' },
+  }
+  const info = config[health?.status as keyof typeof config] || config.error
+
+  return (
+    <Badge variant="outline" className={`${info.color} gap-1.5 cursor-pointer`} title={health?.detail || '检查中…'} onClick={check}>
+      {checking ? <Loader2 className="h-3 w-3 animate-spin" /> : <i className={`w-1.5 h-1.5 rounded-full ${info.dot}`} />}
+      {health ? info.label : '检查中'}
+    </Badge>
+  )
+}
+
+function NetworkDiagnostic() {
+  const [results, setResults] = useState<Array<{ target: string; status: string; detail: string }> | null>(null)
+  const [running, setRunning] = useState(false)
+
+  const run = async () => {
+    if (!mOS?.runNetworkDiagnostic) return
+    setRunning(true)
+    try {
+      const data = await mOS.runNetworkDiagnostic() as { results: Array<{ target: string; status: string; detail: string }>; summary: string }
+      setResults(data.results)
+    } catch {
+      setResults([{ target: '诊断', status: 'failed', detail: '诊断服务不可用' }])
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  useEffect(() => { run() }, [])
+
+  if (!results) return null
+
+  const ok = results.filter((r) => r.status === 'ok').length
+
+  return (
+    <section className="messaging-section">
+      <div className="account-section-heading">
+        <div><span className="page-kicker">DIAGNOSTICS</span><h2>网络诊断</h2></div>
+        <Button size="sm" variant="outline" disabled={running} onClick={run}>
+          {running ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Activity className="h-3.5 w-3.5 mr-1" />}
+          {running ? '检测中' : `重新检测 · ${ok}/${results.length}`}
+        </Button>
+      </div>
+      <div className="diagnostic-grid">
+        {results.map((r) => (
+          <div key={r.target} className={`diagnostic-item ${r.status}`}>
+            <span className={`diagnostic-dot ${r.status}`} />
+            <span className="text-xs flex-1">{r.target}</span>
+            <span className="text-[10px] text-muted-foreground">{r.detail}</span>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 

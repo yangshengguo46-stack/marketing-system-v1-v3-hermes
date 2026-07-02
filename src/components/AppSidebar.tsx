@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Brain,
   CalendarClock,
   Clapperboard,
   Flame,
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { id: 'analytics', label: '数据分析', icon: BarChart3 },
   { id: 'workflow', label: '自动化', icon: Network },
   { id: 'accounts', label: '账号管理', icon: Users },
+  { id: 'memory', label: '记忆与知识', icon: Brain },
 ]
 
 export function AppSidebar({ current, onNavigate, hermesStatus }: {
@@ -61,7 +63,7 @@ export function AppSidebar({ current, onNavigate, hermesStatus }: {
           <span className={`status-dot ${online ? 'is-online' : hermesStatus === 'connecting' ? 'is-connecting' : ''}`} />
           <div>
             <div className="engine-title">AI 引擎</div>
-            <div className="engine-copy">{online ? '7 个工具在线' : hermesStatus === 'connecting' ? '正在连接' : '暂时离线'}</div>
+            <div className="engine-copy">{online ? '营销工具集在线' : hermesStatus === 'connecting' ? '正在连接' : '暂时离线'}</div>
           </div>
         </div>
       </div>
