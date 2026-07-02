@@ -12,6 +12,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from .mcp_process_manager import _safe_subpath, _validate_account, _validate_platform
+
 
 def delete_account_profile(
     user_data_root: Path, platform: str, account_id: str,
@@ -21,9 +23,12 @@ def delete_account_profile(
 
     Returns actions taken and any errors encountered.
     """
-    profile_dir = user_data_root / "mcp-browser" / platform / account_id
-    lock_dir = user_data_root / "mcp-runtime" / "locks" / platform / account_id
-    log_dir = user_data_root / "mcp-runtime" / "logs" / platform / account_id
+    platform = _validate_platform(platform)
+    account_id = _validate_account(account_id)
+    root = Path(user_data_root).resolve()
+    profile_dir = _safe_subpath(root, "mcp-browser", platform, account_id)
+    lock_dir = _safe_subpath(root, "mcp-runtime", "locks", platform, account_id)
+    log_dir = _safe_subpath(root, "mcp-runtime", "logs", platform, account_id)
 
     actions: list[str] = []
     errors: list[str] = []
