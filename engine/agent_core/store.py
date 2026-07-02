@@ -890,7 +890,8 @@ class AgentCoreStore:
         "verified": {"locked", "rejected", "superseded"},
         "locked": {"verified"},
         "rejected": {"verified"},
-        "superseded": set(),
+        # MEM-04: supersede keeps history and must be user-reversible.
+        "superseded": {"verified"},
     }
 
     def update_memory_candidate(
