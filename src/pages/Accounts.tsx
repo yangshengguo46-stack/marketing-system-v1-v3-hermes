@@ -264,14 +264,14 @@ export default function Accounts() {
 
       {accounts.length > 0 && (
         <section className="connected-accounts">
-          <div className="account-section-heading"><div><span className="page-kicker">CONNECTED</span><h2>已连接账号</h2></div><span>{accounts.length} 个在线</span></div>
+          <div className="account-section-heading"><div><span className="page-kicker">CONNECTED</span><h2>已连接账号</h2></div><span>{accounts.filter(a => a.status === 'connected').length} 个在线 · {accounts.filter(a => a.status !== 'connected').length} 个离线</span></div>
           <div className="connected-list">
             {accounts.map((account) => (
               <div className="connected-row" key={account.id}>
                 <PlatformMark platform={account.platform} />
                 <div className="connected-identity"><strong>{account.label || PLATFORM_NAMES[account.platform]}</strong><span>@{account.username} · {account.id.slice(-6)}</span></div>
                 <div className="account-stat"><strong>{formatMetric(account.stats?.followers)}</strong><span>粉丝</span></div>
-                <div className="account-stat"><strong>{formatMetric(account.stats?.total_views)}</strong><span>累计播放</span></div>
+                <div className="account-stat"><strong>{formatMetric(account.stats?.total_views)}</strong><span>近7日播放</span></div>
                 <AccountHealthBadge account={account} />
                 <Button variant="outline" size="sm" onClick={() => startLogin(account.platform, account.id)}>重新登录</Button>
                 {account.platform === 'douyin' && <Button variant="outline" size="sm" disabled={takingOver === account.id} onClick={() => takeover(account)}>{takingOver === account.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}接管</Button>}
@@ -491,22 +491,25 @@ function AccountHealthBadge({ account }: { account: Account }) {
     }
   }
 
-  // Check on mount
-  useEffect(() => { check() }, [account.id])
+  // Check on mount and when account status changes (e.g. after logout)
+  useEffect(() => { check() }, [account.id, account.status])
 
   const config = {
     online: { color: 'border-emerald-500/30 text-emerald-500', dot: 'bg-emerald-500', label: '在线' },
     expired: { color: 'border-red-500/30 text-red-500', dot: 'bg-red-500', label: '已过期' },
     no_cookies: { color: 'border-amber-500/30 text-amber-500', dot: 'bg-amber-500', label: '未登录' },
     degraded: { color: 'border-amber-500/30 text-amber-500', dot: 'bg-amber-500', label: '异常' },
+    disconnected: { color: 'border-amber-500/30 text-amber-500', dot: 'bg-amber-500', label: '未登录' },
     error: { color: 'border-red-500/30 text-red-500', dot: 'bg-red-500', label: '未知' },
   }
-  const info = config[health?.status as keyof typeof config] || config.error
+  // If account.status is not connected, show that immediately (don't wait for cookie check)
+  const effectiveStatus = account.status === 'connected' ? (health?.status || 'checking') : account.status
+  const info = config[effectiveStatus as keyof typeof config] || config.error
 
   return (
     <Badge variant="outline" className={`${info.color} gap-1.5 cursor-pointer`} title={health?.detail || '检查中…'} onClick={check}>
       {checking ? <Loader2 className="h-3 w-3 animate-spin" /> : <i className={`w-1.5 h-1.5 rounded-full ${info.dot}`} />}
-      {health ? info.label : '检查中'}
+      {effectiveStatus !== 'checking' ? info.label : '检查中'}
     </Badge>
   )
 }

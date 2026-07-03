@@ -214,7 +214,24 @@ def query_trending_cache(params: dict | None = None) -> dict:
     else:
         age = 999999
 
-    trends = data.get("top_trends", [])
+    # Categories and top_trends are two views over the same cache. Flatten and
+    # deduplicate them before filtering; returning unfiltered categories would
+    # leak unrelated evidence back into the Agent even when top_trends matched
+    # the query correctly.
+    trends: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    groups = list((data.get("categories") or {}).values()) + [data.get("top_trends") or []]
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if not isinstance(item, dict) or not item.get("title"):
+                continue
+            key = (str(item.get("source_platform", "")), str(item["title"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            trends.append(item)
     total_available = len(trends)
 
     if platform:
@@ -230,11 +247,16 @@ def query_trending_cache(params: dict | None = None) -> dict:
 
     matched = len(trends)
     limited = trends[:limit]
+    filtered_categories: dict[str, list[dict]] = {}
+    for item in limited:
+        filtered_categories.setdefault(str(item.get("category") or "其他"), []).append(item)
 
     return {
         **data,
+        "query": query,
         "cache_age_seconds": age,
         "top_trends": limited,
+        "categories": filtered_categories,
         "matched": matched,
         "total_available": total_available,
     }
@@ -562,17 +584,64 @@ def _update_account_stats(account_id: str, stats: dict) -> dict:
 
 @app.put("/api/plugins/marketing-os/accounts/{account_id}/stats")
 def update_account_stats(account_id: str, body: dict):
-    allowed = {"followers", "total_views", "engagements", "comments", "total_likes"}
+    allowed = {
+        "followers", "total_views", "engagements", "comments", "total_likes",
+        "following", "videos_count", "total_shares", "total_collects",
+        "total_comments", "interaction",
+        "views_30d", "likes_30d", "comments_30d", "shares_30d",
+        "new_followers_30d", "recent_30d",
+    }
     stats = {}
     for key in allowed:
         if key in body:
+            val = body[key]
+            if key == "recent_30d":
+                if isinstance(val, dict):
+                    stats[key] = val
+                continue
             try:
-                stats[key] = int(body[key])
+                stats[key] = int(val)
             except (TypeError, ValueError):
                 raise HTTPException(400, f"{key} must be an integer")
     if not stats:
         raise HTTPException(400, "no supported metrics supplied")
     return {"success": True, "account": _update_account_stats(account_id, stats)}
+
+
+@app.post("/api/plugins/marketing-os/accounts/{account_id}/video-metrics")
+def upload_video_metrics(account_id: str, body: dict):
+    videos = body.get("videos", [])
+    if not isinstance(videos, list) or not videos:
+        raise HTTPException(400, "videos must be a non-empty list")
+    from agent_core import AgentCoreStore
+    store = AgentCoreStore.instance()
+    saved = 0
+    for v in videos[:50]:
+        if not isinstance(v, dict):
+            continue
+        title = str(v.get("title", "")).strip()[:500]
+        if not title and not v.get("url"):
+            continue
+        store.add_video_metric(
+            account_id=account_id,
+            title=title,
+            url=str(v.get("url", "")).strip()[:1000] or None,
+            play_count=int(v.get("play_count", 0) or 0),
+            like_count=int(v.get("like_count", 0) or 0),
+            comment_count=int(v.get("comment_count", 0) or 0),
+            share_count=int(v.get("share_count", 0) or 0),
+            collect_count=int(v.get("collect_count", 0) or 0),
+        )
+        saved += 1
+    return {"success": True, "saved": saved}
+
+
+@app.get("/api/plugins/marketing-os/accounts/{account_id}/video-metrics")
+def list_video_metrics(account_id: str):
+    from agent_core import AgentCoreStore
+    store = AgentCoreStore.instance()
+    videos = store.list_video_metrics(account_id=account_id, limit=50)
+    return {"videos": videos, "total": len(videos)}
 
 
 # ---- MCP headed 登录 API（MCP-06） ----
@@ -643,7 +712,18 @@ def _classify_douyin_login_snapshot(text: str) -> dict:
 
 
 def _persist_mcp_authenticated_account(account_id: str, platform: str) -> dict:
-    from marketing_tools.account import add_account
+    from marketing_tools.account import add_account, update_account_status, _read_accounts_db
+    # If the account already exists (e.g. re-login), just mark it connected.
+    db = _read_accounts_db()
+    existing = next((item for item in db.get("accounts", []) if item.get("id") == account_id), None)
+    if existing:
+        result = json.loads(update_account_status({
+            "account_id": account_id, "status": "connected",
+        }))
+        if result.get("success"):
+            return result["account"]
+        raise RuntimeError(result.get("error", "账号状态更新失败"))
+    # New account — create with placeholder identity (real identity filled by sync).
     suffix = account_id.removeprefix("acct_")[-6:]
     result = json.loads(add_account({
         "account_id": account_id,
@@ -935,19 +1015,70 @@ def _parse_creator_account_snapshot(text: str) -> dict:
             rf"text:\s*{re.escape(label)}\s*\n\s*- generic \[ref=e\d+\]:\s*([^\n]+)", text,
         )
         return _parse_compact_number(match.group(1)) if match else 0
-    latest_view = re.search(
-        r"generic \[ref=e\d+\]:\s*播放量\s*\n\s*- generic \[ref=e\d+\]:\s*([^\n]+)", text,
+    def metric_near(label: str) -> int:
+        match = re.search(
+            rf"generic \[ref=e\d+\]:\s*{re.escape(label)}\s*\n\s*- generic \[ref=e\d+\]:\s*([^\n]+)", text,
+        )
+        return _parse_compact_number(match.group(1)) if match else 0
+    # Data center total views: nested structure like
+    # generic: 播放量 \n - generic: \n - generic: "14"
+    # or the tab pattern: generic: 播放量 \n - generic: \n - generic: 播放量 \n - generic: \n - generic: "14"
+    dc_views = re.search(
+        r'generic \[ref=e\d+\]:\s*播放量\s*\n'
+        r'(?:\s*- generic \[ref=e\d+\]:\s*\n)?'
+        r'\s*- generic \[ref=e\d+\]:\s*"?([\d.万亿]+)"?',
+        text,
     )
+    # Profile header views (播放量 near 粉丝/获赞)
+    profile_views = re.search(
+        r'text:\s*播放量\s*\n\s*- generic \[ref=e\d+\]:\s*"?([^"\n]+)"?',
+        text,
+    )
+    followers = metric("粉丝")
+    total_likes = metric("获赞")
+    total_views = _parse_compact_number(dc_views.group(1)) if dc_views else (
+        _parse_compact_number(profile_views.group(1)) if profile_views else 0
+    )
+    following = metric("关注") or metric_near("关注")
+    videos_count = metric("作品") or metric_near("作品") or metric("视频") or metric_near("视频")
+    total_shares = metric("分享") or metric_near("分享") or metric("转发") or metric_near("转发")
+    total_collects = metric("收藏") or metric_near("收藏")
+    total_comments = metric("评论") or metric_near("评论")
+    interaction = total_likes + total_comments + total_shares + total_collects
+
+    # Recent 30-day data (from data center section)
+    recent_30d = {}
+    for label_30d, key in [
+        ("近30天播放", "views_30d"), ("30天播放", "views_30d"),
+        ("近30天点赞", "likes_30d"), ("30天点赞", "likes_30d"),
+        ("近30天评论", "comments_30d"), ("30天评论", "comments_30d"),
+        ("近30天分享", "shares_30d"), ("30天分享", "shares_30d"),
+        ("近30天新增粉丝", "new_followers_30d"), ("30天新增粉丝", "new_followers_30d"),
+        ("近30日涨粉", "new_followers_30d"),
+    ]:
+        val = metric_near(label_30d)
+        if val and key not in recent_30d:
+            recent_30d[key] = val
+
+    stats = {
+        "followers": followers,
+        "total_likes": total_likes,
+        "total_views": total_views,
+        "following": following,
+        "videos_count": videos_count,
+        "total_shares": total_shares,
+        "total_collects": total_collects,
+        "total_comments": total_comments,
+        "interaction": interaction,
+    }
+    if recent_30d:
+        stats["recent_30d"] = recent_30d
     return {
         "identity": {
             "username": username_match.group(1).strip('"') if username_match else "",
             "label": label_match.group(1).strip().strip('"') if label_match else "",
         },
-        "stats": {
-            "followers": metric("粉丝"),
-            "total_likes": metric("获赞"),
-            "total_views": _parse_compact_number(latest_view.group(1)) if latest_view else 0,
-        },
+        "stats": stats,
     }
 
 
@@ -972,6 +1103,50 @@ def _parse_creator_trend_snapshot(text: str) -> list[dict]:
             "metric": match.group(2), "url": "",
         })
     return items[:30]
+
+
+def _parse_creator_video_list(text: str) -> list[dict]:
+    """Extract per-video metrics from creator center accessibility snapshot."""
+    videos, seen = [], set()
+    # Pattern: title line followed by 播放量/点赞/评论/分享/收藏 metric lines
+    # In accessibility tree, videos appear as blocks with title + metric labels
+    pattern = re.compile(
+        r'generic \[ref=e\d+\]:\s*["\']?([^"\n]{3,240})["\']?\s*\n'
+        r'(.*?)(?=\ngeneric \[ref=e\d+\]:\s*["\']?[^"\n]{3,240}["\']?\s*\n|\Z)',
+        re.DOTALL,
+    )
+    for match in pattern.finditer(text):
+        title = match.group(1).strip().strip('"')
+        block = match.group(2)
+        if title in seen or title in {"粉丝", "获赞", "关注", "播放量", "抖音号"}:
+            continue
+        if len(title) < 3:
+            continue
+        def extract_metric(label: str) -> int:
+            m = re.search(
+                rf'{re.escape(label)}\s*\n\s*- generic \[ref=e\d+\]:\s*([^\n]+)',
+                block,
+            )
+            return _parse_compact_number(m.group(1)) if m else 0
+        play = extract_metric("播放量")
+        likes = extract_metric("点赞") or extract_metric("获赞")
+        comments = extract_metric("评论")
+        shares = extract_metric("分享") or extract_metric("转发")
+        collects = extract_metric("收藏")
+        if play or likes or comments:
+            seen.add(title)
+            videos.append({
+                "title": title[:200],
+                "play_count": play,
+                "like_count": likes,
+                "comment_count": comments,
+                "share_count": shares,
+                "collect_count": collects,
+                "url": "",
+            })
+        if len(videos) >= 20:
+            break
+    return videos
 
 
 async def _mcp_snapshot_for_account(account: dict, capability: str, *, depth: int = 15) -> str:
@@ -1012,6 +1187,131 @@ async def _mcp_snapshot_for_account(account: dict, capability: str, *, depth: in
     raise HTTPException(503, "creator center snapshot failed")
 
 
+async def _mcp_snapshot_for_url(account: dict, capability: str, url: str, *, depth: int = 15) -> str:
+    """Navigate to a specific URL and take a snapshot. Returns empty string on failure.
+
+    For Douyin creator center (SPA), browser_navigate alone may not trigger
+    route changes. We navigate by URL first, then click the corresponding menu
+    item to force SPA routing. We also wait longer and validate that the
+    snapshot contains main content (not just sidebar/navigation).
+    """
+    from agent_core.mcp_browser_policy import BrowserActionContext
+    platform, account_id = account["platform"], account["id"]
+    manager = _get_mcp_manager()
+    ctx = BrowserActionContext(
+        platform=platform, account_id=account_id, capability=capability,
+        user_id="default", approved=True,
+    )
+
+    # Map URL to menu item label for SPA click navigation
+    # For data-center sub-pages, click the parent 数据中心 menu first,
+    # then navigate to the specific sub-page URL.
+    click_label = None
+    nav_after_click = False
+    if "content-manage" in url:
+        click_label = "作品管理"
+    elif "data-center" in url:
+        click_label = "数据中心"
+        nav_after_click = False  # SPA handles routing after click
+
+    # 1. Click menu item to trigger SPA routing (if mapped)
+    # browser_click requires a snapshot ref as target, so we first take a
+    # snapshot to find the menu item's ref, then click it.
+    if click_label:
+        try:
+            # Take a snapshot to find the menu item ref
+            snap = await _get_mcp_broker().call_account_scoped_browser(
+                manager, "playwright_browser", platform, account_id, "browser_snapshot",
+                {"depth": 8}, browser_ctx=ctx, approved=True,
+            )
+            if snap.get("status") == "ok":
+                snap_text = _mcp_text(snap)
+                # Find ref for the menu item label (e.g. menuitem "作品管理" [ref=e54])
+                import re as _re
+                ref_match = _re.search(
+                    rf'menuitem\s+"{re.escape(click_label)}"\s+\[ref=([a-z0-9]+)\]',
+                    snap_text,
+                )
+                if not ref_match:
+                    # Fallback: find generic with the label text
+                    ref_match = _re.search(
+                        rf'\[ref=([a-z0-9]+)\]:\s*{re.escape(click_label)}\s*$',
+                        snap_text, _re.MULTILINE,
+                    )
+                if ref_match:
+                    target_ref = ref_match.group(1)
+                    await _get_mcp_broker().call_account_scoped_browser(
+                        manager, "playwright_browser", platform, account_id, "browser_click",
+                        {"element": click_label, "target": target_ref},
+                        browser_ctx=ctx, approved=True,
+                    )
+                    # Wait for SPA route to settle
+                    await _get_mcp_broker().call_account_scoped_browser(
+                        manager, "playwright_browser", platform, account_id, "browser_wait_for",
+                        {"time": 2}, browser_ctx=ctx, approved=True,
+                    )
+        except Exception:
+            pass
+
+    # 2. For data-center sub-pages, navigate to specific URL after clicking parent menu
+    if nav_after_click:
+        try:
+            await _get_mcp_broker().call_account_scoped_browser(
+                manager, "playwright_browser", platform, account_id, "browser_navigate",
+                {"url": url},
+                browser_ctx=ctx, approved=True,
+            )
+        except Exception:
+            pass
+
+    # 3. Wait and retry snapshot — content pages need more time to render
+    # Validate that snapshot has substantial content beyond sidebar (~3K chars
+    # is just sidebar+header; real content should be >10K).
+    # Also dismiss any blocking dialog popups that prevent content rendering.
+    min_content_len = 8_000
+    text = ""
+    snapshot = {}
+    for delay in (3, 4, 5, 5):
+        await _get_mcp_broker().call_account_scoped_browser(
+            manager, "playwright_browser", platform, account_id, "browser_wait_for",
+            {"time": delay}, browser_ctx=ctx, approved=True,
+        )
+        snapshot = await _get_mcp_broker().call_account_scoped_browser(
+            manager, "playwright_browser", platform, account_id, "browser_snapshot",
+            {"depth": depth}, browser_ctx=ctx, approved=True,
+        )
+        if snapshot.get("status") != "ok":
+            continue
+        text = _mcp_text(snapshot)
+        # Check for blocking dialog and dismiss it
+        if "我知道了" in text:
+            import re as _re2
+            dialog_ref = _re2.search(r'button\s+"我知道了"\s+\[ref=([a-z0-9]+)\]', text)
+            if dialog_ref:
+                try:
+                    await _get_mcp_broker().call_account_scoped_browser(
+                        manager, "playwright_browser", platform, account_id, "browser_click",
+                        {"element": "我知道了", "target": dialog_ref.group(1)},
+                        browser_ctx=ctx, approved=True,
+                    )
+                    await _get_mcp_broker().call_account_scoped_browser(
+                        manager, "playwright_browser", platform, account_id, "browser_wait_for",
+                        {"time": 2}, browser_ctx=ctx, approved=True,
+                    )
+                    # Re-snapshot after dismissing dialog
+                    snapshot = await _get_mcp_broker().call_account_scoped_browser(
+                        manager, "playwright_browser", platform, account_id, "browser_snapshot",
+                        {"depth": depth}, browser_ctx=ctx, approved=True,
+                    )
+                    if snapshot.get("status") == "ok":
+                        text = _mcp_text(snapshot)
+                except Exception:
+                    pass
+        if len(text) >= min_content_len:
+            return text
+    return text if snapshot.get("status") == "ok" else ""
+
+
 @app.post("/api/plugins/marketing-os/accounts/{account_id}/mcp-sync")
 async def mcp_sync_account(account_id: str):
     if not _mcp_login_enabled():
@@ -1019,16 +1319,74 @@ async def mcp_sync_account(account_id: str):
     lock = _mcp_account_operation_locks.setdefault(account_id, asyncio.Lock())
     async with lock:
         account = _require_connected_account(account_id)
-        parsed = _parse_creator_account_snapshot(
-            await _mcp_snapshot_for_account(account, "marketing_accounts_sync")
-        )
+        # 1. Home page — account overview stats
+        home_text = await _mcp_snapshot_for_account(account, "marketing_accounts_sync")
+        # DEBUG: dump snapshot for analysis
+        try:
+            debug_path = CONFIG_DIR / "mcp_snapshot_debug.txt"
+            debug_path.write_text(f"=== HOME PAGE SNAPSHOT ({len(home_text)} chars) ===\n{home_text[:50000]}\n", encoding="utf-8")
+        except Exception:
+            pass
+        parsed = _parse_creator_account_snapshot(home_text)
         if parsed["identity"]["username"] or parsed["identity"]["label"]:
             from marketing_tools.account import update_account_identity
             update_account_identity({"account_id": account_id, **parsed["identity"]})
         if not any(parsed["stats"].values()):
             raise HTTPException(422, "创作者中心已打开，但未识别到账号指标")
+
+        # 2. Content manage page — per-video metrics
+        videos = _parse_creator_video_list(home_text)
+        content_text = await _mcp_snapshot_for_url(
+            account, "marketing_accounts_sync",
+            "https://creator.douyin.com/creator-micro/content-manage",
+        )
+        if content_text:
+            try:
+                debug_path2 = CONFIG_DIR / "mcp_snapshot_content_debug.txt"
+                debug_path2.write_text(f"=== CONTENT MANAGE SNAPSHOT ({len(content_text)} chars) ===\n{content_text[:50000]}\n", encoding="utf-8")
+            except Exception:
+                pass
+            content_videos = _parse_creator_video_list(content_text)
+            if len(content_videos) > len(videos):
+                videos = content_videos
+
+        # 3. Data center page — fan demographics + 30-day trends
+        data_text = await _mcp_snapshot_for_url(
+            account, "marketing_accounts_sync",
+            "https://creator.douyin.com/creator-micro/data-center/follow-data",
+        )
+        if data_text:
+            try:
+                debug_path3 = CONFIG_DIR / "mcp_snapshot_data_debug.txt"
+                debug_path3.write_text(f"=== DATA CENTER SNAPSHOT ({len(data_text)} chars) ===\n{data_text[:50000]}\n", encoding="utf-8")
+            except Exception:
+                pass
+            data_parsed = _parse_creator_account_snapshot(data_text)
+            # Merge any new stats from data center (e.g. 30-day data)
+            for key, val in data_parsed["stats"].items():
+                if val and not parsed["stats"].get(key):
+                    parsed["stats"][key] = val
+
+        # Persist per-video metrics
+        if videos:
+            try:
+                from agent_core.store import AgentCoreStore
+                store = AgentCoreStore.instance()
+                for v in videos[:50]:
+                    store.add_video_metric(
+                        account_id=account_id,
+                        title=v["title"],
+                        play_count=v.get("play_count", 0),
+                        like_count=v.get("like_count", 0),
+                        comment_count=v.get("comment_count", 0),
+                        share_count=v.get("share_count", 0),
+                        collect_count=v.get("collect_count", 0),
+                    )
+            except Exception:
+                pass
+
         return {**parsed["stats"], "source": "playwright_mcp_creator_center",
-                "identity": parsed["identity"]}
+                "identity": parsed["identity"], "videos_count_parsed": len(videos)}
 
 
 @app.post("/api/plugins/marketing-os/accounts/{account_id}/mcp-trending")
@@ -1601,11 +1959,42 @@ def create_content_asset(params: dict) -> dict:
     asset = store.create_content_asset(
         title=title[:200],
         type=str(params.get("type", "script")),
+        user_id=str(params.get("__user_id", "default")),
         account_id=params.get("account_id"),
         platform=params.get("platform"),
         content=params.get("content"),
     )
     return {"status": "ok", "id": asset["id"], "title": asset["title"]}
+
+
+def review_content_asset(params: dict) -> dict:
+    from agent_core.learning_pipeline import review_content_asset as run_review
+
+    asset_id = str(params.get("asset_id", "")).strip()
+    scores = params.get("scores")
+    if not asset_id:
+        return {"status": "error", "reason": "asset_id is required"}
+    if not isinstance(scores, dict):
+        return {"status": "error", "reason": "scores object is required"}
+    return run_review(
+        _get_agent_service().get_store(),
+        asset_id=asset_id,
+        scores=scores,
+        prediction=params.get("prediction") if isinstance(params.get("prediction"), dict) else None,
+        task_id=str(params.get("__task_id", "")) or None,
+        notes=str(params.get("notes", ""))[:1000],
+    )
+
+
+def learning_status(params: dict | None = None) -> dict:
+    from agent_core.learning_pipeline import get_learning_status
+
+    params = params or {}
+    return get_learning_status(
+        _get_agent_service().get_store(),
+        user_id=str(params.get("__user_id", "default")),
+        account_id=params.get("account_id"),
+    )
 
 
 def add_memory(params: dict) -> dict:
@@ -1800,9 +2189,22 @@ def _get_agent_service() -> "HermesAgentService | None":
         except OSError:
             pass
 
-        model = os.environ.get("MARKETING_OS_MODEL", provider_env.get("DEEPSEEK_MODEL", "deepseek-chat"))
-        base_url = os.environ.get("MARKETING_OS_BASE_URL", provider_env.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
-        api_key = os.environ.get("MARKETING_OS_API_KEY", provider_env.get("DEEPSEEK_API_KEY", ""))
+        # Electron decrypts providers.env.encrypted with safeStorage and passes
+        # provider variables only to this child process. Keep MARKETING_OS_*
+        # overrides, but also consume the decrypted DEEPSEEK_* environment;
+        # the legacy plaintext file is now only a direct-server fallback.
+        model = os.environ.get(
+            "MARKETING_OS_MODEL",
+            os.environ.get("DEEPSEEK_MODEL", provider_env.get("DEEPSEEK_MODEL", "deepseek-chat")),
+        )
+        base_url = os.environ.get(
+            "MARKETING_OS_BASE_URL",
+            os.environ.get("DEEPSEEK_BASE_URL", provider_env.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")),
+        )
+        api_key = os.environ.get(
+            "MARKETING_OS_API_KEY",
+            os.environ.get("DEEPSEEK_API_KEY", provider_env.get("DEEPSEEK_API_KEY", "")),
+        )
 
         _agent_service = HermesAgentService(
             store=store,
@@ -1915,6 +2317,20 @@ async def agent_resume_task(task_id: str):
     svc = _get_agent_service()
     try:
         return await svc.resume_task(task_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@app.post("/agent/tasks/{task_id}/replan")
+async def agent_replan_task(task_id: str, body: dict):
+    new_objective = str(body.get("message", "") or body.get("objective", "")).strip()
+    if not new_objective:
+        raise HTTPException(400, "message or objective required")
+    svc = _get_agent_service()
+    try:
+        return await svc.replan_task(task_id, new_objective)
     except KeyError as exc:
         raise HTTPException(404, str(exc))
     except ValueError as exc:

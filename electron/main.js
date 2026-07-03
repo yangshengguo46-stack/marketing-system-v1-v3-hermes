@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, Tray, Menu, nativeImage } = require('electron')
+const { app, BrowserWindow, ipcMain, session, Tray, Menu, nativeImage, safeStorage } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
@@ -46,6 +46,8 @@ const API_ALLOWLIST = [
   ['PUT', new RegExp(`^${API_BASE}/accounts/[^/]+/status$`)],
   ['PUT', new RegExp(`^${API_BASE}/accounts/[^/]+/identity$`)],
   ['PUT', new RegExp(`^${API_BASE}/accounts/[^/]+/stats$`)],
+  ['POST', new RegExp(`^${API_BASE}/accounts/[^/]+/video-metrics$`)],
+  ['GET', new RegExp(`^${API_BASE}/accounts/[^/]+/video-metrics$`)],
   ['GET', new RegExp(`^${API_BASE}/suggestions$`)],
   ['GET', new RegExp(`^${API_BASE}/profiles$`)],
   ['PUT', new RegExp(`^${API_BASE}/profiles/[^/]+$`)],
@@ -71,6 +73,7 @@ const API_ALLOWLIST = [
   ['POST', new RegExp(`^/agent/tasks/[^/]+/cancel$`)],
   ['POST', new RegExp(`^/agent/tasks/[^/]+/pause$`)],
   ['POST', new RegExp(`^/agent/tasks/[^/]+/resume$`)],
+  ['POST', new RegExp(`^/agent/tasks/[^/]+/replan$`)],
   ['POST', new RegExp(`^/agent/approvals/[^/]+/approve$`)],
   ['POST', new RegExp(`^/agent/approvals/[^/]+/reject$`)],
   ['GET', new RegExp(`^/agent/approvals/[^/]+$`)],
@@ -169,9 +172,16 @@ function createWindow() {
     titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true, nodeIntegration: false,
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
     },
   })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowed = isDev
+      ? /^http:\/\/(?:localhost|127\.0\.0\.1):5173(?:\/|$)/.test(url)
+      : url.startsWith('file:')
+    if (!allowed) event.preventDefault()
+  })
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
     if (process.env.MARKETING_OS_OPEN_DEVTOOLS === '1') {
@@ -599,10 +609,38 @@ function providerSecretsDir() {
   return path.join(app.getPath('userData'), 'secrets')
 }
 
+function readProviderSecretsContent() {
+  const secretsDir = providerSecretsDir()
+  const encryptedPath = path.join(secretsDir, 'providers.env.encrypted')
+  const legacyPath = path.join(secretsDir, 'providers.env')
+  try {
+    if (fs.existsSync(encryptedPath) && safeStorage.isEncryptionAvailable()) {
+      return safeStorage.decryptString(fs.readFileSync(encryptedPath))
+    }
+  } catch (error) {
+    console.warn('Unable to decrypt provider credentials:', error.message)
+  }
+  try {
+    const plaintext = fs.readFileSync(legacyPath, 'utf8')
+    // One-way migration from the legacy plaintext file. On macOS this uses
+    // Keychain-backed safeStorage; the backend receives credentials only in
+    // its process environment and never needs the plaintext file again.
+    if (plaintext && safeStorage.isEncryptionAvailable()) {
+      fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 })
+      const tempPath = `${encryptedPath}.tmp`
+      fs.writeFileSync(tempPath, safeStorage.encryptString(plaintext), { mode: 0o600 })
+      fs.renameSync(tempPath, encryptedPath)
+      fs.unlinkSync(legacyPath)
+    }
+    return plaintext
+  } catch {}
+  return ''
+}
+
 function readProviderEnvironment() {
   const result = {}
   try {
-    const content = fs.readFileSync(path.join(providerSecretsDir(), 'providers.env'), 'utf8')
+    const content = readProviderSecretsContent()
     for (const rawLine of content.split(/\r?\n/)) {
       const line = rawLine.trim().replace(/^export\s+/, '')
       if (!line || line.startsWith('#')) continue
@@ -1191,10 +1229,54 @@ async function syncAccountWithSession(platform, username, accountId) {
         followers: parse(text('[data-e2e="follower-count"], .h-fans, [class*="follower"], [class*="fans"]')),
         total_likes: parse(text('[data-e2e="like-count"], [class*="like-count"], [class*="likes"]')),
         total_views: parse(text('[class*="play-count"], [class*="view-count"]')),
+        following: parse(text('[data-e2e="following-count"], [class*="following"], [class*="follows"]')),
+        videos_count: parse(text('[data-e2e="video-count"], [class*="video-count"], [class*="works-count"]')),
+        total_shares: parse(text('[class*="share-count"], [class*="shares"]')),
+        total_collects: parse(text('[class*="collect-count"], [class*="favorites"], [class*="collects"]')),
+        total_comments: parse(text('[class*="comment-count"], [class*="comments"]')),
+        interaction: 0,
       }
       if (!stats.followers) stats.followers = metricNear(['粉丝数', '粉丝'])
       if (!stats.total_likes) stats.total_likes = metricNear(['获赞数', '获赞', '点赞'])
       if (!stats.total_views) stats.total_views = metricNear(['播放量', '播放数', '播放'])
+      if (!stats.following) stats.following = metricNear(['关注数', '关注'])
+      if (!stats.videos_count) stats.videos_count = metricNear(['作品数', '视频数', '作品'])
+      if (!stats.total_shares) stats.total_shares = metricNear(['分享数', '转发数', '分享'])
+      if (!stats.total_collects) stats.total_collects = metricNear(['收藏数', '收藏'])
+      if (!stats.total_comments) stats.total_comments = metricNear(['评论数', '评论'])
+      stats.interaction = (stats.total_likes || 0) + (stats.total_comments || 0) + (stats.total_shares || 0) + (stats.total_collects || 0)
+
+      // Try to extract recent 30-day data from data center page
+      const recent30 = {}
+      try {
+        const body30 = body
+        recent30.views_30d = metricNear(['近30天播放', '30天播放', '近30日播放'])
+        recent30.likes_30d = metricNear(['近30天点赞', '30天点赞', '近30日点赞'])
+        recent30.comments_30d = metricNear(['近30天评论', '30天评论', '近30日评论'])
+        recent30.shares_30d = metricNear(['近30天分享', '30天分享', '近30日分享'])
+        recent30.new_followers_30d = metricNear(['近30天新增粉丝', '30天新增粉丝', '近30日涨粉'])
+      } catch (_) {}
+      const hasRecent30 = Object.values(recent30).some(v => v > 0)
+      if (hasRecent30) stats.recent_30d = recent30
+
+      // Extract top video list from creator center
+      const videos = []
+      try {
+        const videoItems = document.querySelectorAll('[class*="video-item"], [class*="work-item"], [class*="aweme-item"], [data-e2e*="video"]')
+        videoItems.forEach((item, index) => {
+          if (index >= 20) return
+          const title = item.querySelector('[class*="title"], [class*="desc"], [class*="name"]')?.textContent?.trim() || ''
+          const playCount = parse(item.querySelector('[class*="play"], [class*="view"]')?.textContent?.trim() || '0')
+          const likeCount = parse(item.querySelector('[class*="like"], [class*="digg"]')?.textContent?.trim() || '0')
+          const commentCount = parse(item.querySelector('[class*="comment"]')?.textContent?.trim() || '0')
+          const shareCount = parse(item.querySelector('[class*="share"]')?.textContent?.trim() || '0')
+          const collectCount = parse(item.querySelector('[class*="collect"], [class*="favorite"]')?.textContent?.trim() || '0')
+          const link = item.querySelector('a[href]')?.href || ''
+          if (title || playCount || likeCount) {
+            videos.push({ title: title.slice(0, 200), play_count: playCount, like_count: likeCount, comment_count: commentCount, share_count: shareCount, collect_count: collectCount, url: link })
+          }
+        })
+      } catch (_) {}
 
       const identity = { username: '', label: '' }
       const creatorIdentity = body.match(/(?:^|\\s)抖音\\s+(.{1,40}?)\\s+抖音号[：:]\\s*([^\\s]+)/)
@@ -1256,6 +1338,7 @@ async function syncAccountWithSession(platform, username, accountId) {
       return {
         stats,
         identity,
+        videos,
         diagnostics: {
           title: document.title,
           url: location.href,
@@ -1276,9 +1359,18 @@ async function syncAccountWithSession(platform, username, accountId) {
     })
   }
   const stats = snapshot?.stats || {}
+  const videos = snapshot?.videos || []
   if (!stats.followers && !stats.total_likes && !stats.total_views) {
     console.info(`[account:sync] no metrics for ${accountId}:`, JSON.stringify(snapshot?.diagnostics || {}))
     throw new Error('账号页面已打开，但没有识别到指标；平台页面结构可能已变化')
+  }
+  // Persist per-video metrics if collected
+  if (videos.length > 0) {
+    try {
+      await callLocalApi('POST', `${API_BASE}/accounts/${encodeURIComponent(accountId)}/video-metrics`, { videos }, 15000)
+    } catch (e) {
+      console.warn(`[account:sync] video-metrics upload failed for ${accountId}: ${e.message || e}`)
+    }
   }
   return stats
 }
@@ -1289,15 +1381,11 @@ async function publishContentAsset(assetId, platform) {
   if (!assets.length) throw new Error(`未找到内容资产：${assetId}`)
 
   const asset = assets[0]
-  return {
-    status: 'succeeded',
-    asset_id: assetId,
-    title: asset.title,
-    platform: platform || asset.platform,
-    published_url: null,
-    platform_post_id: null,
-    published_at: new Date().toISOString(),
-  }
+  const targetPlatform = platform || asset.platform
+  throw new Error(
+    `尚未配置 ${targetPlatform || '目标平台'} 的真实发布 Provider；内容“${asset.title}”未发布。` +
+    '系统不会用空 post ID 冒充成功。'
+  )
 }
 
 // ---- API 服务器生命周期 ----
@@ -1356,6 +1444,7 @@ async function startServer() {
     MARKETING_OS_CONFIG_DIR: marketingConfigDir(),
     MARKETING_OS_SESSION_ORCHESTRATOR: 'electron',
     MARKETING_OS_USER_DATA: app.getPath("userData"),
+    MARKETING_OS_MCP_LOGIN_ENABLED: '1',
     HERMES_AGENT_ROOT: agentRuntimeRoot(),
     MARKETING_OS_NODE_EXECUTABLE: process.execPath,
     MARKETING_OS_MCP_CLI: isDev

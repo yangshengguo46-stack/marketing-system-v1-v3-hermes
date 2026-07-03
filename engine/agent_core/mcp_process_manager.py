@@ -368,10 +368,21 @@ class AccountScopedMCPManager:
 
     async def _run_transport(self, key: str, h: _InstanceHandle) -> None:
         meta = h.meta
+        data_dir = self._data_dir(meta.platform, meta.account_id)
+        # Clean stale Chromium singleton lock files left by crashed processes.
+        # If these exist, Chromium refuses to reuse the profile and starts a
+        # fresh session (losing login cookies) or fails to launch entirely.
+        for lock_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            lock_file = data_dir / lock_name
+            try:
+                lock_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+
         cli = str(self._playwright_bin.resolve())
         command = str(self._node_executable.resolve()) if self._node_executable else cli
         args = ([cli] if self._node_executable else []) + [
-                "--user-data-dir", str(self._data_dir(meta.platform, meta.account_id)),
+                "--user-data-dir", str(data_dir),
                 "--timeout-action", "10000", "--timeout-navigation", "30000"]
         if self._browser_executable:
             args.extend(["--executable-path", str(self._browser_executable.resolve())])

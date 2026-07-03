@@ -16,7 +16,7 @@
 | MCP-06 | Headed 登录体验 | 账号管理触发专属 headed 窗口；二维码、短信、滑块由用户处理；成功自动收起，取消/超时清晰返回 | 🔄 复核中：已修复 Manager 类结构破坏、策略绕过和前端未接线；账号页现由 flag 切 MCP/旧 Electron 回退，account-scoped Broker 在 Manager 前执行 MCP-05 policy，超时会停止实例；自动化回归通过。❌ 真实 Chromium、扫码/短信/滑块/取消/超时仍待真人验收；❌ 登录成功识别属 MCP-07；✅ `docs/verification/MCP-06-headed-login-checklist.md` |
 | MCP-07 | 登录状态健康 | 按平台定义可信认证信号；区分已登录、过期、风控、网络失败、页面改版，不以 URL 跳转冒充成功 | 固定页面回放 + 真人失效重登 | 🔄 主成功链真人通过：抖音创作者中心采用 accessibility snapshot 双条件识别（至少 2 个后台功能标识、无扫码/手机号/验证码标识），连续两次命中才认证；真人检测到作品管理/内容管理/数据中心/互动管理后自动关窗，账号 `acct_16646b260407` connected，原 profile 重开免扫码。已修复新增账号每次生成新 profile：pending account ID 本地保留至认证成功。343 项全量测试通过；失效、风控、页面改版样本仍待补齐，故暂不完全关闭。 |
 | MCP-08 | 后台无感模式 | 已登录 profile 以后台/最小干扰方式运行；需要人工接管时切 headed，不重建 profile | 运行时不抢焦点；接管后任务可继续 | 🔄 主干已实现：Manager `ensure_mode` 复用匹配实例、模式不符时在同一账号 profile 上重启；后端提供 background/takeover/status/stop 高层接口；Electron narrow IPC 与账号页“接管”入口已接通。内置 runtime 已用 Electron-as-Node + 固定 MCP CLI + 指定 Chromium executable 实测 headless healthy，未借用系统 Chrome。待把热点/账号同步从旧 Electron 执行器切流后完成。 |
-| MCP-09 | 双账号零串号 | 同时启动两个抖音账号，分别读取身份/主页证据；切换、退出、删除一个账号不影响另一个 | 真人双账号矩阵 + 自动目录/进程隔离测试 | ⏳ |
+| MCP-09 | 双账号零串号 | 同时启动两个抖音账号，分别读取身份/主页证据；切换、退出、删除一个账号不影响另一个 | 真人双账号矩阵 + 自动目录/进程隔离测试 | ✅ 自动化已过：17 项测试覆盖独立 data_dir/lock_dir/log_dir/lock_file、独立 instance_token、停一个不影响另一个、重启已停账号不影响另一个、stop_all 停全部、health 精确返回对应账号、路径穿越拒绝（_safe_subpath + _ACCOUNT_RE 双层防护）、不同平台独立目录、源码级验证（user-data-dir 绑定 account_id、_handles 按 platform:account_id 键、无 shell 执行）；待真人双账号扫码验收 |
 | MCP-10 | 生命周期清理 | 退出只清该账号 profile；删除前确认；残留进程回收；崩溃后锁文件恢复；卸载策略明确 | ✅ code done：`mcp_lifecycle_cleanup.py` — `delete_account_profile`(profile+lock+log 三重清理, dry_run) + `recover_stale_locks`(PID 检测+僵尸锁清理)；2026-07-02 修复删除路径未做 platform/account 校验与路径穿越防护的缺口（复用 `_validate_platform/_validate_account/_safe_subpath`）；`tests/test_mcp_lifecycle_cleanup.py` 14 项通过：单账号三重删除不影响邻账号、dry_run 不落盘、7 组穿越/畸形 ID 拒绝、死 PID/损坏锁清理、活 PID 与 manager_pid 保留；待进程/目录/DB 三方一致性测试与真人删除确认 | 🔄 |
 | MCP-11 | Trace 与脱敏 | 仅调试显式启用；DOM/截图/日志去 Cookie、手机号、私信；保留最短期限和手动删除 | ✅ code done：`mcp_trace_sanitizer.py` — `MARKETING_OS_MCP_TRACE` 显式启用 + 7 类秘密 pattern(session/phone/id/api_key/jwt/cookie/auth) + `sanitize_line`/`sanitize_snapshot_content`；`tests/test_mcp_trace_sanitizer.py` 14 项通过：9 组秘密 pattern 逐项断言、业务内容保真、2000 字符行截断、100KB snapshot 上限、trace 仅在 env 精确为 "1" 时启用；待真人删除测试 | 🔄 |
 | MCP-12 | 网络与代理 | 子进程明确继承或配置系统代理；区分直连失败、代理 503、DNS、平台限流；不静默切未知代理 | ✅ code done：`mcp_network.py` — `proxy_env()` 继承系统代理 + `classify_network_error`(proxy/dns/503/429/conn_refused/reset/timeout/tls/unknown 9类)；待 MacPacket 开/关、断网测试 | 🔄 |
@@ -175,3 +175,29 @@ ADR 覆盖：
 | 输出 | Cookie、Authorization、Token、密码等递归脱敏；深度、循环和 256KB 总预算均有边界 |
 | 权限 | `browser_close` 为 L1；navigate/snapshot/wait/tabs 为 L2；Broker 返回最终 effective level，不再与 server 级别矛盾 |
 | 状态 | `mcp-servers.json` 仍全部 disabled；未接 Electron、未弹浏览器、未开始 MCP-06 |
+
+## MCP-05 策略扩展（2026-07-03，accounts_sync click 开放）
+
+**变更原因**：创作者中心数据采集需要点击「导出数据」按钮和切换分析 tab（总览/流量分析/观众分析/评论热词），参考 TzFilm-Douyin-Tool 和 autody 开源方案。
+
+**变更内容**：
+- `browser_click` 的 capability 白名单新增 `marketing_accounts_sync`
+- 新增 `_ACCOUNT_SYNC_CLICK_LABELS` element 白名单：投稿列表、内容管理、作品管理、总览、流量分析、观众分析、评论热词、导出数据、导出、下载、粉丝数据、作品数据、直播数据、互动数据、下一页、上一页
+- 仍保持：仅左键单击、禁双击/修饰键、target 必须是 snapshot ref
+
+**未变更**：
+- 永久禁用列表不变（`browser_run_code_unsafe`、`file_upload`、`cookie`、`storage`、`network` 等仍禁）
+- navigate/snapshot/wait/tabs 的参数约束不变
+- 输出脱敏和 256KB 预算不变
+
+### browser_evaluate 条件开放（2026-07-03）
+
+**变更原因**：创作者中心数据采集需要执行页面内 JS 来读取动态加载的图表数据、调用页面内部 API（参考 MediaCrawler 方案），以及后续视频模块衔接。
+
+**变更内容**：
+- `browser_evaluate` 从 `PERMANENTLY_DENIED_TOOLS` 移除
+- 仅允许 `marketing_accounts_sync` capability（trending_search 和 session_login 仍禁）
+- 要求 `approved=True`（L3 CONTROLLED_RESOURCE）
+- script 参数：必须为字符串、非空、≤50KB、无控制字符（允许换行和 Tab）
+- 输出仍走递归脱敏（Cookie/Token/Authorization/Secret 等自动脱敏）
+- `browser_run_code_unsafe` 仍永久禁用（不受此变更影响）

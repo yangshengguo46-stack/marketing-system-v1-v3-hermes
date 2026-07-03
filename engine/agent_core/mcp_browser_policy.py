@@ -19,7 +19,9 @@ from .models import CapabilityLevel
 # ── permanent deny-list ──────────────────────────────────────────────────────
 
 PERMANENTLY_DENIED_TOOLS = frozenset({
-    "browser_evaluate", "browser_run_code_unsafe",
+    # browser_evaluate is conditionally allowed for marketing_accounts_sync only
+    # (see _validate_browser_evaluate). browser_run_code_unsafe stays permanently denied.
+    "browser_run_code_unsafe",
     "browser_file_upload", "browser_fill_form", "browser_type",
     "browser_press_key", "browser_take_screenshot",
     "browser_cookie_get", "browser_cookie_list", "browser_cookie_set",
@@ -95,16 +97,39 @@ class BrowserActionContext:
 
 # ── public entry ─────────────────────────────────────────────────────────────
 
-# Only creator-center discovery tabs are clickable. Publishing, forms, uploads,
-# arbitrary page controls and login actions remain denied.
-_CLICK_ALLOWED_CAPABILITIES: frozenset[str] = frozenset({"marketing_trending_search"})
+# Only creator-center discovery tabs and account-sync data controls are clickable.
+# Publishing, forms, uploads, arbitrary page controls and login actions remain denied.
+_CLICK_ALLOWED_CAPABILITIES: frozenset[str] = frozenset({
+    "marketing_trending_search",
+    "marketing_accounts_sync",
+})
 _TREND_CLICK_LABELS = frozenset({"热门话题", "热门挑战", "热点榜单"})
+
+# Creator-center elements that accounts_sync may click: tab navigation and
+# official data export.  No form fields, publish buttons, or login controls.
+_ACCOUNT_SYNC_CLICK_LABELS = frozenset({
+    # Content manage tabs
+    "投稿列表", "内容管理", "作品管理",
+    # Video detail analysis tabs (per autody research)
+    "总览", "流量分析", "观众分析", "评论热词",
+    # Official data export
+    "导出数据", "导出", "下载",
+    # Data center navigation
+    "数据中心", "粉丝数据", "作品数据", "直播数据", "互动数据",
+    # Dialog dismissal
+    "我知道了", "确定",
+    # Pagination
+    "下一页", "上一页",
+})
 
 _READ_BROWSER_CAPABILITIES = frozenset({
     "marketing_trending_search",
     "marketing_session_login",
     "marketing_accounts_sync",
 })
+
+# browser_evaluate is only allowed for account data collection, not trending or login
+_EVALUATE_CAPABILITIES: frozenset[str] = frozenset({"marketing_accounts_sync"})
 
 _TOOL_CAPABILITIES: dict[str, frozenset[str]] = {
     "browser_close": _READ_BROWSER_CAPABILITIES,
@@ -113,6 +138,7 @@ _TOOL_CAPABILITIES: dict[str, frozenset[str]] = {
     "browser_wait_for": _READ_BROWSER_CAPABILITIES,
     "browser_tabs": _READ_BROWSER_CAPABILITIES,
     "browser_click": _CLICK_ALLOWED_CAPABILITIES,
+    "browser_evaluate": _EVALUATE_CAPABILITIES,
 }
 
 
@@ -449,6 +475,60 @@ def _validate_browser_tabs(
     )
 
 
+def _validate_browser_evaluate(
+    ctx: BrowserActionContext, tool: str, args: dict[str, Any],
+) -> BrowserPolicyDecision:
+    # browser_evaluate is the highest-risk tool: it executes arbitrary JS in the
+    # page context.  Guardrails:
+    #   - only marketing_accounts_sync (not trending/login)
+    #   - requires approved=True (L3 controlled resource)
+    #   - function must be a string, <= 50KB, no control chars (except newlines/tabs)
+    #   - filename is denied (disk write)
+    #   - element/target are optional but validated if present
+    #   - output still goes through recursive secret sanitizer
+    rejection = _check_context(ctx, tool, CapabilityLevel.CONTROLLED_RESOURCE)
+    if rejection:
+        return rejection
+
+    fn = args.get("function")
+    if type(fn) is not str:
+        return _deny("browser_evaluate.function must be a string")
+    fn = fn.strip()
+    if not fn:
+        return _deny("browser_evaluate.function must not be empty")
+    if len(fn) > 50_000:
+        return _deny("browser_evaluate.function must be <= 50000 chars")
+    # Allow newlines and tabs but reject other control characters
+    _script_ctrl = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+    if _script_ctrl.search(fn):
+        return _deny("browser_evaluate.function contains control characters")
+
+    # filename is denied (disk write risk)
+    if "filename" in args:
+        return _deny("browser_evaluate.filename is denied (disk write)")
+
+    clean: dict[str, Any] = {"function": fn}
+
+    # element and target are optional context selectors
+    for param in ("element", "target"):
+        if param in args:
+            v = args[param]
+            if type(v) is not str:
+                return _deny(f"browser_evaluate.{param} must be a string")
+            v = v.strip()
+            if not v or len(v) > 1000:
+                return _deny(f"browser_evaluate.{param} empty or too long")
+            if _CONTROL_RE.search(v):
+                return _deny(f"browser_evaluate.{param} contains control characters")
+            clean[param] = v
+
+    return BrowserPolicyDecision(
+        allowed=True, effective_level=CapabilityLevel.CONTROLLED_RESOURCE, reason="ok",
+        sanitized_arguments=clean,
+        audit={"tool": tool, "capability": ctx.capability, "function_len": len(fn)},
+    )
+
+
 def _validate_browser_click(
     ctx: BrowserActionContext, tool: str, args: dict[str, Any],
 ) -> BrowserPolicyDecision:
@@ -475,7 +555,15 @@ def _validate_browser_click(
     if ctx.capability == "marketing_trending_search":
         if element not in _TREND_CLICK_LABELS:
             return _deny("browser_click element is outside reviewed creator-center trend tabs")
-        if not re.fullmatch(r"e\d{1,8}", target):
+        if not re.fullmatch(r"[a-z0-9]{1,12}", target):
+            return _deny("browser_click target must be a current Playwright snapshot ref")
+    elif ctx.capability == "marketing_accounts_sync":
+        if element not in _ACCOUNT_SYNC_CLICK_LABELS:
+            return _deny(
+                f"browser_click element {element!r} is outside reviewed "
+                "creator-center account-sync controls"
+            )
+        if not re.fullmatch(r"[a-z0-9]{1,12}", target):
             return _deny("browser_click target must be a current Playwright snapshot ref")
 
     # button
@@ -514,6 +602,7 @@ _TOOL_ALLOWED_PARAMS: dict[str, frozenset[str]] = {
     "browser_wait_for": frozenset({"time", "text", "textGone"}),
     "browser_tabs": frozenset({"action", "index", "url"}),
     "browser_click": frozenset({"target", "element", "doubleClick", "button", "modifiers"}),
+    "browser_evaluate": frozenset({"function", "element", "target", "filename"}),
 }
 
 _VALIDATORS = {
@@ -523,6 +612,7 @@ _VALIDATORS = {
     "browser_wait_for": _validate_browser_wait_for,
     "browser_tabs": _validate_browser_tabs,
     "browser_click": _validate_browser_click,
+    "browser_evaluate": _validate_browser_evaluate,
 }
 
 
