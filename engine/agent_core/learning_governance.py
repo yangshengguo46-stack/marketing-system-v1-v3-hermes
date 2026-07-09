@@ -15,7 +15,7 @@ from .influence_score import BUCKET_VALUES, INFLUENCE_SCORE_VERSION, RISK_BUCKET
 
 
 GOVERNANCE_VERSION = "learning-governance-v0.1"
-WEIGHT_REPLAY_VERSION = "weight-candidate-replay-v0.1"
+WEIGHT_REPLAY_VERSION = "weight-candidate-replay-v0.2"
 
 HIGH_BUCKETS = {"high", "spike"}
 LOW_BUCKETS = {"zero", "low"}
@@ -152,6 +152,81 @@ def _rule_conflicts(candidate: dict[str, Any], rule_key: str) -> list[str]:
     hits = set(_rule_hits(candidate))
     conflicts.extend(sorted(CONFLICTING_RULES.get(rule_key, set()) & hits))
     return conflicts
+
+
+def _label_buckets(candidate: dict[str, Any]) -> dict[str, str]:
+    buckets: dict[str, str] = {}
+    for dimension in ("attention", "retention", "trust", "action", "fit", "risk"):
+        bucket = _bucket(candidate, dimension)
+        if bucket:
+            buckets[dimension] = bucket
+    return buckets
+
+
+def _safe_get(store: Any, getter: str, identifier: Any) -> dict[str, Any] | None:
+    value = str(identifier or "").strip()
+    if not value:
+        return None
+    try:
+        result = getattr(store, getter)(value)
+    except (AttributeError, KeyError, ValueError, TypeError):
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _feature_snapshot_summary(asset: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not asset:
+        return None
+    content = asset.get("content") if isinstance(asset.get("content"), dict) else {}
+    snapshot = content.get("feature_snapshot")
+    if not isinstance(snapshot, dict):
+        return None
+    evidence = snapshot.get("evidence") if isinstance(snapshot.get("evidence"), dict) else {}
+    structure = snapshot.get("structure") if isinstance(snapshot.get("structure"), dict) else {}
+    identity = snapshot.get("identity") if isinstance(snapshot.get("identity"), dict) else {}
+    return {
+        "id": snapshot.get("id"),
+        "version": snapshot.get("version"),
+        "kind": snapshot.get("kind"),
+        "platforms": list(identity.get("platforms") or []),
+        "evidence_ready": evidence.get("ready"),
+        "evidence_with_url": evidence.get("with_url"),
+        "structure_keys": sorted(str(key) for key in structure.keys()),
+    }
+
+
+def _replay_case_audit(store: Any, candidate: dict[str, Any]) -> dict[str, Any]:
+    """Return compact audit context for one historical retro candidate."""
+
+    asset = _safe_get(store, "get_content_asset", candidate.get("asset_id"))
+    preflight = _safe_get(store, "get_preflight_record", candidate.get("preflight_id"))
+    prediction = _safe_get(store, "get_prediction", candidate.get("prediction_id"))
+    snapshot = _feature_snapshot_summary(asset)
+    preflight_decision = (
+        (preflight.get("decision") or {}).get("preflight_decision")
+        if isinstance((preflight or {}).get("decision"), dict)
+        else None
+    )
+    if not isinstance(preflight_decision, dict):
+        preflight_decision = preflight.get("decision") if isinstance((preflight or {}).get("decision"), dict) else {}
+    return {
+        "asset_id": candidate.get("asset_id"),
+        "preflight_id": candidate.get("preflight_id"),
+        "prediction_id": candidate.get("prediction_id"),
+        "has_asset": asset is not None,
+        "has_feature_snapshot": snapshot is not None,
+        "has_preflight": preflight is not None,
+        "has_prediction": prediction is not None,
+        "feature_snapshot": snapshot,
+        "asset_kind": snapshot.get("kind") if snapshot else ((asset or {}).get("content") or {}).get("production_kind"),
+        "preflight_status": preflight_decision.get("status"),
+        "prediction_status": (prediction or {}).get("status"),
+        "metric_label_buckets": _label_buckets(candidate),
+    }
+
+
+def _coverage_ratio(count: int, total: int) -> float:
+    return round(count / total, 3) if total else 0.0
 
 
 def _estimated_adjustment_delta(candidate: dict[str, Any], adjustment: dict[str, Any]) -> float | None:
@@ -379,7 +454,7 @@ def replay_weight_candidate(
     store: Any,
     candidate_id: str,
     *,
-    window: int = 50,
+    window: int = 500,
     min_support: int | None = None,
     max_conflict_ratio: float = 0.25,
     max_harm_count: int = 0,
@@ -420,13 +495,14 @@ def replay_weight_candidate(
         }
 
     required_support = max(1, int(min_support or proposal.get("support_count") or 3))
+    replay_window = max(1, min(int(window), 500))
     retros = [
         item for item in store.list_learning_candidates(
             candidate_type="memory",
             user_id=candidate.get("user_id") or "default",
             account_id=candidate.get("account_id"),
             platform=candidate.get("platform"),
-            limit=max(1, min(int(window), 500)),
+            limit=replay_window,
         )
         if item.get("status") in {"pending", "accepted"}
         and _proposal(item).get("kind") == "published_metric_retro"
@@ -436,6 +512,7 @@ def replay_weight_candidate(
     conflict_examples: list[dict[str, Any]] = []
     harm_examples: list[dict[str, Any]] = []
     replayed: list[dict[str, Any]] = []
+    coverage_counter: Counter[str] = Counter()
     support_count = 0
     conflict_count = 0
     harm_count = 0
@@ -469,15 +546,33 @@ def replay_weight_candidate(
                 "actual_success": actual_success,
                 "estimated_delta": estimated_delta,
             })
+        case = _replay_case_audit(store, retro_candidate)
+        for key in ("has_asset", "has_feature_snapshot", "has_preflight", "has_prediction"):
+            if case.get(key):
+                coverage_counter[key] += 1
+        if case.get("metric_label_buckets"):
+            coverage_counter["has_metric_labels"] += 1
         replayed.append({
             "candidate_id": retro_candidate["id"],
             "support": support,
             "conflicts": conflicts,
             "actual_success": actual_success,
             "estimated_delta": estimated_delta,
+            "case": case,
         })
 
     sample_size = len(retros)
+    coverage = {
+        "asset_cases": coverage_counter["has_asset"],
+        "with_feature_snapshot": coverage_counter["has_feature_snapshot"],
+        "with_preflight": coverage_counter["has_preflight"],
+        "with_prediction": coverage_counter["has_prediction"],
+        "with_metric_labels": coverage_counter["has_metric_labels"],
+        "feature_snapshot_ratio": _coverage_ratio(coverage_counter["has_feature_snapshot"], sample_size),
+        "preflight_ratio": _coverage_ratio(coverage_counter["has_preflight"], sample_size),
+        "prediction_ratio": _coverage_ratio(coverage_counter["has_prediction"], sample_size),
+        "metric_label_ratio": _coverage_ratio(coverage_counter["has_metric_labels"], sample_size),
+    }
     conflict_ratio = round(conflict_count / sample_size, 3) if sample_size else 0.0
     if sample_size < required_support:
         status = "insufficient_replay_samples"
@@ -504,12 +599,18 @@ def replay_weight_candidate(
         "can_accept": can_accept,
         "rule_key": rule_key,
         "proposed_adjustment": adjustment,
+        "audit_scope": {
+            "mode": "full_history_up_to_500" if replay_window >= 500 else "bounded_window",
+            "window": replay_window,
+            "note": "replays historical published-result learning candidates in the candidate account/platform scope",
+        },
         "sample_size": sample_size,
         "required_support": required_support,
         "support_count": support_count,
         "conflict_count": conflict_count,
         "conflict_ratio": conflict_ratio,
         "harm_count": harm_count,
+        "coverage": coverage,
         "support_examples": support_examples[:8],
         "conflict_examples": conflict_examples[:8],
         "harm_examples": harm_examples[:8],
@@ -624,7 +725,7 @@ def decide_weight_candidate_with_replay(
     *,
     decision: str,
     reason: str | None = None,
-    window: int = 50,
+    window: int = 500,
     min_support: int | None = None,
 ) -> dict[str, Any]:
     """Accept/reject a weight candidate through replay governance.

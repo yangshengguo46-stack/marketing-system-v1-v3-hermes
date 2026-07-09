@@ -32,12 +32,18 @@ def _retro_candidate(
     bias: str = "over",
     score: float = 46.0,
     account_id: str = "acct1",
+    asset_id: str | None = None,
+    preflight_id: str | None = None,
+    prediction_id: str | None = None,
 ):
     return store.create_learning_candidate(
         candidate_type="memory",
         user_id="u1",
         account_id=account_id,
         platform="douyin",
+        asset_id=asset_id,
+        preflight_id=preflight_id,
+        prediction_id=prediction_id,
         proposal={
             "kind": "published_metric_retro",
             "metric_labels": {
@@ -252,6 +258,76 @@ def test_weight_candidate_acceptance_blocks_when_history_has_too_many_conflicts(
     assert blocked["status"] == "blocked"
     assert blocked["reason"] == "replay_not_passed"
     assert store.get_learning_candidate(weight["id"])["status"] == "pending"
+
+
+def test_weight_candidate_replay_reports_historical_audit_coverage(tmp_path):
+    store = _store(tmp_path)
+    for idx in range(3):
+        asset = store.create_content_asset(
+            title=f"AI 教育视频 {idx}",
+            type="video",
+            user_id="u1",
+            account_id="acct1",
+            platform="douyin",
+            content={
+                "production_kind": "faceless_video",
+                "feature_snapshot": {
+                    "id": f"cfs_audit_{idx}",
+                    "version": "content-feature-snapshot-v0.1",
+                    "kind": "faceless_video",
+                    "identity": {"platforms": ["douyin"]},
+                    "evidence": {"ready": True, "with_url": 1},
+                    "structure": {"shot_count": 6, "duration_sec": 49},
+                },
+            },
+        )
+        prediction = store.create_prediction(
+            asset_id=asset["id"],
+            prediction={
+                "prediction_version": "prepublish-prediction-v2.0",
+                "expected_views": {"low": 100, "mid": 800, "high": 3000},
+            },
+        )
+        preflight = store.create_preflight_record(
+            user_id="u1",
+            account_id="acct1",
+            platform="douyin",
+            asset_id=asset["id"],
+            prediction_id=prediction["id"],
+            input={"kind": "faceless_video"},
+            scores={"overall": 0.62},
+            decision={
+                "preflight_decision": {
+                    "status": "ready_for_asset_draft",
+                    "selected_lane": "faceless_video",
+                }
+            },
+        )
+        _retro_candidate(
+            store,
+            bias="",
+            asset_id=asset["id"],
+            preflight_id=preflight["id"],
+            prediction_id=prediction["id"],
+        )
+
+    created = propose_weight_candidate_from_recent_retros(
+        store, user_id="u1", account_id="acct1", platform="douyin",
+    )
+    replay = replay_weight_candidate(store, created["weight_candidate_id"])
+
+    assert replay["version"] == "weight-candidate-replay-v0.2"
+    assert replay["audit_scope"]["mode"] == "full_history_up_to_500"
+    assert replay["coverage"]["asset_cases"] == 3
+    assert replay["coverage"]["with_feature_snapshot"] == 3
+    assert replay["coverage"]["with_preflight"] == 3
+    assert replay["coverage"]["with_prediction"] == 3
+    assert replay["coverage"]["with_metric_labels"] == 3
+    case = replay["replayed_candidates"][0]["case"]
+    assert case["has_feature_snapshot"] is True
+    assert case["feature_snapshot"]["version"] == "content-feature-snapshot-v0.1"
+    assert case["preflight_status"] == "ready_for_asset_draft"
+    assert case["prediction_status"] == "pending"
 
 
 def test_metric_retro_creates_influence_score_and_weight_candidate_after_three_posts(tmp_path):

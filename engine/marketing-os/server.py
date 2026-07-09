@@ -3146,7 +3146,7 @@ def weight_candidate_replay(params: dict | None = None) -> dict:
     return replay_weight_candidate(
         _get_agent_service().get_store(),
         candidate_id,
-        window=int(params.get("window") or 50),
+        window=int(params.get("window") or 500),
         min_support=int(params["min_support"]) if params.get("min_support") else None,
     )
 
@@ -3163,7 +3163,7 @@ def decide_weight_candidate(params: dict | None = None) -> dict:
         candidate_id,
         decision=str(params.get("decision") or params.get("status") or ""),
         reason=str(params.get("reason") or "").strip() or None,
-        window=int(params.get("window") or 50),
+        window=int(params.get("window") or 500),
         min_support=int(params["min_support"]) if params.get("min_support") else None,
     )
 
@@ -3230,7 +3230,7 @@ def get_learning_candidates(
 @app.get("/api/plugins/marketing-os/learning/weight-replay")
 def get_weight_candidate_replay(
     candidate_id: str,
-    window: int = 50,
+    window: int = 500,
     min_support: int | None = None,
 ):
     try:

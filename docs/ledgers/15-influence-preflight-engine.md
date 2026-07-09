@@ -252,7 +252,7 @@ InfluenceOS_Score
 | IPE-06 | PreflightDecision | 把分数转成产品决策：可生产、先改稿、补证据、换素材、不开机、可发布 | Agent 和 UI 都消费同一决策结构 | ✅ code |
 | IPE-07 | 接入内容生产三 lane | `article_soft`、`faceless_video`、`premium_human_video` 生产前均调用预演 | 内容生产不再绕过预演 | ✅ code |
 | IPE-08 | 对话思考折叠与预演去噪 | 预演门保持底层能力；计划、工具、证据流水折叠到“思考与执行”；主回复只交付结论和下一步 | 用户不被底层流水账打扰，但可展开核查过程 | ✅ code |
-| IPE-09 | 校准与权重升级 | 发布后对账预测与真实结果，生成权重候选；升级前全量回放历史样本 | 不允许 Agent 静默改权重 | 部分 code：权重候选已落地，回放升级待做 |
+| IPE-09 | 校准与权重升级 | 发布后对账预测与真实结果，生成权重候选；升级前全量回放历史样本 | 不允许 Agent 静默改权重 | ✅ code |
 | IPE-10 | 冷启动对标 prior | 新账号用对标账号和行业基线生成初始权重；真实数据回来后逐步退权重 | 无账号/新号也能预演，但明确置信度和来源 | ⏳ |
 
 ## 十、短期代码落点建议
@@ -900,6 +900,86 @@ passed
 
 .venv/bin/python -m pytest -q
 1285 passed, 1 warning
+```
+
+## 二十七、2026-07-09 落地记录：权重候选全历史 replay 审计 v0.2
+
+状态：`CORE-LOOP-09 / IPE-09 closure code done / automated verified`
+
+本轮把权重候选 replay 从“看近 50 条复盘是否有反例”升级为“默认回放最多 500 条历史复盘，并输出每条样本的审计覆盖情况”。它仍然不修改永久权重，只作为接受/拒绝学习候选前的底层闸门。
+
+### 27.1 本轮改动
+
+- 更新 `engine/agent_core/learning_governance.py`
+  - `WEIGHT_REPLAY_VERSION` 升级为 `weight-candidate-replay-v0.2`。
+  - `replay_weight_candidate(...)` 默认窗口从 50 升级为 500。
+  - replay 结果新增：
+    - `audit_scope`
+    - `coverage`
+    - 每条 `replayed_candidates[].case`
+  - 每条历史样本会尽量回读：
+    - `content_assets`
+    - `content.feature_snapshot`
+    - `preflight_records`
+    - `content_predictions`
+    - `metric_labels`
+
+- 更新 `engine/agent_core/tool_manifest.py`
+  - `marketing_read_weight_candidate_replay.window.default = 500`
+  - `marketing_draft_weight_candidate_decide.window.default = 500`
+
+- 更新 `engine/marketing-os/server.py`
+  - API 默认 replay / decide 窗口同步为 500。
+
+- 更新 `tests/test_influence_score_governance.py`
+  - 新增覆盖：带内容资产、特征快照、预演记录、预测记录的历史样本，replay 必须能报告完整审计覆盖。
+
+### 27.2 replay 输出新增信息
+
+`coverage` 用来回答：
+
+```text
+本次权重候选接受前，历史样本里有多少条带内容资产？
+多少条带发布前特征快照？
+多少条能回到总预演？
+多少条能回到发布前预测？
+多少条有发布后指标标签？
+```
+
+`replayed_candidates[].case` 用来回答：
+
+```text
+这一条历史样本为什么支持/反对这个权重候选？
+它当时的内容类型、平台、证据状态、结构特征是什么？
+它的真实指标标签是什么？
+```
+
+这样后续策略候选、实验草案、账号 DNA 更新都可以引用 replay 审计，而不是只引用一个抽象结论。
+
+### 27.3 产品边界
+
+1. replay v0.2 仍然是治理闸门，不是正式权重生效。
+2. 即使 replay passed，也只允许接受 learning candidate。
+3. 真正修改策略权重必须继续经过 strategy candidate / experiment candidate。
+4. replay 输出只放审计摘要，不把完整草稿或素材塞进学习候选，避免长期记忆污染。
+
+### 27.4 当前验证证据
+
+```text
+.venv/bin/python -m py_compile engine/agent_core/learning_governance.py engine/marketing-os/server.py
+passed
+
+.venv/bin/python -m pytest tests/test_influence_score_governance.py::test_weight_candidate_replay_accepts_only_supported_non_harmful_candidates tests/test_influence_score_governance.py::test_weight_candidate_replay_reports_historical_audit_coverage tests/test_influence_score_governance.py::test_weight_candidate_acceptance_blocks_when_history_has_too_many_conflicts -q
+3 passed
+
+.venv/bin/python -m pytest tests/test_influence_score_governance.py tests/test_server.py::test_weight_candidate_replay_and_decision_endpoints_guard_learning tests/test_run_12_13_14.py::test_manifest_snapshot_tool_names tests/test_run_12_13_14.py::test_manifest_snapshot_tool_count tests/test_run_12_13_14.py::test_manifest_snapshot_level_distribution tests/test_run_12_13_14.py::test_manifest_snapshot_gateway_names_by_level tests/test_agent_core.py::test_tool_manifest_all_have_valid_levels tests/test_agent_core.py::test_only_implemented_tools_are_registered tests/test_agent_core.py::test_controlled_tools_count -q
+14 passed, 1 warning
+
+.venv/bin/python -m pytest tests/test_influence_score_governance.py tests/test_learning_pipeline_integration.py tests/test_content_production.py tests/test_run19_retro_reconciliation.py tests/test_server.py::test_weight_candidate_replay_and_decision_endpoints_guard_learning -q
+52 passed, 1 warning
+
+.venv/bin/python -m pytest -q
+1286 passed, 1 warning
 ```
 
 ## 二十三、2026-07-09 落地记录：accepted 策略候选转实验草案

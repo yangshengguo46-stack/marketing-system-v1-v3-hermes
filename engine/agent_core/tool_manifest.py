@@ -191,7 +191,7 @@ READ_TOOLS: list[ToolSpec] = [
              "对权重学习候选做历史回放：检查支持样本、反例比例和可能误伤，不改变候选状态或永久策略权重",
              _schema({
                  "candidate_id": {"type": "string", "description": "weight 类型学习候选 ID"},
-                 "window": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
+                 "window": {"type": "integer", "minimum": 1, "maximum": 500, "default": 500},
                  "min_support": {"type": "integer", "minimum": 1, "maximum": 20},
              }),
              _server_read("weight_candidate_replay", pass_params=True)),
@@ -541,7 +541,7 @@ DRAFT_TOOLS: list[ToolSpec] = [
                  "candidate_id": {"type": "string", "description": "weight 类型学习候选 ID"},
                  "decision": {"type": "string", "enum": ["accepted", "rejected"]},
                  "reason": {"type": "string", "description": "用户/审阅者给出的原因"},
-                 "window": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
+                 "window": {"type": "integer", "minimum": 1, "maximum": 500, "default": 500},
                  "min_support": {"type": "integer", "minimum": 1, "maximum": 20},
              }),
              _server_action("decide_weight_candidate"),
