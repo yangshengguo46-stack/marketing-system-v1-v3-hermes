@@ -250,7 +250,7 @@ InfluenceOS_Score
 | IPE-04 | 指标标签化 | 将发布后原始指标映射为 attention/retention/trust/action/fit/risk 标签 | 指标回收后自动生成 label，不混用未知值和 0 | ✅ code |
 | IPE-05 | InfluenceOS Score v0 | 用可解释权重计算第一版分数，并保留权重版本 | 同一资产能输出总分、分项分和 why | ✅ code |
 | IPE-06 | PreflightDecision | 把分数转成产品决策：可生产、先改稿、补证据、换素材、不开机、可发布 | Agent 和 UI 都消费同一决策结构 | ✅ code |
-| IPE-07 | 接入内容生产三 lane | `article_soft`、`faceless_video`、`premium_human_video` 生产前均调用预演 | 内容生产不再绕过预演 | ⏳ |
+| IPE-07 | 接入内容生产三 lane | `article_soft`、`faceless_video`、`premium_human_video` 生产前均调用预演 | 内容生产不再绕过预演 | ✅ code |
 | IPE-08 | 对话思考折叠与预演去噪 | 预演门保持底层能力；计划、工具、证据流水折叠到“思考与执行”；主回复只交付结论和下一步 | 用户不被底层流水账打扰，但可展开核查过程 | ✅ code |
 | IPE-09 | 校准与权重升级 | 发布后对账预测与真实结果，生成权重候选；升级前全量回放历史样本 | 不允许 Agent 静默改权重 | 部分 code：权重候选已落地，回放升级待做 |
 | IPE-10 | 冷启动对标 prior | 新账号用对标账号和行业基线生成初始权重；真实数据回来后逐步退权重 | 无账号/新号也能预演，但明确置信度和来源 | ⏳ |
@@ -846,6 +846,57 @@ passed
 
 .venv/bin/python -m pytest tests/test_content_production.py tests/test_run19_retro_reconciliation.py tests/test_learning_pipeline_integration.py tests/test_influence_score_governance.py -q
 50 passed
+
+.venv/bin/python -m pytest -q
+1285 passed, 1 warning
+```
+
+## 二十六、2026-07-09 落地记录：premium 实验生产入口补齐总预演
+
+状态：`CORE-LOOP-09 / IPE-07 closure code done / automated verified`
+
+本轮不是新增一个高阶视频生产器，而是修正一条容易被忽略的旁路：账号实验驱动的 `premium_human_video` 分支此前会直接返回 blocked，不创建资产，但也没有持久化 `PreflightRecord`。这会让高阶视频实验缺少三核闭环里的“行动前判断记录”。
+
+### 26.1 本轮改动
+
+- 更新 `engine/agent_core/experiment_driven_production.py`
+  - `create_content_from_experiment(... kind="premium_human_video")` 现在先调用 `create_content_production_preflight(...)`。
+  - 返回结果新增：
+    - `preflight_id`
+    - `preflight_status`
+    - `preflight_decision`
+    - `video_previsualization`
+  - 仍然保持高阶视频边界：不创建普通 `content_assets`，不写普通发布预测，不直接进入生成或渲染。
+
+- 更新 `tests/test_content_production.py`
+  - 覆盖 premium 实验分支必须写入 1 条 `preflight_records`。
+  - 覆盖 `preflight_decision.status = delegate_to_video_previsualization`。
+  - 覆盖 `video_previsualization.agent = high_end_video_previsualization_agent`。
+  - 覆盖仍然不创建普通内容资产。
+
+### 26.2 产品边界
+
+三条 lane 的当前统一口径：
+
+| lane | 资产行为 | 总预演行为 | 片子预演行为 |
+|---|---|---|---|
+| `article_soft` | 创建软文草稿资产 | 必须先跑，通过才写预测 | 不需要 |
+| `faceless_video` | 创建视频草稿/EDL 资产 | 必须先跑，通过才写预测 | 不需要 |
+| `premium_human_video` | 不创建普通内容资产 | 必须先跑并写 `PreflightRecord` | 必须委派 `high_end_video_previsualization_agent` |
+
+这意味着高阶视频不会被总预演吞掉；但它也不会绕过总预演。总预演回答“作为账号经营动作是否值得继续”，片子预演回答“这条片子作为影像作品是否成立”。
+
+### 26.3 当前验证证据
+
+```text
+.venv/bin/python -m py_compile engine/agent_core/experiment_driven_production.py
+passed
+
+.venv/bin/python -m pytest tests/test_content_production.py::test_experiment_driven_production_blocks_premium_until_film_preflight tests/test_production_preflight.py::test_premium_video_general_preflight_delegates_film_previsualization -q
+2 passed
+
+.venv/bin/python -m pytest tests/test_content_production.py tests/test_production_preflight.py tests/test_preflight_decision.py tests/test_learning_pipeline_integration.py tests/test_influence_score_governance.py -q
+43 passed
 
 .venv/bin/python -m pytest -q
 1285 passed, 1 warning

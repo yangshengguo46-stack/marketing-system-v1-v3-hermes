@@ -565,6 +565,18 @@ def test_experiment_driven_production_blocks_premium_until_film_preflight(tmp_pa
     assert result["kind"] == "premium_human_video"
     assert result["reason"] == "premium_human_video_requires_video_previsualization_project"
     assert result["production_plan"]["kind"] == "premium_human_video"
+    assert result["preflight_id"].startswith("preflight_")
+    assert result["preflight_status"] == "delegate_to_video_previsualization"
+    assert result["preflight_decision"]["selected_lane"] == "premium_human_video"
+    assert result["video_previsualization"]["agent"] == "high_end_video_previsualization_agent"
+    assert result["video_previsualization"]["required"] is True
+    preflights = store.list_preflight_records(account_id="acct_exp")
+    assert len(preflights) == 1
+    stored = preflights[0]
+    assert stored["id"] == result["preflight_id"]
+    assert stored["input"]["kind"] == "premium_human_video"
+    assert stored["decision"]["selected_lane"] == "premium_human_video"
+    assert stored["decision"]["video_previsualization_status"] == "not_run"
     assert store.list_content_assets(account_id="acct_exp") == []
 
 

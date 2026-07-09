@@ -16,6 +16,7 @@ from .account_lifecycle import AccountLifecycleService
 from .article_soft_production import create_soft_article_asset
 from .content_production import build_content_production_plan
 from .faceless_video_production import create_faceless_video_asset
+from .production_preflight import create_content_production_preflight
 
 
 VALID_EXPERIMENT_PRODUCTION_KINDS = {"auto", "article_soft", "faceless_video", "premium_human_video"}
@@ -280,6 +281,7 @@ def create_content_from_experiment(store: Any, params: dict[str, Any] | None = N
     request = dict(built["production_request"])
     kind = built["kind"]
     if kind == "premium_human_video":
+        preflight = create_content_production_preflight(store, request)
         return {
             "status": "blocked",
             "reason": "premium_human_video_requires_video_previsualization_project",
@@ -288,6 +290,10 @@ def create_content_from_experiment(store: Any, params: dict[str, Any] | None = N
             "experiment_id": built["experiment_id"],
             "production_request": request,
             "production_plan": built["production_plan"],
+            "preflight_id": preflight["preflight_id"],
+            "preflight_status": preflight["preflight_decision"]["status"],
+            "preflight_decision": preflight["preflight_decision"],
+            "video_previsualization": preflight["video_previsualization"],
             "guardrail": "high-end video must pass the dedicated film previsualization agent first",
         }
     if kind == "faceless_video":
