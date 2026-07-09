@@ -24,6 +24,7 @@
 | MCP reference servers | `modelcontextprotocol/servers`，各子项目许可证需单独核验 | stdio/HTTP 生命周期、工具发现、错误处理 | **C**。只参考协议实现，不批量安装社区 server |
 | Playwright | `microsoft/playwright`，Apache-2.0 | browser context、trace、录像、网络等待 | **A/C**。由 MCP 间接使用；trace 只存脱敏测试数据 |
 | Electron session | Electron 官方能力，MIT | 登录窗口、系统 Keychain/本机生命周期 | **保留**。作为产品 host；浏览器执行逐步迁往 account-scoped MCP，不承担 Agent 推理 |
+| Firecrawl | `firecrawl/firecrawl` AGPL-3.0；官方 `firecrawl-mcp@3.22.2` MIT | 公开网页 search/scrape/crawl/map；适合行业研究、竞品官网、文章证据和知识库，不是社交平台登录态替代，也不是授权图库 | **B 封装采用**。业务层依赖自有 Provider contract，免费云 Key与 loopback 自托管可切换；首期只开放 search，只读返回来源 URL/Markdown；interact、表单、登录和任意内网地址禁用。本机未安装 Docker，暂不能验证自托管 |
 
 关键决定：MCP 不是绕过登录。用户首次仍在官方页面扫码/验证码；改变的是登录后的自动化、观察、恢复和跨平台复用能力。
 
@@ -31,7 +32,7 @@
 
 | 项目 | 来源/许可证 | 能力与风险 | 结论 |
 |---|---|---|---|
-| MediaCrawler | `NanmiCoder/MediaCrawler`，GitHub 元数据无法确认标准许可证 | 抖音/小红书/快手/B站/微博/知乎采集；需要登录态且页面适配脆弱 | **C/D**。只研究平台适配、字段和失败模式；不复制、不打包、不接用户真实 Cookie |
+| MediaCrawler | `NanmiCoder/MediaCrawler`，NON-COMMERCIAL LEARNING LICENSE 1.1 | 抖音/小红书/快手/B站/微博/知乎采集；需要登录态且页面适配脆弱；许可禁止商业用途 | **X/C**。只研究平台字段和失败模式；不复制、不打包、不接用户真实 Cookie |
 | TikHub SDK/API | `TikHub/TikHub-API-Python-SDK`，Apache-2.0；服务端为第三方托管 | 多平台统一 API、搜索、详情、评论、趋势 | **B 候选**。只作为可选付费数据源；必须明确数据外发、费用、地区与来源，不成为唯一主链 |
 | Douyin/TikTok Download API | `Evil0ctal/Douyin_TikTok_Download_API`，Apache-2.0 | 分享链接解析、公开媒体信息与下载 | **D**。仅限用户提供/公开链接 PoC；验证真实性、版权、限流与平台条款后再决定 |
 | 抖音数据分析 MCP 候选 | `kk520879/undoom-douyin-data-analysis`，MIT，0.1.3 | 搜索与基础分析；无 account profile 注入、DOM 脆弱、部分指标固定/不完整 | **X/D**。不能直接用于产品结论，最多隔离 PoC |
@@ -82,6 +83,8 @@
 |---|---|---|---|
 | Postiz | `gitroomhq/postiz-app`，AGPL-3.0 | 社交媒体排期、渠道 adapter、发布队列、指标 UI | **C**。借鉴 publication/channel adapter 和队列模型；不复制 AGPL 代码，且不能假设支持国内平台 |
 | BrightBean Studio | `brightbeanxyz/brightbean-studio`，AGPL-3.0 | 多平台内容管理、排期、发布 | **C**。作为发布 UX 与 provider contract 参考 |
+| TryPost | `trypost-it/trypost`，AGPL-3.0 | workspace、brand profile、MCP/REST、发布与账号分析 | **C**。参考品牌隔离、工具契约和 analytics；不嵌入代码，静态 brand profile 不代替证据驱动 DNA |
+| Mixpost Lite | `inovector/mixpost`，MIT（Lite；Pro 边界需逐版本复核） | 多账号、日历、队列、平台数据分析 | **C**。参考队列与平台能力差异；采用前固定 commit 并核验 Lite/Pro 边界 |
 | ComfyUI | `Comfy-Org/ComfyUI`，许可证需发布前复核 | 图式生成工作流、模型节点生态 | **B/C（Web 视频）**。通过 Web capability contract 接入，不嵌入桌面 Agent runtime |
 | Remotion | `remotion-dev/remotion`，许可证/商业条款需版本核验 | React 视频合成、模板化渲染 | **B/C（Web 视频）**。适合可重复模板与渲染队列，先核验商业许可 |
 | OpenMontage | `calesthio/OpenMontage`，AGPL-3.0 | Agent 化视频生产流水线 | **C**。借鉴 pipeline、artifact 和人工检查点，不复制代码 |
@@ -109,4 +112,3 @@
 | 发布 | 自研 provider/effect contract，参考 Postiz | 官方/可控平台通道、真实 post ID、指标回收 |
 | Agent 评测 | 引入 promptfoo 候选 | 建立脱敏数据集与 CI 阈值 |
 | Web 视频 | capability contract，参考 ComfyUI/Remotion/OpenMontage | 单一 AgentTask/artifact/event 真相源 |
-

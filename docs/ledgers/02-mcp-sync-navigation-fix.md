@@ -1,10 +1,20 @@
-# MCP Sync Navigation & Parsing Fixes
+# MCP Sync Navigation & Parsing Incident Ledger
 
 ## Date
 2026-07-03
 
 ## Summary
-Fixed MCP sync snapshot parsing for Douyin Creator Center, including account identity, total views label, and sub-page navigation via SPA click.
+记录本轮 MCP 同步尝试、确认有效的部分和安全复核后的撤回项。本文不是“全部修复完成”的声明。
+
+## Codex Audit Correction（2026-07-03）
+
+- 保留：重登复用账号 ID、近 7 日播放语义、作品列表解析、只读 SPA tab 点击。
+- 修复：视频指标 API 改用产品 `HermesAgentService` 持有的 Store；原 `AgentCoreStore.instance()` 并不存在。
+- 撤回：任意 `browser_evaluate`、导出/下载/“确定”点击、无条件删除 Chromium Singleton 锁。
+- 隐私：移除无条件写入 50KB 原始 snapshot；调试数据不得默认落盘。
+- 真实性：数据中心导航未验证成功时返回空，不得用“文本长度足够”把主页冒充数据中心页面。
+- 性能：默认同步不再调用已知失败的数据中心路由；仅在 `MARKETING_OS_MCP_DATA_CENTER_EXPERIMENTAL=1` 时实验，结果明确返回 `ok/unavailable`。
+- 指标口径：取消把累计获赞与不同窗口的评论/分享相加成“interaction”；保留原始字段，等待同窗口指标后再计算。
 
 ## Changes Made
 
@@ -24,13 +34,13 @@ Fixed MCP sync snapshot parsing for Douyin Creator Center, including account ide
 2. Uses `browser_click` with `{element, target}` to click the menu item
 3. Waits for SPA route to settle
 4. Retries snapshot with longer delays (3+4+5+5s vs 2+3+3s)
-5. Validates content length ≥ 8000 chars (sidebar alone is ~3K)
+5. 以路由专属可解析证据验证成功，不再以文本长度冒充页面到达
 6. Dismisses blocking dialog popups ("我知道了") before taking final snapshot
 
 ### 4. Browser Click Policy (mcp_browser_policy.py)
 **Changes:**
 - Added `数据中心` to `_ACCOUNT_SYNC_CLICK_LABELS` whitelist
-- Added `我知道了`, `确定` for dialog dismissal
+- 仅保留无副作用的 `我知道了`；语义不明确的 `确定` 已移除
 - Relaxed `target` regex from `e\d{1,8}` to `[a-z0-9]{1,12}` to support ref formats like `e54`, `f3e940`
 
 ### 5. Frontend Label (Accounts.tsx)
@@ -39,7 +49,7 @@ Fixed MCP sync snapshot parsing for Douyin Creator Center, including account ide
 ## Current Status
 
 ### Working
-- ✅ Home page snapshot: 47K chars, account identity (杨炎昭, 66867825385), profile stats (followers=4, likes=56, following=2)
+- ✅ Home page snapshot 可解析脱敏账号身份和基础指标（台账不记录真人昵称与完整平台 ID）
 - ✅ Content manage page: 11.6K chars, 4 videos with per-video metrics (play, like, comment, share)
 - ✅ Dialog dismissal: "我知道了" popup dismissed successfully
 - ✅ Account identity persistence: re-login reuses existing account
@@ -57,8 +67,12 @@ Fixed MCP sync snapshot parsing for Douyin Creator Center, including account ide
 - `engine/agent_core/mcp_browser_policy.py` — `_ACCOUNT_SYNC_CLICK_LABELS`, `target` regex
 - `src/pages/Accounts.tsx` — frontend label
 
-## Debug Snapshot Files
-Located at `~/Library/Application Support/marketing-os-desktop/config/`:
-- `mcp_snapshot_debug.txt` — Home page (47K chars, working)
-- `mcp_snapshot_content_debug.txt` — Content manage page (11.6K chars, working)
-- `mcp_snapshot_data_debug.txt` — Data center (45K chars but still home page content, NOT working)
+## Debug Snapshot Policy
+
+原先默认生成的三份原始 snapshot 文件已判定为隐私风险并删除。后续只有显式 trace 开关、脱敏、大小上限和保留期限同时满足时才允许落盘。
+
+## 最终收口验证
+
+- 2026-07-03：1084 项 pytest 全绿；TypeScript、Electron syntax、`git diff --check`、Vite production build 通过。
+- 真实应用数据目录 secret scanner 通过；源码目录误生成的 `agent-runtime/` 和三份原始 snapshot 已删除并加入忽略规则。
+- 新增 `tests/test_glm_incident_regression.py`，永久守卫任意 JS、导出/下载/模糊确认、Singleton 锁删除、原始 snapshot 落盘和伪 Store 单例。

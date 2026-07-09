@@ -18,9 +18,10 @@
 | MEM-08 | 用户拒绝模式 | 记录拒绝原因、替代选择和上下文；无原因只记事件，不强推断 | ✅ code done：`update_memory_candidate(rejection_reason=...)` 持久化 + `_emit_memory_event` 携带 reason + rejected→verified 自动清除；4 测试通过 |
 | MEM-09 | 平台知识 | 规则/用户/表达/注意力条目带来源、地区、版本、生效失效时间 | ✅ code done：`knowledge.py` — `create_knowledge_entry(source/region/version/valid_from/valid_to)` + `knowledge_is_expired` + `supersedes_knowledge`(version compare)；5 测试通过 |
 | MEM-10 | 行业资料库 | 用户资料与公共资料分权；引用、版本、权限和删除；文档不自动变偏好 | ✅ code done：`documents.py` — user/public scope + `can_read`/`can_modify` 权限控制 + tags；7 测试通过 |
+| MEM-10A | Firecrawl 公开网页研究 | 搜索公开行业/竞品网页并返回 URL、摘要与正文证据；支持免费云 Key 或本机自托管地址；不接管平台登录、不抓私域数据 | 🟡 Provider code done（2026-07-06）：新增 `marketing_research_web_search` 只读工具与 Firecrawl v2 兼容 Provider；云端只允许 `https://api.firecrawl.dev`，自托管只允许 loopback 3002/3003；应用设置可用 safeStorage 加密保存免费云 Key。官方 MCP `3.22.2` tarball integrity 已核验，但 npm 依赖因网络/缓存失败未安装，最终未写入 package/lock；本机无 Docker，故自托管未启动；真实搜索待 Key 验收 |
 | MEM-11 | 检索基线 | 先结构化过滤 + FTS；记录 recall/precision/latency；不足再接 sqlite-vec | ✅ code done：`retrieval.py` — `filter_by_scope`(user/account/platform/kind/workspace) + `rank_by_confidence` + `retrieve` pipeline(→ filter→rank→limit)；返回 metrics |
 | MEM-12 | 开源 memory 对照 | 用同一脱敏数据集比较 Mem0/LangMem；参考 Letta blocks/Graphiti temporal，不写生产库 | PoC 报告含错误写入率和成本 | ⏳ |
-| MEM-13 | 结果记忆 | 发布 receipt、指标窗口、用户反馈和外部因素形成 result event，不直接成为策略 | 真实 post 指标链路 | ⏳ 依赖 PUB |
+| MEM-13 | 结果记忆 | 发布 receipt、指标窗口、用户反馈和外部因素形成 result event，不直接成为策略 | 🟡 workflow wired：指标回收后自动生成 `publish_result` provenance、published_result classification 的 pending episodic candidate；真实 post 指标源和用户确认 UI 待 PUB |
 | MEM-14 | 实验模型 | hypothesis/variant/control/metric/window/result/alternative explanation；避免只看播放量 | A/B 或准实验回放 | ⏳ |
 | MEM-15 | 策略候选 | 指标服务计算权重候选、置信度和衰减；LLM 只解释，不直接改权重 | 可审核、可撤销、离线回放 | ⏳ |
 | MEM-16 | 恢复策略学习 | 失败事件不直接成技能；同类故障经恢复成功和回放后形成 candidate | 故障 replay 通过 | ⏳ |
@@ -28,4 +29,3 @@
 | MEM-18 | 技能安全扫描 | 禁 shell/安装/秘密/扩权/未知网络；权限 diff；prompt injection 检查 | 恶意技能样本全部拒绝 | ⏳ |
 | MEM-19 | 脱敏回放与 promotion | 历史任务脱敏；比较成功率/副作用；用户审批后版本化启用 | candidate→test→approve→rollback E2E | ⏳ |
 | MEM-20 | 用户治理 UI | 查看证据、确认、纠正、锁定、解锁、遗忘、导出；说明推荐为何受其影响 | 真人可理解性验收 | 🟡 CRUD/UI 地基 |
-

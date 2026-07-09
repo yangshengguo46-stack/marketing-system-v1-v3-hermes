@@ -178,11 +178,12 @@ ADR 覆盖：
 
 ## MCP-05 策略扩展（2026-07-03，accounts_sync click 开放）
 
-**变更原因**：创作者中心数据采集需要点击「导出数据」按钮和切换分析 tab（总览/流量分析/观众分析/评论热词），参考 TzFilm-Douyin-Tool 和 autody 开源方案。
+**变更原因**：创作者中心数据采集需要切换只读分析 tab（总览/流量分析/观众分析/评论热词）。
 
 **变更内容**：
 - `browser_click` 的 capability 白名单新增 `marketing_accounts_sync`
-- 新增 `_ACCOUNT_SYNC_CLICK_LABELS` element 白名单：投稿列表、内容管理、作品管理、总览、流量分析、观众分析、评论热词、导出数据、导出、下载、粉丝数据、作品数据、直播数据、互动数据、下一页、上一页
+- 新增 `_ACCOUNT_SYNC_CLICK_LABELS` element 白名单：投稿列表、内容管理、作品管理、总览、流量分析、观众分析、评论热词、粉丝数据、作品数据、直播数据、互动数据、下一页、上一页及无副作用提示“我知道了”
+- `导出数据/导出/下载/确定` 经 2026-07-03 安全复核移除：文件写入和语义不明确确认不得混入只读同步能力
 - 仍保持：仅左键单击、禁双击/修饰键、target 必须是 snapshot ref
 
 **未变更**：
@@ -190,14 +191,8 @@ ADR 覆盖：
 - navigate/snapshot/wait/tabs 的参数约束不变
 - 输出脱敏和 256KB 预算不变
 
-### browser_evaluate 条件开放（2026-07-03）
+### browser_evaluate 开放提案已撤回（2026-07-03 安全复核）
 
-**变更原因**：创作者中心数据采集需要执行页面内 JS 来读取动态加载的图表数据、调用页面内部 API（参考 MediaCrawler 方案），以及后续视频模块衔接。
-
-**变更内容**：
-- `browser_evaluate` 从 `PERMANENTLY_DENIED_TOOLS` 移除
-- 仅允许 `marketing_accounts_sync` capability（trending_search 和 session_login 仍禁）
-- 要求 `approved=True`（L3 CONTROLLED_RESOURCE）
-- script 参数：必须为字符串、非空、≤50KB、无控制字符（允许换行和 Tab）
-- 输出仍走递归脱敏（Cookie/Token/Authorization/Secret 等自动脱敏）
-- `browser_run_code_unsafe` 仍永久禁用（不受此变更影响）
+- `browser_evaluate` 继续位于永久拒绝列表，并从 Broker、manifest 和 schema snapshot 删除。
+- 原提案只限制脚本长度和输出脱敏，无法阻止页面脚本读取 Cookie/storage、调用内部 API 或主动发起网络副作用，不满足最小权限。
+- 动态图表数据优先使用 accessibility snapshot、官方导出 API 的独立受控 Provider，或逐个审核的固定查询模板；不得向 Agent 暴露任意 JavaScript。

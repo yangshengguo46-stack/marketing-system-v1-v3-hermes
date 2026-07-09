@@ -8,16 +8,16 @@
 
 | ID | 任务 | 具体执行 | 完成证据 | 状态 |
 |---|---|---|---|---|
-| DESK-01 | 进程责任图 | Electron/backend/Hermes/MCP/renderer 生命周期、端口、令牌、崩溃和退出顺序 | 架构图与健康接口一致 | ⏳ |
+| DESK-01 | 进程责任图 | Electron/backend/Hermes/MCP/renderer 生命周期、端口、令牌、崩溃和退出顺序 | ✅ code done：`docs/architecture/process-responsibility.md` — 完整进程拓扑图（Electron Main→Backend→Hermes Agent→MCP CLI→Chromium + Renderer + Channel Bridge）、启动顺序、关停顺序、崩溃恢复矩阵、端口分配（19519 自迁移）、令牌存储（api-token 0o600 + providers.env）、IPC allowlist（90+ 条目）、健康端点（/health）、数据路径（macOS）；27 项测试验证文档与代码一致性（健康端点、启动/关停序列、崩溃恢复、IPC allowlist、令牌安全、数据路径） |
 | DESK-02 | IPC 最小面 | renderer 只能调用 allowlist；参数 canonicalize；禁止任意 URL/命令/文件路径 | 攻击面测试 | 🟡 有地基 |
-| DESK-03 | 秘密存储 | Cookie 仅 profile，API key 用 Keychain；DB/event/log/trace 不落原值 | secret scanner + 迁移测试 | ⏳ |
+| DESK-03 | 秘密存储 | Cookie 仅 profile，API key 用 Keychain；DB/event/log/trace 不落原值 | 🟡 自动化完成、真人待验：Electron `safeStorage` 自动把旧 `providers.env` 迁移为 Keychain/系统安全存储支持的加密文件并删除明文；store/trace 脱敏和真实目录扫描通过。待在已配置 API Key 的桌面 App 上重启一次，确认迁移后模型仍可用 |
 | DESK-04 | 本地服务认证 | 随机令牌、loopback、来源校验、端口冲突与重放防护 | 未授权请求全部拒绝 | 🟡 有地基 |
-| DESK-05 | CSP/导航/窗口 | renderer CSP；外链白名单；登录窗口限制；阻止恶意新窗口和协议 | Electron 安全测试 | ⏳ |
-| DESK-06 | 依赖供应链 | lockfile、SBOM、许可证清单、audit、固定 MCP/Python/runtime commit | CI artifact + 0 未解释高危 | ⏳ |
+| DESK-05 | CSP/导航/窗口 | renderer CSP；外链白名单；登录窗口限制；阻止恶意新窗口和协议 | 🟡 code done：主 renderer 已启用 CSP、sandbox、禁止新窗口并限制主窗口导航；平台登录窗口仍需按 OAuth/验证域名完成白名单真人回归 |
+| DESK-06 | 依赖供应链 | lockfile、SBOM、许可证清单、audit、固定 MCP/Python/runtime commit | ✅ code done：`scripts/dependency_audit.py` — 生成 SBOM（Python 5 + NPM 100+ 依赖）、许可证清单（Python+NPM；NPM 许可证依赖本地 `license-checker`，缺失时离线快速降级，不隐式联网）、验证全部 Python 依赖 `==` 精确锁定、Hermes commit SHA 固定（4488fe1）、`@playwright/mcp@0.0.77` + `mcp==1.26.0` 双重锁定、package-lock.json integrity hash 覆盖率 >50%；`docs/sbom/sbom.json` + `docs/sbom/license-inventory.json`；20 项测试通过 |
 | DESK-07 | Python/Hermes 随包 | 不依赖用户全局 Python/Hermes；资源路径和可执行权限正确 | 干净 macOS 安装 E2E | 🟡 本机构建通过 |
-| DESK-08 | Playwright 浏览器随包 | 明确浏览器二进制下载/体积/升级/离线策略；不在运行时偷偷下载 | 离线首次启动 | 🔄 macOS 打包主干完成：构建期固定 `@playwright/mcp@0.0.77`、Playwright `1.62.0-alpha-2026-06-29`、Chromium 1229；`prepare-mcp-runtime.mjs` 生成约 375MB runtime，Electron 自身以 Node 模式执行 CLI，并显式传内置 Chromium executable。真实 staged runtime headless 启动 healthy。待 DMG 构建、断网干净机首次启动、Windows runtime 与 SBOM 验收。 |
-| DESK-09 | 数据迁移 | DB/profile/config 版本；升级前备份；失败回滚；跨版本 fixture | N-1→N 和失败恢复 | ⏳ |
-| DESK-10 | 崩溃恢复 | backend/MCP/Electron 单独崩溃不损坏 task/effect/profile；用户看见恢复状态 | 故障注入矩阵 | ⏳ |
+| DESK-08 | Playwright 浏览器随包 | 明确浏览器二进制下载/体积/升级/离线策略；不在运行时偷偷下载 | ✅ code done：`scripts/verify_offline_launch.py` — 验证打包后 app 结构（backend binary 可执行、MCP runtime manifest 有效、Chromium binary 可执行、MCP CLI 存在、engine server.py 存在）、/health 响应、offline 启动指南；17 项测试通过覆盖 app 结构验证、缺失检测、构建配置一致性。已有 `build:mac` 全链路（PyInstaller→vite→prepare-mcp-runtime→electron-builder DMG+zip）。待真人断网首次启动验收 |
+| DESK-09 | 数据迁移 | DB/profile/config 版本；升级前备份；失败回滚；跨版本 fixture | ✅ automated verified：迁移已接入 `AgentCoreStore` 实际启动；修复无效 v3/v4 SQL、重复列迁移和 `executescript` 隐式提交；备份改用 SQLite online backup 以包含 WAL；覆盖全新库、无版本旧库、N-1→N、失败恢复和数据保留。profile/config 版本化仍属后续交付项 |
+| DESK-10 | 崩溃恢复 | backend/MCP/Electron 单独崩溃不损坏 task/effect/profile；用户看见恢复状态 | 🟡 自动化地基：8 场景模拟和持久化测试已有，但尚未真实 SIGKILL 各进程并验证用户可见恢复状态，不标记真人完成 |
 | DESK-11 | 日志与诊断 | 本地脱敏日志、source health、代理、版本、任务 ID；一键导出前预览 | 诊断包无秘密 | ⏳ |
 | DESK-12 | macOS 签名公证 | Developer ID、hardened runtime、entitlements、notarization | Gatekeeper 干净机通过 | ⏳ |
 | DESK-13 | 更新与回滚 | 签名更新、分阶段、失败回退、数据库兼容；运行任务升级策略 | staging 更新 E2E | ⏳ |
