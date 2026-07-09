@@ -283,6 +283,20 @@ def test_soft_article_builder_creates_reviewable_asset_with_variants(tmp_path):
     assert {
         item["platform"]: item["aspect_ratio"] for item in cover_requirements
     }["zhihu"] == "16:9"
+    feature_snapshot = asset["content"]["feature_snapshot"]
+    assert feature_snapshot["id"].startswith("cfs_")
+    assert feature_snapshot["version"] == "content-feature-snapshot-v0.1"
+    assert feature_snapshot["protocol"] == "content_feature_snapshots"
+    assert feature_snapshot["kind"] == "article_soft"
+    assert feature_snapshot["identity"]["account_id"] == "acct_ev"
+    assert feature_snapshot["identity"]["platforms"] == ["zhihu", "wechat_official"]
+    assert feature_snapshot["evidence"]["with_url"] == 1
+    assert feature_snapshot["structure"]["variant_count"] == 2
+    assert feature_snapshot["structure"]["visual_requirement_count"] == len(asset["content"]["visual_requirements"])
+    assert feature_snapshot["prediction_ref"]["prediction_version"] == "prepublish-prediction-v2.0"
+    assert set(feature_snapshot["prediction_ref"]["dimension_names"]) == {
+        "attention", "retention", "trust", "action", "account_fit", "risk",
+    }
     assert store.list_content_scores()[0]["asset_id"] == asset["id"]
     prediction = store.list_predictions()[0]
     assert prediction["asset_id"] == asset["id"]
@@ -444,6 +458,19 @@ def test_faceless_video_builder_creates_video_asset_with_edl_and_material_querie
     assert asset["content"]["quality_gates"][3]["name"] == "渲染诚实门"
     assert asset["content"]["quality_gates"][-1]["name"] == "总预演门"
     assert asset["content"]["quality_gates"][-1]["status"] == "pass"
+    feature_snapshot = asset["content"]["feature_snapshot"]
+    assert feature_snapshot["id"].startswith("cfs_")
+    assert feature_snapshot["version"] == "content-feature-snapshot-v0.1"
+    assert feature_snapshot["protocol"] == "content_feature_snapshots"
+    assert feature_snapshot["kind"] == "faceless_video"
+    assert feature_snapshot["identity"]["account_id"] == "acct_ai"
+    assert feature_snapshot["identity"]["platforms"] == ["douyin", "bilibili"]
+    assert feature_snapshot["evidence"]["with_url"] == 1
+    assert feature_snapshot["structure"]["shot_count"] == result["shot_count"]
+    assert feature_snapshot["structure"]["render_status"] == "not_rendered"
+    assert feature_snapshot["material_context"]["material_query_count"] == result["material_query_count"]
+    assert feature_snapshot["material_context"]["generated_request_count"] == result["generated_request_count"]
+    assert feature_snapshot["prediction_ref"]["prediction_version"] == "prepublish-prediction-v2.0"
     assert store.list_content_scores()[0]["asset_id"] == asset["id"]
     prediction = store.list_predictions()[0]
     assert prediction["asset_id"] == asset["id"]

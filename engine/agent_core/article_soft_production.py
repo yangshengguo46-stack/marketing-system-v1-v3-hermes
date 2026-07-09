@@ -27,6 +27,7 @@ from .content_lane_gate import (
     requested_experiment_context,
     run_content_lane_gate,
 )
+from .content_feature_snapshot import build_content_feature_snapshot
 from .content_matrix import adapt_cta, adapt_tags, adapt_title
 from .content_prediction import attach_prediction_dimensions
 from .content_production import build_content_production_plan
@@ -276,6 +277,9 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
     body = _build_body(topic=topic, objective=objective, evidence=evidence, audience=audience)
     cta = audience.get("cta") or "欢迎把你的情况发来，我们可以继续拆解适合你的方案"
     variants = _build_variants(title=title, body=body, topic_terms=topic_terms, platforms=platforms, cta=cta)
+    hook = _text(params.get("hook") or f"{topic}真正该先看懂什么", limit=120)
+    publish_packs = article_platform_publish_packs(platforms)
+    visual_requirements = _visual_requirements(topic, topic_terms, evidence_ready, platforms)
     plan = build_content_production_plan({
         "objective": objective,
         "kind": "article_soft",
@@ -284,12 +288,46 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
     })
     scores = _scores(evidence_ready)
     prediction = _prediction(evidence_ready, platforms, len(evidence_with_url), scores)
+    feature_snapshot = build_content_feature_snapshot(
+        kind="article_soft",
+        objective=objective,
+        title=title,
+        topic=topic,
+        hook=hook,
+        account_id=params.get("account_id"),
+        platforms=platforms,
+        audience_context=audience,
+        evidence=evidence,
+        structure={
+            "format": "long_form_article",
+            "section_count": len(re.findall(r"^## ", body, flags=re.MULTILINE)),
+            "sections": re.findall(r"^##\s+(.+)$", body, flags=re.MULTILINE),
+            "body_char_count": len(body),
+            "variant_count": len(variants),
+            "visual_requirement_count": len(visual_requirements),
+            "platform_variant_titles": {
+                platform: variant.get("title")
+                for platform, variant in variants.items()
+            },
+        },
+        platform_context={
+            "publish_pack_platforms": list(publish_packs),
+            "primary_platform": platforms[0] if platforms else None,
+        },
+        scores=scores,
+        prediction=prediction,
+        risks=[
+            *([] if evidence_ready else ["needs_url_evidence"]),
+            "manual_review_required",
+            "visual_license_pending",
+        ],
+    )
 
     return {
         "status": "ready_for_review" if evidence_ready else "needs_evidence",
         "title": title,
         "topic": topic,
-        "hook": _text(params.get("hook") or f"{topic}真正该先看懂什么", limit=120),
+        "hook": hook,
         "platform": platforms[0] if len(platforms) == 1 else "multi_article",
         "type": "script",
         "content": {
@@ -312,9 +350,9 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
                 "cta": cta,
             },
             "platform_variants": variants,
-            "platform_publish_packs": article_platform_publish_packs(platforms),
+            "platform_publish_packs": publish_packs,
             "evidence_refs": evidence,
-            "visual_requirements": _visual_requirements(topic, topic_terms, evidence_ready, platforms),
+            "visual_requirements": visual_requirements,
             "quality_gates": [
                 {"name": "事实证据门", "status": "pass" if evidence_ready else "blocked"},
                 {"name": "平台语气门", "status": "pending_human_review"},
@@ -324,6 +362,7 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
             "production_plan": plan,
             "pre_review_scores": scores,
             "pre_publish_prediction": prediction,
+            "feature_snapshot": feature_snapshot,
         },
         "scores": scores,
         "prediction": prediction,

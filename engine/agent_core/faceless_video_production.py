@@ -26,6 +26,7 @@ from .content_lane_gate import (
     requested_experiment_context,
     run_content_lane_gate,
 )
+from .content_feature_snapshot import build_content_feature_snapshot
 from .content_prediction import attach_prediction_dimensions
 from .content_production import build_content_production_plan
 from .learning_pipeline import review_content_asset
@@ -269,6 +270,60 @@ def build_faceless_video_asset_payload(params: dict[str, Any] | None = None) -> 
     scores = _scores(evidence_ready, len(shot_list))
     prediction = _prediction(evidence_ready, platforms, len(shot_list), scores)
     material_queries = [shot["material_query"] for shot in shot_list]
+    licensed_asset_requirements = [
+        {
+            "shot_id": shot["id"],
+            "query": shot["material_query"],
+            "required_fields": ["provider", "source_url", "author", "license", "download_hash"],
+            "allowed_sources": ["Pexels", "Pixabay", "Unsplash", "Freesound", "user_supplied"],
+            "status": "pending",
+        }
+        for shot in shot_list
+    ]
+    feature_snapshot = build_content_feature_snapshot(
+        kind="faceless_video",
+        objective=objective,
+        title=title,
+        topic=topic,
+        hook=script[0]["voiceover"],
+        account_id=params.get("account_id"),
+        platforms=platforms,
+        evidence=evidence,
+        structure={
+            "format": "vertical_faceless_video",
+            "script_beat_count": len(script),
+            "shot_count": len(shot_list),
+            "duration_sec": round(sum(float(shot.get("duration_sec", 0)) for shot in shot_list), 2),
+            "edl_unfilled_slot_count": len(edl.get("unfilled_slots") or []),
+            "render_status": "not_rendered",
+        },
+        material_context={
+            "material_query_count": len(material_queries),
+            "licensed_asset_requirement_count": len(licensed_asset_requirements),
+            "generated_request_count": len(generated_requests),
+            "preferred_sources": sorted({
+                _text(shot.get("preferred_source"), limit=80)
+                for shot in shot_list
+                if _text(shot.get("preferred_source"))
+            }),
+            "fallback_sources": sorted({
+                _text(shot.get("fallback_source"), limit=80)
+                for shot in shot_list
+                if _text(shot.get("fallback_source"))
+            }),
+        },
+        platform_context={
+            "primary_platform": platforms[0] if platforms else None,
+            "target_platforms": platforms,
+        },
+        scores=scores,
+        prediction=prediction,
+        risks=[
+            *([] if evidence_ready else ["needs_url_evidence"]),
+            "media_license_pending",
+            "render_not_started",
+        ],
+    )
 
     return {
         "status": "ready_for_materials" if evidence_ready else "needs_evidence",
@@ -293,16 +348,7 @@ def build_faceless_video_asset_payload(params: dict[str, Any] | None = None) -> 
             "script": script,
             "shot_list": shot_list,
             "material_queries": material_queries,
-            "licensed_asset_requirements": [
-                {
-                    "shot_id": shot["id"],
-                    "query": shot["material_query"],
-                    "required_fields": ["provider", "source_url", "author", "license", "download_hash"],
-                    "allowed_sources": ["Pexels", "Pixabay", "Unsplash", "Freesound", "user_supplied"],
-                    "status": "pending",
-                }
-                for shot in shot_list
-            ],
+            "licensed_asset_requirements": licensed_asset_requirements,
             "licensed_assets": [],
             "generated_asset_requests": generated_requests,
             "edl": edl,
@@ -315,6 +361,7 @@ def build_faceless_video_asset_payload(params: dict[str, Any] | None = None) -> 
             "production_plan": plan,
             "pre_review_scores": scores,
             "pre_publish_prediction": prediction,
+            "feature_snapshot": feature_snapshot,
         },
         "scores": scores,
         "prediction": prediction,

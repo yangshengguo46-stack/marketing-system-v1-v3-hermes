@@ -245,7 +245,7 @@ InfluenceOS_Score
 | ID | 任务 | 具体执行 | 完成口径 | 状态 |
 |---|---|---|---|---|
 | IPE-01 | 研究资料入库 | 整理影响力/注意力建模资料，明确人类注意力、群体传播、平台推荐和营销公式 | `docs/research/12-influence-attention-model.md` 已建立并登记资料依据 | ✅ docs |
-| IPE-02 | 内容特征快照 | 新建 `content_feature_snapshots` 协议：每条内容发布前保存标题、结构、证据、素材、账号、平台和风险特征 | 同一内容预测可回放；后续改稿生成新版本特征 | ⏳ |
+| IPE-02 | 内容特征快照 | 新建 `content_feature_snapshots` 协议：每条内容发布前保存标题、结构、证据、素材、账号、平台和风险特征 | 同一内容预测可回放；后续改稿生成新版本特征 | ✅ code |
 | IPE-03 | 预测结构 v2 | 从单一 `expected_views` 升级为 attention/retention/trust/action/account_fit/risk 六组预测 | 软文和视频资产都写入 v2 prediction；保留旧 expected_* 字段兼容 retro | ✅ code |
 | IPE-04 | 指标标签化 | 将发布后原始指标映射为 attention/retention/trust/action/fit/risk 标签 | 指标回收后自动生成 label，不混用未知值和 0 | ✅ code |
 | IPE-05 | InfluenceOS Score v0 | 用可解释权重计算第一版分数，并保留权重版本 | 同一资产能输出总分、分项分和 why | ✅ code |
@@ -763,6 +763,92 @@ passed
 
 .venv/bin/python -m pytest -q
 1276 passed, 1 warning
+```
+
+## 二十五、2026-07-09 落地记录：内容特征快照 v0
+
+状态：`IPE-02 code done / automated verified`
+
+本轮给内容生产链路补上发布前“黑匣子”。每条软文或不露脸视频在进入审稿、素材收集或后续发布之前，都会把当时可见的关键特征写入内容资产。
+
+### 25.1 本轮改动
+
+- 新增 `engine/agent_core/content_feature_snapshot.py`
+  - `FEATURE_SNAPSHOT_VERSION = content-feature-snapshot-v0.1`
+  - 新增 `build_content_feature_snapshot(...)`
+  - 输出协议名：`content_feature_snapshots`
+  - 生成稳定 `cfs_` 快照 ID，用于同一草稿的预测回放和复盘归因。
+
+- 更新 `engine/agent_core/article_soft_production.py`
+  - 软文资产写入 `content.feature_snapshot`。
+  - 快照包含：
+    - 账号与目标平台
+    - 标题、主题、hook、objective
+    - 受众上下文
+    - 证据数量、URL 数、样例标题和来源
+    - 正文结构、章节数、字数、平台变体数量
+    - 公众号/知乎 publish pack 覆盖情况
+    - 预评分和六维预测引用
+    - 人审、配图授权、证据缺口等风险提示
+
+- 更新 `engine/agent_core/faceless_video_production.py`
+  - 不露脸视频资产写入 `content.feature_snapshot`。
+  - 快照包含：
+    - 账号与目标平台
+    - 脚本 beat、镜头数、预估时长
+    - EDL 空槽数量和未渲染状态
+    - 素材检索数量、授权素材需求数量、补充生成请求数量
+    - 证据状态、预评分和六维预测引用
+    - 版权、素材和渲染风险提示
+
+- 更新 `tests/test_content_production.py`
+  - 覆盖软文与不露脸视频都保存 `content-feature-snapshot-v0.1`。
+  - 覆盖快照中的账号、平台、证据、结构、素材和预测版本字段。
+
+### 25.2 设计判断
+
+当前没有新增 `content_feature_snapshots` 独立表，而是先嵌入 `content_assets.content_json`。
+
+原因：
+
+1. 内容资产已经是内容生产端的唯一真相源。
+2. 早期样本量不足，先避免为了查询方便过早拆表。
+3. 快照必须跟着草稿版本走，嵌入资产更利于回滚和人工核查。
+4. 后续如果要做批量分析或权重训练，再从资产中抽取为索引表。
+
+### 25.3 产品意义
+
+之前系统能回答：
+
+```text
+这条内容发布前预测是什么？
+```
+
+现在系统还能回答：
+
+```text
+为什么当时会这么预测？
+当时用的是哪些证据？
+当时认为结构、平台、素材和风险是什么状态？
+后来真实数据打脸时，应该怪选题、结构、素材、平台表达，还是账号匹配？
+```
+
+这一步把预演引擎、内容生产端和数据回执真正接上了同一种语言。
+
+### 25.4 当前验证证据
+
+```text
+.venv/bin/python -m py_compile engine/agent_core/content_feature_snapshot.py engine/agent_core/article_soft_production.py engine/agent_core/faceless_video_production.py
+passed
+
+.venv/bin/python -m pytest tests/test_content_production.py::test_soft_article_builder_creates_reviewable_asset_with_variants tests/test_content_production.py::test_faceless_video_builder_creates_video_asset_with_edl_and_material_queries -q
+2 passed
+
+.venv/bin/python -m pytest tests/test_content_production.py tests/test_run19_retro_reconciliation.py tests/test_learning_pipeline_integration.py tests/test_influence_score_governance.py -q
+50 passed
+
+.venv/bin/python -m pytest -q
+1285 passed, 1 warning
 ```
 
 ## 二十三、2026-07-09 落地记录：accepted 策略候选转实验草案
