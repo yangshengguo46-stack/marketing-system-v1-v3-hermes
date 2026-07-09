@@ -28,6 +28,7 @@ from .content_lane_gate import (
     run_content_lane_gate,
 )
 from .content_matrix import adapt_cta, adapt_tags, adapt_title
+from .content_prediction import attach_prediction_dimensions
 from .content_production import build_content_production_plan
 from .learning_pipeline import review_content_asset
 from .platform_stylebook import (
@@ -241,13 +242,14 @@ def _scores(evidence_ready: bool) -> dict[str, int]:
     }
 
 
-def _prediction(evidence_ready: bool, platforms: list[str], evidence_count: int) -> dict[str, Any]:
+def _prediction(evidence_ready: bool, platforms: list[str], evidence_count: int, scores: dict[str, int]) -> dict[str, Any]:
     confidence = "medium" if evidence_ready and evidence_count >= 2 else "low"
-    return {
+    legacy = {
         "confidence": confidence,
         "expected_outcome": "可进入人工审稿" if evidence_ready else "需要先补证据，暂不建议发布",
         "platforms": platforms,
         "expected_views": {"low": 50, "mid": 300, "high": 1200} if evidence_ready else {"low": 0, "mid": 50, "high": 150},
+        "expected_read_completion_rate": {"low": 0.22, "mid": 0.42, "high": 0.68} if evidence_ready else {"low": 0.08, "mid": 0.18, "high": 0.3},
         "expected_save_or_share_rate": {"low": 0.01, "mid": 0.03, "high": 0.08} if evidence_ready else {"low": 0, "mid": 0.01, "high": 0.02},
         "basis": [
             f"evidence_with_url={evidence_count}",
@@ -255,6 +257,9 @@ def _prediction(evidence_ready: bool, platforms: list[str], evidence_count: int)
             "no_publish_without_human_review",
         ],
     }
+    return attach_prediction_dimensions(
+        legacy, kind="article_soft", scores=scores, evidence_ready=evidence_ready,
+    )
 
 
 def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -278,7 +283,7 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
         "account_id": params.get("account_id"),
     })
     scores = _scores(evidence_ready)
-    prediction = _prediction(evidence_ready, platforms, len(evidence_with_url))
+    prediction = _prediction(evidence_ready, platforms, len(evidence_with_url), scores)
 
     return {
         "status": "ready_for_review" if evidence_ready else "needs_evidence",

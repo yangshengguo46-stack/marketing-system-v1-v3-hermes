@@ -26,6 +26,7 @@ from .content_lane_gate import (
     requested_experiment_context,
     run_content_lane_gate,
 )
+from .content_prediction import attach_prediction_dimensions
 from .content_production import build_content_production_plan
 from .learning_pipeline import review_content_asset
 from engine.video_core.editing_engine import build_edl_from_segments, edl_handoff_summary, segment_from_shot
@@ -226,13 +227,14 @@ def _scores(evidence_ready: bool, shot_count: int) -> dict[str, int]:
     }
 
 
-def _prediction(evidence_ready: bool, platforms: list[str], shot_count: int) -> dict[str, Any]:
-    return {
+def _prediction(evidence_ready: bool, platforms: list[str], shot_count: int, scores: dict[str, int]) -> dict[str, Any]:
+    legacy = {
         "confidence": "medium" if evidence_ready and shot_count >= 5 else "low",
         "expected_outcome": "可进入素材收集/样片阶段" if evidence_ready else "需要先补证据，暂不建议发布",
         "platforms": platforms,
         "expected_views": {"low": 100, "mid": 800, "high": 3000} if evidence_ready else {"low": 0, "mid": 80, "high": 300},
         "expected_completion_rate": {"low": 0.18, "mid": 0.32, "high": 0.48} if evidence_ready else {"low": 0.05, "mid": 0.12, "high": 0.2},
+        "expected_engagement_rate": {"low": 0.012, "mid": 0.04, "high": 0.09} if evidence_ready else {"low": 0.0, "mid": 0.008, "high": 0.018},
         "basis": [
             f"shot_count={shot_count}",
             f"evidence_ready={evidence_ready}",
@@ -240,6 +242,9 @@ def _prediction(evidence_ready: bool, platforms: list[str], shot_count: int) -> 
             "no_render_before_media_attached",
         ],
     }
+    return attach_prediction_dimensions(
+        legacy, kind="faceless_video", scores=scores, evidence_ready=evidence_ready,
+    )
 
 
 def build_faceless_video_asset_payload(params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -262,7 +267,7 @@ def build_faceless_video_asset_payload(params: dict[str, Any] | None = None) -> 
         "account_id": params.get("account_id"),
     })
     scores = _scores(evidence_ready, len(shot_list))
-    prediction = _prediction(evidence_ready, platforms, len(shot_list))
+    prediction = _prediction(evidence_ready, platforms, len(shot_list), scores)
     material_queries = [shot["material_query"] for shot in shot_list]
 
     return {

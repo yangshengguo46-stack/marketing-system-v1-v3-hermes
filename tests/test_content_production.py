@@ -284,7 +284,17 @@ def test_soft_article_builder_creates_reviewable_asset_with_variants(tmp_path):
         item["platform"]: item["aspect_ratio"] for item in cover_requirements
     }["zhihu"] == "16:9"
     assert store.list_content_scores()[0]["asset_id"] == asset["id"]
-    assert store.list_predictions()[0]["asset_id"] == asset["id"]
+    prediction = store.list_predictions()[0]
+    assert prediction["asset_id"] == asset["id"]
+    stored_prediction = prediction["prediction"]
+    assert stored_prediction["prediction_version"] == "prepublish-prediction-v2.0"
+    assert stored_prediction["expected_views"]["mid"] == 300
+    assert stored_prediction["expected_save_or_share_rate"]["mid"] == 0.03
+    assert set(stored_prediction["prediction_dimensions"]["dimensions"]) == {
+        "attention", "retention", "trust", "action", "account_fit", "risk",
+    }
+    assert stored_prediction["prediction_dimensions"]["dimensions"]["trust"]["expected_metric"] == "save_or_share_rate"
+    assert stored_prediction["prediction_dimensions"]["dimensions"]["risk"]["lower_is_better"] is True
 
 
 def test_soft_article_asset_can_bind_back_to_account_experiment(tmp_path):
@@ -435,7 +445,14 @@ def test_faceless_video_builder_creates_video_asset_with_edl_and_material_querie
     assert asset["content"]["quality_gates"][-1]["name"] == "总预演门"
     assert asset["content"]["quality_gates"][-1]["status"] == "pass"
     assert store.list_content_scores()[0]["asset_id"] == asset["id"]
-    assert store.list_predictions()[0]["asset_id"] == asset["id"]
+    prediction = store.list_predictions()[0]
+    assert prediction["asset_id"] == asset["id"]
+    stored_prediction = prediction["prediction"]
+    assert stored_prediction["prediction_version"] == "prepublish-prediction-v2.0"
+    assert stored_prediction["expected_views"]["mid"] == 800
+    assert stored_prediction["expected_completion_rate"]["mid"] == 0.32
+    assert stored_prediction["prediction_dimensions"]["dimensions"]["retention"]["expected_metric"] == "completion_rate"
+    assert stored_prediction["prediction_dimensions"]["dimensions"]["trust"]["expected_metric"] == "engagement_rate"
 
 
 def test_faceless_video_asset_can_bind_back_to_account_experiment(tmp_path):

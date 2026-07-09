@@ -246,7 +246,7 @@ InfluenceOS_Score
 |---|---|---|---|---|
 | IPE-01 | 研究资料入库 | 整理影响力/注意力建模资料，明确人类注意力、群体传播、平台推荐和营销公式 | `docs/research/12-influence-attention-model.md` 已建立并登记资料依据 | ✅ docs |
 | IPE-02 | 内容特征快照 | 新建 `content_feature_snapshots` 协议：每条内容发布前保存标题、结构、证据、素材、账号、平台和风险特征 | 同一内容预测可回放；后续改稿生成新版本特征 | ⏳ |
-| IPE-03 | 预测结构 v2 | 从单一 `expected_views` 升级为 attention/retention/trust/action/account_fit/risk 六组预测 | 软文和视频资产都写入 v2 prediction | ⏳ |
+| IPE-03 | 预测结构 v2 | 从单一 `expected_views` 升级为 attention/retention/trust/action/account_fit/risk 六组预测 | 软文和视频资产都写入 v2 prediction；保留旧 expected_* 字段兼容 retro | ✅ code |
 | IPE-04 | 指标标签化 | 将发布后原始指标映射为 attention/retention/trust/action/fit/risk 标签 | 指标回收后自动生成 label，不混用未知值和 0 | ✅ code |
 | IPE-05 | InfluenceOS Score v0 | 用可解释权重计算第一版分数，并保留权重版本 | 同一资产能输出总分、分项分和 why | ✅ code |
 | IPE-06 | PreflightDecision | 把分数转成产品决策：可生产、先改稿、补证据、换素材、不开机、可发布 | Agent 和 UI 都消费同一决策结构 | ✅ code |
@@ -829,6 +829,96 @@ passed
 
 .venv/bin/python -m pytest -q
 1285 passed, 1 warning
+```
+
+## 二十四、2026-07-09 落地记录：发布前预测结构 v2
+
+状态：`IPE-03 code done / automated verified`
+
+本轮从全局闭环出发，补齐“发布前预测”和“发布后回执标签”之间的语言断点。
+
+### 24.1 本轮判断
+
+旧预测结构主要是：
+
+- `expected_views`
+- `expected_completion_rate`
+- `expected_save_or_share_rate`
+
+这能做基础 retro，但它把内容表现压成几个平台指标，不利于区分：
+
+- 内容运营的问题：人为什么停、为什么信、为什么行动。
+- 平台运营的问题：平台为什么给不给推流、格式是否匹配、风险是否阻断。
+
+而发布后指标标签已经是：
+
+```text
+attention / retention / trust / action / fit / risk
+```
+
+所以发布前 prediction 必须升级到同一套维度语言，后续才能让预演、回执、复盘、学习候选真正对齐。
+
+### 24.2 本轮改动
+
+- 新增 `engine/agent_core/content_prediction.py`
+  - 新增 `PREDICTION_V2_VERSION = prepublish-prediction-v2.0`。
+  - 新增 `attach_prediction_dimensions(...)`。
+  - 在不破坏旧 `expected_*` 字段的前提下，写入：
+    - `attention`
+    - `retention`
+    - `trust`
+    - `action`
+    - `account_fit`
+    - `risk`
+  - 每个维度包含：
+    - `label`
+    - `expected_metric`
+    - `range`
+    - `score_hint`
+    - `drivers`
+    - `lower_is_better`（仅风险）
+
+- 更新 `engine/agent_core/article_soft_production.py`
+  - 软文 prediction 增加 `prediction_dimensions`。
+  - 公众号/知乎软文保留 `expected_views` 和 `expected_save_or_share_rate`，并新增 `expected_read_completion_rate`。
+  - `trust.expected_metric = save_or_share_rate`，对应软文里的收藏/转发/信任。
+
+- 更新 `engine/agent_core/faceless_video_production.py`
+  - 不露脸视频 prediction 增加 `prediction_dimensions`。
+  - 视频保留 `expected_views` 和 `expected_completion_rate`，新增 `expected_engagement_rate`。
+  - `retention.expected_metric = completion_rate`，`trust.expected_metric = engagement_rate`。
+
+- 更新 `tests/test_content_production.py`
+  - 覆盖软文和视频资产都会保存 `prepublish-prediction-v2.0`。
+  - 覆盖六维结构完整存在。
+  - 覆盖旧字段仍存在，确保 `content_retro.reconcile(...)` 兼容。
+
+### 24.3 产品意义
+
+现在每条内容资产的发布前预测不再只是“预计多少播放”，而是变成：
+
+```text
+attention   这条内容能不能让人停下/平台给初始曝光
+retention   结构能不能撑住阅读/完播
+trust       用户会不会相信、收藏、转发或认真互动
+action      用户会不会关注、私信、访问主页或转化
+account_fit 是否吸引目标受众，是否服务账号长期定位
+risk        是否有标题党、硬广、版权、负反馈或伤账号风险
+```
+
+这一步把 ContentOps 和 PlatformOps 的后续学习接口打开了：
+
+- ContentOps 可以从 trust/action/account_fit 学内容的道。
+- PlatformOps 可以从 attention/retention/risk 和平台字段学表达的术。
+
+### 24.4 当前验证证据
+
+```text
+.venv/bin/python -m pytest tests/test_content_production.py::test_soft_article_builder_creates_reviewable_asset_with_variants tests/test_content_production.py::test_faceless_video_builder_creates_video_asset_with_edl_and_material_queries -q
+2 passed
+
+.venv/bin/python -m pytest tests/test_content_production.py tests/test_run19_retro_reconciliation.py tests/test_learning_pipeline_integration.py -q
+45 passed
 ```
 
 ## 二十二、2026-07-09 落地记录：accepted 权重候选转策略候选
