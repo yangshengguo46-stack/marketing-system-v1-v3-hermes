@@ -1,7 +1,7 @@
 """内容分析工具 — 单元测试"""
 
 import json
-from marketing_tools.content import analyze_trends, generate_content_suggestions
+from marketing_tools.content import analyze_trends, generate_content_suggestions, rank_trends_for_context
 import marketing_tools.monitor as monitor_tools
 
 
@@ -59,6 +59,68 @@ class TestAnalyzeTrends:
         sources = [item["source_platform"] for item in result["top_trends"]]
         assert sources[:4] == ["douyin", "weibo", "bilibili", "zhihu"]
         assert all(sources.count(platform) >= 7 for platform in raw["platforms_scraped"])
+
+    def test_filters_generic_douyin_and_tiktok_distribution_tags(self):
+        raw = {
+            "platforms_scraped": ["douyin", "tiktok", "bilibili"],
+            "results": {
+                "douyin": {
+                    "success": True, "backend_used": "mock",
+                    "data": [
+                        {"rank": 1, "title": "#搞笑", "heat_value": 882000000, "category": "创作者中心热门话题"},
+                        {"rank": 2, "title": "#因为一个片段看了整部剧", "heat_value": 811000000},
+                        {"rank": 3, "title": "#短剧推荐", "heat_value": 623000000},
+                        {"rank": 4, "title": "#AI教育", "heat_value": 120000},
+                        {"rank": 5, "title": "广西暴雨致多人失联", "heat_value": 800000},
+                    ],
+                },
+                "tiktok": {
+                    "success": True, "backend_used": "mock",
+                    "data": [
+                        {"rank": 1, "title": "#fyp", "heat_value": 999999999},
+                        {"rank": 2, "title": "AI video tool sparks creator debate", "heat_value": 300000},
+                    ],
+                },
+                "bilibili": {
+                    "success": True, "backend_used": "mock",
+                    "data": [{"rank": 1, "title": "B站科技热点", "heat_value": 10}],
+                },
+            },
+        }
+        result = json.loads(analyze_trends({"hot_data": raw}))
+        titles = [item["title"] for item in result["top_trends"]]
+        assert "#搞笑" not in titles
+        assert "#因为一个片段看了整部剧" not in titles
+        assert "#短剧推荐" not in titles
+        assert "#fyp" not in titles
+        assert "#AI教育" in titles
+        assert "广西暴雨致多人失联" in titles
+        assert "AI video tool sparks creator debate" in titles
+        assert result["total_rejected"] == 4
+
+    def test_account_positioning_ranks_only_useful_trends(self):
+        payload = {
+            "top_trends": [
+                {"title": "AI教育智能体进入中小学课堂", "source_platform": "douyin", "rank": 2},
+                {"title": "明星演唱会抢票大战", "source_platform": "douyin", "rank": 1},
+                {"title": "创业者用自动化获客降低成本", "source_platform": "bilibili", "rank": 3},
+            ]
+        }
+        ranked = rank_trends_for_context(payload, {
+            "account_id": "acct-1",
+            "platform": "douyin",
+            "dna": {
+                "audience": "创业者 AI 教育从业者",
+                "content_pillars": ["AI教育", "自动化获客"],
+                "goals": ["获客", "课程转化"],
+                "taboos": ["明星"],
+            },
+        })
+        titles = [item["title"] for item in ranked["top_trends"]]
+        assert titles == ["AI教育智能体进入中小学课堂", "创业者用自动化获客降低成本"]
+        assert ranked["top_trends"][0]["relevance_score"] > ranked["top_trends"][1]["relevance_score"]
+        assert ranked["relevance_mode"] == "account_positioning"
+        assert any(item["reason"] == "account_taboo" for item in ranked["relevance_rejections"])
 
 
 class TestGenerateSuggestions:

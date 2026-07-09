@@ -340,6 +340,19 @@ class TestClick:
         ]:
             assert not validate_browser_call(c, "browser_click", args).allowed
 
+    def test_publish_prepare_allows_only_publish_video_navigation(self):
+        c = ctx(capability="marketing_publish_prepare")
+        assert validate_browser_call(
+            c, "browser_click", {"target": "e369", "element": "发布视频"},
+        ).allowed
+        assert validate_browser_call(
+            c, "browser_click", {"target": "e370", "element": "发布图文"},
+        ).allowed
+        for element in ("发布", "确认发布", "上传视频", "选择文件", "添加图片"):
+            assert not validate_browser_call(
+                c, "browser_click", {"target": "e369", "element": element},
+            ).allowed
+
     def test_doubleclick_rejects_all_types(self):
         for v in [True, 1, "true", []]:
             d = validate_browser_call(ctx(), "browser_click",
@@ -446,5 +459,8 @@ class TestEffectiveLevel:
 # ── click capabilities ───────────────────────────────────────────────────────
 
 class TestClickCapabilities:
-    def test_only_trending_search_allowed(self):
-        assert click_capabilities() == frozenset({"marketing_trending_search"})
+    def test_only_reviewed_capabilities_allowed(self):
+        assert click_capabilities() == frozenset({
+            "marketing_trending_search", "marketing_accounts_sync",
+            "marketing_publish_prepare",
+        })

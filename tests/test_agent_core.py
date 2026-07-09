@@ -90,7 +90,7 @@ def test_capability_policy_fails_closed():
 def test_tool_manifest_all_have_valid_levels():
     from agent_core.tool_manifest import all_tools
     tools = all_tools()
-    assert len(tools) == 19
+    assert len(tools) == 59
     for tool in tools:
         assert tool.level in CapabilityLevel
         assert tool.name.startswith("marketing_")
@@ -103,12 +103,40 @@ def test_only_implemented_tools_are_registered():
     read_count = sum(1 for t in tools if t.level is CapabilityLevel.READ_ONLY)
     controlled_count = sum(1 for t in tools if t.level is CapabilityLevel.CONTROLLED_RESOURCE)
     effect_count = sum(1 for t in tools if t.level is CapabilityLevel.EXTERNAL_EFFECT)
-    assert read_count == 13
-    assert controlled_count == 3
+    assert read_count == 28
+    assert controlled_count == 5
     assert effect_count == 1
-    assert sum(1 for t in tools if t.level is CapabilityLevel.REVERSIBLE_WRITE) == 2
+    assert sum(1 for t in tools if t.level is CapabilityLevel.REVERSIBLE_WRITE) == 25
     assert any(t.level is CapabilityLevel.EXTERNAL_EFFECT for t in tools)
     assert not any(t.level is CapabilityLevel.SYSTEM_FORBIDDEN for t in tools)
+
+
+def test_marketing_gateway_extracts_registry_argument_dict(monkeypatch):
+    from agent_core.tool_gateway import _wrap_handler, set_task_context
+
+    received = {}
+
+    def handler(params):
+        received.update(params)
+        return {"status": "ok"}
+
+    set_task_context({"user_id": "user-1", "task_id": "task-1"})
+    wrapped = _wrap_handler("marketing_draft_memory_add", handler)
+
+    result = wrapped(
+        {"content": "用户偏好：不喜欢制造焦虑。", "kind": "user"},
+        task_id="runtime-task",
+        session_id="runtime-session",
+        user_task="runtime-user-task",
+    )
+
+    assert '"status": "ok"' in result
+    assert received["content"] == "用户偏好：不喜欢制造焦虑。"
+    assert received["kind"] == "user"
+    assert received["__user_id"] == "user-1"
+    assert received["__task_id"] == "task-1"
+    assert "task_id" not in received
+    assert "session_id" not in received
 
 
 def test_hermes_and_marketing_tool_packages_do_not_shadow_each_other():
@@ -234,6 +262,78 @@ def test_agent_session_survives_service_reopen(tmp_path):
     assert loaded and loaded["workspace"] == "workspace-a"
 
 
+def test_safe_auto_resume_only_process_interrupted_tasks_without_pending_side_effects(tmp_path, monkeypatch):
+    import asyncio
+
+    svc, store = _fake_agent_service(tmp_path)
+    session = asyncio.run(svc.create_session("user-1"))
+
+    def interrupted_task(name):
+        task = store.create_task(
+            session_id=session["session_id"], user_id="user-1", objective=name,
+        )
+        store.transition_task(task["id"], TaskStatus.RUNNING)
+        store.transition_task(
+            task["id"], TaskStatus.PAUSED,
+            checkpoint={"runtime_interrupted_at": f"2026-07-04T00:00:0{name[-1]}Z"},
+        )
+        return task
+
+    safe = interrupted_task("safe-1")
+    approval_task = store.create_task(
+        session_id=session["session_id"], user_id="user-1", objective="approval-2",
+    )
+    store.transition_task(approval_task["id"], TaskStatus.RUNNING)
+    store.create_approval(
+        task_id=approval_task["id"], capability="marketing_session_login",
+        arguments={"platform": "douyin"}, risk_summary="needs user",
+    )
+    # create_approval moves to waiting_user; retain a process-interrupted paused checkpoint.
+    store.transition_task(
+        approval_task["id"], TaskStatus.PAUSED,
+        checkpoint={"runtime_interrupted_at": "2026-07-04T00:00:02Z"},
+    )
+
+    effect_task = interrupted_task("effect-3")
+    store.create_effect_intent(
+        task_id=effect_task["id"], capability="marketing_effect_publish",
+        idempotency_key="auto-resume-test-effect", preview={},
+    )
+
+    user_paused = store.create_task(
+        session_id=session["session_id"], user_id="user-1", objective="user paused",
+    )
+    store.transition_task(user_paused["id"], TaskStatus.RUNNING)
+    store.transition_task(user_paused["id"], TaskStatus.PAUSED, checkpoint={"reason": "user"})
+
+    orphan = store.create_task(
+        session_id="missing-session", user_id="user-1", objective="orphan",
+    )
+    store.transition_task(orphan["id"], TaskStatus.RUNNING)
+    store.transition_task(
+        orphan["id"], TaskStatus.PAUSED,
+        checkpoint={"runtime_interrupted_at": "2026-07-04T00:00:04Z"},
+    )
+
+    monkeypatch.setattr(svc, "runtime_status", lambda: {"available": True})
+    called = []
+
+    async def fake_resume(task_id):
+        called.append(task_id)
+        return {"task_id": task_id, "status": "running"}
+
+    monkeypatch.setattr(svc, "resume_task", fake_resume)
+    resumed = asyncio.run(svc.resume_safe_interrupted_tasks(limit=10))
+
+    assert [item["task_id"] for item in resumed] == [safe["id"]]
+    assert called == [safe["id"]]
+    checkpoint = store.get_task(safe["id"])["checkpoint"]
+    assert checkpoint["auto_resume_attempted_for"] == checkpoint["runtime_interrupted_at"]
+    # A scheduler retry in the same process does not run it twice.
+    assert asyncio.run(svc.resume_safe_interrupted_tasks(limit=10)) == []
+    assert store.get_task(orphan["id"])["checkpoint"]["auto_resume_blocked_reason"] == "session_missing"
+
+
 def test_agent_service_send_message_creates_task(tmp_path, monkeypatch):
     svc, store = _fake_agent_service(tmp_path)
     monkeypatch.setattr(svc, "_start_task", lambda *_args, **_kwargs: None)
@@ -262,6 +362,17 @@ def test_agent_service_send_message_creates_task(tmp_path, monkeypatch):
 
 def test_initial_plan_is_not_created_for_casual_conversation():
     assert HermesAgentService._build_initial_plan("你好，今天心情怎么样", None) == []
+
+
+def test_initial_plan_supports_pre_account_monetization_exploration():
+    plan = HermesAgentService._build_initial_plan(
+        "我只是个普通人，还没账号也不知道怎么变现，想通过聊天找到起号方向",
+        None,
+    )
+    tools = [step.get("tool_name") for step in plan]
+    assert "marketing_read_account_lifecycle" in tools
+    assert "marketing_read_trends" not in tools
+    assert plan[-1]["kind"] == "synthesis"
 
 
 def test_evidence_discipline_is_reinjected_on_existing_sessions(tmp_path):
@@ -329,6 +440,49 @@ def test_product_executor_prefetches_account_and_degradation_evidence(tmp_path, 
     assert "定位、标签、受众、内容数量、产品用户画像" in rendered
 
 
+def test_product_executor_prefetches_prospect_lifecycle_for_positioning(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    import agent_core.hermes_adapter as adapter_module
+
+    svc, store = _fake_agent_service(tmp_path)
+    plan = svc._build_initial_plan(
+        "我只是个普通人，还没账号也不知道怎么变现，想通过聊天找到起号方向",
+        None,
+    )
+    task = store.create_task(
+        session_id="sess-1", user_id="ordinary-user", account_id=None,
+        objective="我只是个普通人，还没账号也不知道怎么变现，想通过聊天找到起号方向",
+        plan=plan,
+    )
+    store.transition_task(task["id"], TaskStatus.RUNNING)
+    captured_params = {}
+
+    def fake_tool(name):
+        def handler(params):
+            captured_params[name] = params
+            return json.dumps({
+                "project_id": None,
+                "stage": "not_started",
+                "next_action": "draft_audience_hypothesis",
+                "data_gaps": [],
+                "benchmark_readiness": {"ready": False, "missing": []},
+            }, ensure_ascii=False)
+        return SimpleNamespace(handler=handler)
+
+    monkeypatch.setattr(adapter_module, "tool_by_name", fake_tool)
+
+    evidence = svc._prefetch_required_evidence(task["id"])
+
+    assert set(evidence) == {"marketing_read_account_lifecycle"}
+    assert captured_params["marketing_read_account_lifecycle"]["__user_id"] == "ordinary-user"
+    assert captured_params["marketing_read_account_lifecycle"]["__task_id"] == task["id"]
+    assert "account_id" not in captured_params["marketing_read_account_lifecycle"]
+    rendered = "\n".join(svc._format_authoritative_evidence(evidence))
+    assert "账号生命周期" in rendered
+    assert "可通过自然对话建立待绑定起号项目" in rendered
+
+
 def test_evidence_guard_requests_repair_for_unsupported_account_claims():
     evidence = {
         "marketing_read_context": {
@@ -357,6 +511,47 @@ def test_evidence_guard_allows_scoped_fact_and_labeled_inference():
     }
     reply = "已证实事实：粉丝数为4。策略推断：账号可能仍在早期阶段。创作建议：测试该选题。"
     assert HermesAgentService._detect_evidence_violations(reply, evidence, "acct-one") == []
+
+
+def test_evidence_guard_rejects_fake_memory_write_claim():
+    evidence = {"_completed_tools": ["marketing_read_context"]}
+    reply = "已记录在记忆中：用户讨厌割韭菜式变现。"
+
+    violations = HermesAgentService._detect_evidence_violations(reply, evidence, None)
+
+    assert any("marketing_draft_memory_add" in item for item in violations)
+
+
+def test_evidence_guard_allows_memory_write_claim_after_tool_success():
+    evidence = {"_completed_tools": ["marketing_draft_memory_add"]}
+    reply = "已记录在记忆中：用户讨厌割韭菜式变现。"
+
+    assert HermesAgentService._detect_evidence_violations(reply, evidence, None) == []
+
+
+def test_extract_trend_query_from_industry_objective():
+    assert HermesAgentService._extract_trend_query(
+        "分析最近的 AI 教育行业热点，整理来源"
+    ) == "AI 教育"
+    assert HermesAgentService._extract_trend_query(
+        "改成分析新能源汽车行业，已经完成的资料保留"
+    ) == "新能源汽车"
+
+
+def test_evidence_guard_requires_honest_empty_result_for_zero_matches():
+    evidence = {
+        "marketing_read_trends": {
+            "query": "新能源汽车", "matched": 0,
+            "top_trends": [], "categories": {},
+        },
+    }
+    fabricated = "已证实事实：今日新能源汽车热点很多，下面给出三个选题。"
+    honest = "本轮未找到新能源汽车的匹配热点，暂无可靠证据，建议刷新后再试。"
+
+    violations = HermesAgentService._detect_evidence_violations(fabricated, evidence, None)
+
+    assert any("检索结果为 0" in item for item in violations)
+    assert HermesAgentService._detect_evidence_violations(honest, evidence, None) == []
 
 
 def test_evidence_guard_rejects_fabricated_trend_titles_platforms_and_metrics():
@@ -403,11 +598,35 @@ def test_grounding_failure_reply_returns_empty_result_instead_of_inventing():
             "platforms_succeeded": ["bilibili"],
             "source_errors": {"douyin": "ssl failed"},
         },
-    })
+    }, objective="整理 AI 教育热点选题")
     assert "本轮未交付选题" in reply
     assert "返回空结果" in reply
     assert "粉丝 4" in reply
     assert "ssl failed" in reply
+
+
+def test_lifecycle_request_is_not_hijacked_by_trend_grounding_fallback():
+    evidence = {
+        "marketing_read_context": {
+            "accounts": [{"id": "acct-one", "platform": "douyin", "stats": {"followers": 4}}],
+        },
+        "marketing_read_trends": {"total_deduped": 0, "platforms_succeeded": []},
+    }
+    reply = "下一步先建立目标受众假设，再选择正反面对标账号。"
+    violations = HermesAgentService._detect_evidence_violations(
+        reply, evidence, "acct-one", enforce_trends=False,
+    )
+    assert violations == []
+    fallback = HermesAgentService._build_grounding_failure_reply(
+        evidence, objective="帮我从头规划这个账号的起号方向",
+    )
+    assert "本轮未交付选题" not in fallback
+    assert "账号生命周期" in fallback
+
+
+def test_trend_grounding_scope_detection_is_explicit():
+    assert HermesAgentService._requires_trend_grounding("整理 AI 教育热点选题") is True
+    assert HermesAgentService._requires_trend_grounding("帮我从头规划账号起号方向") is False
 
 
 def test_plan_finalization_marks_synthesis_complete_and_unused_tools_skipped(tmp_path):
@@ -594,9 +813,10 @@ def test_effect_receipt_idempotent(tmp_path):
 def test_controlled_tools_count(tmp_path):
     from agent_core.tool_manifest import all_tools
     tools = all_tools()
-    assert len(tools) == 19
+    assert len(tools) == 59
     controlled = [t for t in tools if t.level is CapabilityLevel.CONTROLLED_RESOURCE]
-    assert len(controlled) == 3
+    assert len(controlled) == 5
+    assert any(t.name == "marketing_publish_query" for t in controlled)
     effect = [t for t in tools if t.level is CapabilityLevel.EXTERNAL_EFFECT]
     assert len(effect) == 1
     assert all(t.requires_approval for t in controlled)

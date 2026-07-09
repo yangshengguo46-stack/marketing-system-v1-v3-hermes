@@ -3,7 +3,7 @@
 import json
 from unittest.mock import patch
 from marketing_tools.scraping import (
-    scrape_douyin_trending, scrape_weibo_trending, scrape_bilibili_popular,
+    scrape_douyin_trending, scrape_bilibili_popular,
     scrape_xiaohongshu_trending, scrape_zhihu_trending,
     aggregate_all_trending, list_scraping_backends,
 )
@@ -11,11 +11,6 @@ from marketing_tools.scraping import (
 MOCK_DOUYIN_DATA = [
     {"rank": 1, "title": "AI大模型新突破引发行业震动", "heat_value": "982.3w"},
     {"rank": 2, "title": "苹果发布iOS 20", "heat_value": "876.1w"},
-]
-
-MOCK_WEIBO_DATA = [
-    {"rank": 1, "title": "AI大模型新突破", "heat_value": 2840000},
-    {"rank": 2, "title": "高考分数线", "heat_value": 2130000},
 ]
 
 MOCK_BILIBILI_DATA = [
@@ -27,8 +22,6 @@ MOCK_BILIBILI_DATA = [
 def _mock_fetch_success(platform, count):
     if platform == "douyin":
         return {"success": True, "backend_used": "mock", "data": MOCK_DOUYIN_DATA[:count]}
-    elif platform == "weibo":
-        return {"success": True, "backend_used": "mock", "data": MOCK_WEIBO_DATA[:count]}
     elif platform == "bilibili":
         return {"success": True, "backend_used": "mock", "data": MOCK_BILIBILI_DATA[:count]}
     return {"success": False, "backend_used": "mock", "error": "unsupported"}
@@ -45,13 +38,6 @@ class TestScrapingTools:
         assert result["data"][0]["title"] == "AI大模型新突破引发行业震动"
 
     @patch("marketing_tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
-    def test_weibo_returns_data(self, mock_fetch):
-        result = json.loads(scrape_weibo_trending({"count": 2}))
-        assert result["success"] is True
-        assert result["platform"] == "weibo"
-        assert len(result["data"]) == 2
-
-    @patch("marketing_tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
     def test_bilibili_returns_data(self, mock_fetch):
         result = json.loads(scrape_bilibili_popular({"count": 2}))
         assert result["success"] is True
@@ -59,7 +45,7 @@ class TestScrapingTools:
 
     def test_default_params(self):
         """空参数不抛错"""
-        for fn in [scrape_douyin_trending, scrape_weibo_trending, scrape_bilibili_popular,
+        for fn in [scrape_douyin_trending, scrape_bilibili_popular,
                     scrape_xiaohongshu_trending, scrape_zhihu_trending, aggregate_all_trending]:
             result = fn()
             assert result is not None
@@ -67,10 +53,18 @@ class TestScrapingTools:
             assert isinstance(parsed, dict)
 
     @patch("marketing_tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
+    def test_aggregate_filters_weibo_from_product_targets(self, mock_fetch):
+        result = json.loads(aggregate_all_trending({"platforms": ["weibo", "douyin"]}))
+        assert result["platforms_scraped"] == ["douyin"]
+        assert "weibo" not in result["results"]
+        assert "douyin" in result["results"]
+        assert [call.args[0] for call in mock_fetch.call_args_list] == ["douyin"]
+
+    @patch("marketing_tools.scraping._fetch_with_backend", side_effect=_mock_fetch_success)
     def test_aggregate_with_selected_platforms(self, mock_fetch):
-        result = json.loads(aggregate_all_trending({"platforms": ["weibo"]}))
-        assert result["platforms_scraped"] == ["weibo"]
-        assert "weibo" in result["results"]
+        result = json.loads(aggregate_all_trending({"platforms": ["bilibili"]}))
+        assert result["platforms_scraped"] == ["bilibili"]
+        assert "bilibili" in result["results"]
         assert "douyin" not in result["results"]
 
     def test_output_schema_for_analyze_trends(self):

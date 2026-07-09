@@ -430,8 +430,9 @@ class TestFailedEffectReceipt:
         })
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "executed"
-        # receipt is recorded even if status is failed
+        assert body["status"] == "failed"
+        # Receipt is recorded, but a failed platform action must never be
+        # represented as an executed effect.
         stored = store.get_effect(body["id"])
         receipt = json.loads(stored["receipt_json"]) if isinstance(stored.get("receipt_json"), str) else stored.get("receipt", {})
         assert receipt["status"] == "failed"

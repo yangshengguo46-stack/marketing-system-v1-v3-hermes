@@ -172,6 +172,21 @@ class TestCrashRecovery:
         assert loaded["last_error"] == "Agent runtime restarted; task is ready to resume"
         assert "runtime_interrupted_at" in loaded["checkpoint"]
 
+    def test_completed_resume_clears_stale_runtime_error(self, tmp_path):
+        store = AgentCoreStore(tmp_path / "plan.db")
+        task = store.create_task(session_id="sess-1", user_id="user-1", objective="test")
+        store.transition_task(task["id"], TaskStatus.RUNNING)
+        store.transition_task(
+            task["id"], TaskStatus.PAUSED,
+            error="Agent runtime restarted; task is ready to resume",
+        )
+        store.transition_task(task["id"], TaskStatus.RUNNING, current_step="resuming")
+        store.transition_task(task["id"], TaskStatus.COMPLETED, current_step="completed")
+
+        loaded = store.get_task(task["id"])
+        assert loaded["status"] == "completed"
+        assert loaded["last_error"] is None
+
     def test_planning_and_retrying_also_paused(self, tmp_path):
         store = AgentCoreStore(tmp_path / "plan.db")
 
@@ -290,3 +305,189 @@ class TestMultiRestartIdempotency:
             assert loaded["plan"][0]["status"] == "completed"  # never lost
             assert loaded["plan"][1]["status"] == "pending"     # never accidentally completed
             store.transition_task(task["id"], TaskStatus.RUNNING)
+
+
+class TestCrossProcessRecoveryRUN04:
+    """RUN-04: cross-process recovery with structured plan + failed steps."""
+
+    def test_checkpoint_with_failed_steps_and_tool_ref_survives_reopen(self, tmp_path):
+        """A checkpoint with failed_steps and last_tool_ref must survive
+        a store close/reopen (simulating process loss)."""
+        path = tmp_path / "crash.db"
+        store = AgentCoreStore(path)
+        task = store.create_task(session_id="sess-1", user_id="user-1", objective="test")
+        store.transition_task(task["id"], TaskStatus.RUNNING)
+        store.update_plan(task["id"], [
+            {"id": "1", "description": "done", "tool_name": "marketing_read_trends",
+             "status": "completed", "kind": "tool"},
+            {"id": "2", "description": "failed", "tool_name": "marketing_read_accounts",
+             "status": "failed", "kind": "tool"},
+            {"id": "3", "description": "pending", "tool_name": None,
+             "status": "pending", "kind": "synthesis"},
+        ])
+        ck = {
+            "completed_steps": ["1"],
+            "failed_steps": ["2"],
+            "current_step": "2",
+            "executed_effects": {},
+            "pending_approval_id": None,
+            "last_tool_ref": {
+                "tool_call_id": "tc_abc",
+                "tool_name": "marketing_read_accounts",
+                "result_status": "error",
+            },
+        }
+        store.update_task_progress(task["id"], checkpoint=ck)
+        store.transition_task(task["id"], TaskStatus.PAUSED,
+                              error="Agent runtime restarted; task is ready to resume")
+
+        # Reopen store (simulates new process)
+        reopened = AgentCoreStore(path)
+        loaded = reopened.get_task(task["id"])
+        assert loaded["status"] == "paused"
+        assert loaded["checkpoint"]["failed_steps"] == ["2"]
+        assert loaded["checkpoint"]["last_tool_ref"]["tool_call_id"] == "tc_abc"
+        assert loaded["checkpoint"]["last_tool_ref"]["result_status"] == "error"
+
+    def test_resume_after_crash_marks_failed_as_retryable(self, tmp_path):
+        """After process loss, failed steps should be in the pending set
+        for resume, so the model retries them."""
+        path = tmp_path / "crash.db"
+        store = AgentCoreStore(path)
+        task = store.create_task(session_id="sess-1", user_id="user-1", objective="test")
+        store.transition_task(task["id"], TaskStatus.RUNNING)
+        store.update_plan(task["id"], [
+            {"id": "1", "description": "done", "tool_name": "marketing_read_trends",
+             "status": "completed", "kind": "tool"},
+            {"id": "2", "description": "failed", "tool_name": "marketing_read_accounts",
+             "status": "failed", "kind": "tool"},
+            {"id": "3", "description": "next", "tool_name": None,
+             "status": "pending", "kind": "synthesis"},
+        ])
+        store.transition_task(task["id"], TaskStatus.PAUSED,
+                              checkpoint={"completed_steps": ["1"], "failed_steps": ["2"]},
+                              error="Agent runtime restarted")
+
+        reopened = AgentCoreStore(path)
+        loaded = reopened.get_task(task["id"])
+        plan = loaded["plan"]
+        pending = [s for s in plan if s.get("status") in ("pending", "running", "failed")]
+        completed = [s for s in plan if s.get("status") == "completed"]
+        assert len(completed) == 1
+        assert len(pending) == 2
+        assert pending[0]["id"] == "2"  # failed → retryable
+        assert pending[1]["id"] == "3"
+
+    def test_executed_effects_guard_prevents_replay(self, tmp_path):
+        """The re-execution guard in resume_task must mark steps as completed
+        if their effect_id is in the checkpoint's executed_effects."""
+        path = tmp_path / "crash.db"
+        store = AgentCoreStore(path)
+        task = store.create_task(session_id="sess-1", user_id="user-1", objective="test")
+        store.transition_task(task["id"], TaskStatus.RUNNING)
+        store.update_plan(task["id"], [
+            {"id": "1", "description": "done", "tool_name": "marketing_read_trends",
+             "status": "completed", "kind": "tool", "effect_id": "effect_1"},
+            {"id": "2", "description": "also done but still running", "tool_name": "marketing_read_accounts",
+             "status": "running", "kind": "tool", "effect_id": "effect_2"},
+            {"id": "3", "description": "pending", "tool_name": None,
+             "status": "pending", "kind": "synthesis"},
+        ])
+        ck = {
+            "completed_steps": ["1"],
+            "failed_steps": [],
+            "current_step": "2",
+            "executed_effects": {
+                "effect_1": {"capability": "marketing_read_trends", "receipt_status": "ok"},
+                "effect_2": {"capability": "marketing_read_accounts", "receipt_status": "ok"},
+            },
+            "pending_approval_id": None,
+        }
+        store.update_task_progress(task["id"], checkpoint=ck)
+        store.transition_task(task["id"], TaskStatus.PAUSED,
+                              error="Agent runtime restarted")
+
+        # Reopen and simulate the re-execution guard logic from resume_task
+        reopened = AgentCoreStore(path)
+        loaded = reopened.get_task(task["id"])
+        plan = loaded["plan"]
+        executed_effects = loaded["checkpoint"]["executed_effects"]
+
+        for step in plan:
+            effect_id = step.get("effect_id")
+            if effect_id and effect_id in executed_effects:
+                if step.get("status") not in ("completed", "skipped"):
+                    step["status"] = "completed"
+
+        reopened.update_plan(task["id"], plan)
+        final = reopened.get_task(task["id"])
+        assert final["plan"][0]["status"] == "completed"
+        assert final["plan"][1]["status"] == "completed"  # guard completed it
+        assert final["plan"][2]["status"] == "pending"    # untouched
+
+    def test_full_crash_recovery_cycle(self, tmp_path):
+        """End-to-end: task running → crash (pause) → reopen → verify
+        plan + checkpoint + events all consistent."""
+        path = tmp_path / "crash.db"
+        store = AgentCoreStore(path)
+        task = store.create_task(session_id="sess-1", user_id="user-1", objective="test")
+        store.transition_task(task["id"], TaskStatus.RUNNING)
+        store.update_plan(task["id"], [
+            {"id": "1", "description": "done", "tool_name": "marketing_read_trends",
+             "status": "completed", "kind": "tool"},
+            {"id": "2", "description": "failed", "tool_name": "marketing_read_accounts",
+             "status": "failed", "kind": "tool"},
+            {"id": "3", "description": "pending", "tool_name": "marketing_read_suggestions",
+             "status": "pending", "kind": "tool"},
+        ])
+        store.append_event(task["id"], "tool.completed", {
+            "tool_call_id": "tc_1", "tool": "marketing_read_trends",
+            "arguments": {}, "result": {"status": "ok"},
+        })
+        store.append_event(task["id"], "tool.completed", {
+            "tool_call_id": "tc_2", "tool": "marketing_read_accounts",
+            "arguments": {}, "result": {"status": "error", "error": "network"},
+        })
+        ck = {
+            "completed_steps": ["1"],
+            "failed_steps": ["2"],
+            "current_step": "2",
+            "executed_effects": {},
+            "pending_approval_id": None,
+            "last_tool_ref": {
+                "tool_call_id": "tc_2",
+                "tool_name": "marketing_read_accounts",
+                "result_status": "error",
+            },
+        }
+        store.update_task_progress(task["id"], checkpoint=ck)
+        # Simulate crash: pause the task
+        store.transition_task(task["id"], TaskStatus.PAUSED,
+                              error="Agent runtime restarted; task is ready to resume")
+
+        # Reopen (new process)
+        reopened = AgentCoreStore(path)
+        loaded = reopened.get_task(task["id"])
+
+        # Status
+        assert loaded["status"] == "paused"
+        assert "runtime" in loaded.get("last_error", "").lower() or "restarted" in loaded.get("last_error", "")
+
+        # Plan integrity
+        plan = loaded["plan"]
+        assert len(plan) == 3
+        assert plan[0]["status"] == "completed"
+        assert plan[1]["status"] == "failed"
+        assert plan[2]["status"] == "pending"
+
+        # Checkpoint integrity
+        checkpoint = loaded["checkpoint"]
+        assert checkpoint["completed_steps"] == ["1"]
+        assert checkpoint["failed_steps"] == ["2"]
+        assert checkpoint["last_tool_ref"]["tool_call_id"] == "tc_2"
+        assert checkpoint["last_tool_ref"]["result_status"] == "error"
+
+        # Events survived
+        events = reopened.list_events(task["id"])
+        tool_events = [e for e in events if e["event_type"] == "tool.completed"]
+        assert len(tool_events) == 2

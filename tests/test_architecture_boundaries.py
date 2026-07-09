@@ -112,8 +112,17 @@ def test_backend_recovery_does_not_depend_on_stale_ready_flag():
 
 def test_renderer_api_waits_for_backend_readiness():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
-    handler = main.split("ipcMain.handle('hermes:api'", 1)[1].split("ipcMain.handle('hermes:status'", 1)[0]
+    preload = (ROOT / "electron" / "preload.js").read_text(encoding="utf-8")
+    client = (ROOT / "src" / "api" / "client.ts").read_text(encoding="utf-8")
+    handler = main.split("const handleRuntimeApi", 1)[1].split("ipcMain.handle('runtime:api'", 1)[0]
     assert "await waitForBackendReady()" in handler
+    assert "ipcMain.handle('runtime:api', handleRuntimeApi)" in main
+    # Main keeps a compatibility handler for older packaged renderers, but the
+    # current renderer surface must expose only Marketing Agent Runtime names.
+    assert "ipcMain.handle('hermes:api', handleRuntimeApi)" in main
+    assert "runtimeApi:" in preload
+    assert "ipcRenderer.invoke('hermes:api'" not in preload
+    assert "mOS.api" not in client
     assert "营销引擎启动超时" in main
 
 
@@ -126,15 +135,29 @@ def test_agent_runtime_never_shells_out_to_cli():
 
 def test_renderer_cannot_supply_capability_or_arguments_to_effect_host():
     preload = (ROOT / "electron" / "preload.js").read_text(encoding="utf-8")
-    bridge = preload.split("executeApprovedCapability:", 1)[1]
-    assert "agent:execute-approved-capability" in bridge
-    assert "session:scrape-industry" not in bridge
-    assert "session:sync-account" not in bridge
-    assert "login:open" not in bridge
+    assert "agent:execute-approved-capability" in preload
+    assert "session:scrape-industry" not in preload
+    assert "session:sync-account" not in preload
 
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
     assert "const capability = approval.capability" in main
     assert "const args = approval.arguments || {}" in main
+
+
+def test_renderer_syncs_account_by_id_through_runtime_api():
+    """Account metric sync must not let renderer provide platform/username."""
+    preload = (ROOT / "electron" / "preload.js").read_text(encoding="utf-8")
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    accounts = (ROOT / "src" / "pages" / "Accounts.tsx").read_text(encoding="utf-8")
+
+    assert "syncAccountSession" not in preload
+    assert "syncAccountSession" not in accounts
+    assert "syncAccountMetrics" in accounts
+    assert "ipcRenderer.invoke('account:sync'" in preload
+    assert "async function syncAccountById" in main
+    assert "syncAccountWithSession(account.platform, account.username || account.label || '', account.id)" in main
+    assert "mcp-sync" in main
+    assert "session:sync-account" in main  # compatibility handler, not renderer-exposed
 
 
 def test_playwright_mcp_supply_chain_pinned():
