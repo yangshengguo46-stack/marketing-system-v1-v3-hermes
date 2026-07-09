@@ -45,6 +45,17 @@ class HermesAgentService:
     _PLAN_RE = re.compile(r'^\s*(\d+)[\.\)、）]\s*(.+)$', re.MULTILINE)
 
     _TOOL_KEYWORDS: list[tuple[list[str], str]] = [
+        (["根据实验生产", "从实验生产", "继续实验", "实验草稿", "实验草案"], "marketing_draft_content_from_experiment"),
+        (["内容生产", "生产内容", "写软文", "公众号软文", "知乎软文", "不露脸视频", "素材拼接", "数字人视频", "ai人视频", "AI人视频"], "marketing_plan_content_production"),
+        (["绑定起号项目", "绑定定位项目", "迁移起号项目", "把定位绑定"], "marketing_draft_bind_prospect_strategy"),
+        (["发现对标", "寻找对标", "找对标", "推荐对标账号"], "marketing_draft_benchmark_discover"),
+        (["目标受众", "受众假设", "账号定位", "起号", "账号生命周期"], "marketing_read_account_lifecycle"),
+        (["对标研究", "对标账号", "同行账号", "竞品账号"], "marketing_read_benchmark_research"),
+        (["当前定位", "定位版本", "账号dna", "账号 DNA"], "marketing_read_account_positioning"),
+        (["真实受众", "粉丝画像", "年龄分布", "性别分布", "地域分布"], "marketing_read_audience_snapshots"),
+        (["内容实验", "实验结果", "盲预测", "实验复盘"], "marketing_read_account_experiments"),
+        (["受众差距", "目标粉丝", "实际粉丝", "受众偏差"], "marketing_read_audience_gap"),
+        (["策略候选", "策略调整", "策略修订", "调整权重"], "marketing_read_strategy_candidates"),
         (["趋势", "热点", "热榜", "热搜"], "marketing_read_trends"),
         (["登录", "账号", "状态", "会话"], "marketing_read_accounts"),
         (["搜索", "采集", "抖音", "内容", "抓取", "关键词", "行业"], "marketing_trending_search"),
@@ -351,7 +362,8 @@ class HermesAgentService:
 
         completed_steps = [s for s in plan if s.get("status") == "completed"]
         skipped_steps = [s for s in plan if s.get("status") == "skipped"]
-        pending_steps = [s for s in plan if s.get("status") in ("pending", "running")]
+        failed_steps = [s for s in plan if s.get("status") == "failed"]
+        pending_steps = [s for s in plan if s.get("status") in ("pending", "running", "failed")]
         effect_events: list[dict] = []
 
         if plan and pending_steps:
@@ -362,18 +374,34 @@ class HermesAgentService:
             if skipped_steps:
                 skipped_parts = [f"步骤{s['id']}: {s['description']}" for s in skipped_steps]
                 skipped_desc = "\n已跳过步骤（审批过期）：" + "、".join(skipped_parts)
+            failed_desc = ""
+            if failed_steps:
+                failed_parts = [f"步骤{s['id']}: {s['description']}" for s in failed_steps]
+                failed_desc = "\n失败步骤（需要重试）：" + "、".join(failed_parts)
             next_desc = pending_steps[0]["description"]
-            current_idx = len(completed_steps) + len(skipped_steps) + 1
+            current_idx = len(completed_steps) + len(skipped_steps) + len(failed_steps) + 1
             total = len(plan)
             resume_message = (
                 f"继续完成此前中断的目标：{task['objective']}\n\n"
-                f"已完成步骤：{completed_desc}{skipped_desc}\n"
+                f"已完成步骤：{completed_desc}{skipped_desc}{failed_desc}\n"
                 f"当前进度：第{current_idx}/{total}步\n"
                 f"下一步：{next_desc}\n\n"
                 f"请继续执行，不要重复已完成步骤。已完成步骤的结果已在上下文中。"
             )
         else:
             resume_message = f"继续完成此前中断的目标：{task['objective']}"
+            # Check if this is a replan resume
+            events = self._store.list_events_after(task_id, 0)
+            replan_events = [e for e in events if e["event_type"] == "task.replanned"]
+            if replan_events:
+                last_replan = replan_events[-1]["payload"]
+                resume_message = (
+                    f"用户已修改目标。新目标：{task['objective']}\n"
+                    f"旧目标：{last_replan.get('old_objective', '')}\n"
+                    f"已保留 {last_replan.get('kept_steps', 0)} 个已完成步骤，"
+                    f"已废止 {last_replan.get('discarded_steps', 0)} 个未执行步骤。\n"
+                    f"请根据新目标重新规划并执行剩余步骤。已完成步骤的结果已在上下文中，不要重复执行。"
+                )
 
         try:
             events = self._store.list_events_after(task_id, 0)
@@ -415,11 +443,86 @@ class HermesAgentService:
         self._start_task(session, task_id, resume_message)
         return {"task_id": task_id, "status": "running"}
 
+    async def resume_safe_interrupted_tasks(self, *, limit: int = 1) -> list[dict[str, Any]]:
+        """Resume process-interrupted tasks, never user-paused or unresolved-effect work."""
+        if not self.runtime_status()["available"]:
+            return []
+        resumed: list[dict[str, Any]] = []
+        for task in self._store.list_tasks({TaskStatus.PAUSED}):
+            if len(resumed) >= max(0, limit):
+                break
+            checkpoint = task.get("checkpoint") or {}
+            interrupted_at = checkpoint.get("runtime_interrupted_at")
+            if not interrupted_at:
+                continue
+            if checkpoint.get("auto_resume_attempted_for") == interrupted_at:
+                continue
+            if self._store.task_has_pending_approval(task["id"]):
+                continue
+            if self._store.task_has_unresolved_effect(task["id"]):
+                continue
+            if task.get("session_id") not in self._sessions:
+                self._store.update_task_progress(
+                    task["id"], checkpoint={
+                        **checkpoint,
+                        "auto_resume_attempted_for": interrupted_at,
+                        "auto_resume_blocked_reason": "session_missing",
+                    },
+                )
+                self._emit(task["id"], "task.auto_resume_blocked", reason="session_missing")
+                continue
+            thread = self._task_threads.get(task["id"])
+            if thread is not None and thread.is_alive():
+                continue
+            self._store.update_task_progress(
+                task["id"], checkpoint={
+                    **checkpoint,
+                    "auto_resume_attempted_for": interrupted_at,
+                    "auto_resume_attempted_at": _now(),
+                },
+            )
+            try:
+                result = await self.resume_task(task["id"])
+                self._emit(task["id"], "task.auto_resumed", reason="runtime_interrupted")
+                resumed.append(result)
+            except Exception as exc:
+                logger.exception("safe auto-resume failed for %s", task["id"])
+                self._emit(task["id"], "task.auto_resume_failed", error=str(exc))
+        return resumed
+
     async def replan_task(self, task_id: str, new_objective: str) -> dict:
-        """Replan a task with a new objective, keeping completed work."""
+        """Replan a task with a new objective, keeping completed work.
+
+        Interrupts the running Hermes agent, preserves completed steps,
+        discards pending steps, and pauses the task so the user can resume
+        with the new objective.
+        """
         task = self._store.get_task(task_id)
         if task["status"] in ("completed", "cancelled"):
             raise ValueError(f"cannot replan from {task['status']}")
+        # Interrupt the running Hermes agent if active
+        with self._lock:
+            agent = self._task_agents.get(task_id)
+            old_thread = self._task_threads.get(task_id)
+        if agent is not None:
+            try:
+                agent.interrupt("user replanned task")
+            except Exception:
+                logger.exception("failed to interrupt Hermes task %s for replan", task_id)
+        # Wait for the old thread to finish before proceeding
+        if old_thread is not None and old_thread is not threading.current_thread():
+            await asyncio.to_thread(old_thread.join, 15)
+        # Re-fetch task — it may have completed while we waited
+        task = self._store.get_task(task_id)
+        if task["status"] in ("completed", "cancelled"):
+            # Task already finished; just update objective and plan for record
+            self._store.update_task_objective(task_id, new_objective)
+            self._emit(task_id, "task.replanned",
+                        old_objective=task["objective"], new_objective=new_objective,
+                        kept_steps=len([s for s in task.get("plan", []) if s.get("status") == "completed"]),
+                        discarded_steps=0,
+                        plan_version=task.get("plan_version", 1) + 1)
+            return self._store.get_task(task_id)
         plan = task.get("plan", [])
         completed = [s for s in plan if s.get("status") == "completed"]
         pending = [s for s in plan if s.get("status") != "completed"]
@@ -431,6 +534,13 @@ class HermesAgentService:
         checkpoint = self._build_checkpoint(task_id)
         self._store.update_plan(task_id, new_plan)
         self._store.update_task_progress(task_id, checkpoint=checkpoint)
+        # Update the objective and pause for resume
+        self._store.transition_task(
+            task_id, TaskStatus.PAUSED,
+            error=f"目标已修改：{task['objective']} → {new_objective}",
+        )
+        # Update objective in the store
+        self._store.update_task_objective(task_id, new_objective)
         self._emit(task_id, "task.replanned",
                     old_objective=task["objective"], new_objective=new_objective,
                     kept_steps=len(completed), discarded_steps=len(pending),
@@ -501,8 +611,14 @@ class HermesAgentService:
                     persist_user_message=persist_user_message,
                 )
                 reply = result.get("final_response", "") if isinstance(result, dict) else str(result)
+                trend_grounding = self._requires_trend_grounding(task.get("objective", ""))
+                evidence_for_guard = {
+                    **authoritative_evidence,
+                    "_completed_tools": self._completed_tool_names(task_id),
+                }
                 violations = self._detect_evidence_violations(
-                    reply, authoritative_evidence, task.get("account_id"),
+                    reply, evidence_for_guard, task.get("account_id"),
+                    enforce_trends=trend_grounding,
                 )
                 if violations:
                     self._emit(task_id, "response.repair_requested", violations=violations)
@@ -520,12 +636,19 @@ class HermesAgentService:
                         persist_user_message=None,
                     )
                     reply = repaired.get("final_response", "") if isinstance(repaired, dict) else str(repaired)
+                    evidence_for_guard = {
+                        **authoritative_evidence,
+                        "_completed_tools": self._completed_tool_names(task_id),
+                    }
                     remaining = self._detect_evidence_violations(
-                        reply, authoritative_evidence, task.get("account_id"),
+                        reply, evidence_for_guard, task.get("account_id"),
+                        enforce_trends=trend_grounding,
                     )
                     if remaining:
                         self._emit(task_id, "response.rejected", violations=remaining)
-                        reply = self._build_grounding_failure_reply(authoritative_evidence)
+                        reply = self._build_grounding_failure_reply(
+                            authoritative_evidence, objective=task.get("objective", ""),
+                        )
             finally:
                 set_task_context(None)
 
@@ -630,16 +753,11 @@ class HermesAgentService:
                 task = self._store.get_task(task_id)
                 plan = task.get("plan", [])
                 changed = False
-                for step in plan:
-                    if step.get("kind") == "synthesis":
-                        continue
-                    if step["status"] == "pending":
-                        guess = step.get("tool_name") or step.get("tool_guess")
-                        if guess is None or guess == name:
-                            step["status"] = "running"
-                            step["tool_name"] = name  # backfill with real tool name
-                            changed = True
-                            break
+                if name == "marketing_plan_declare":
+                    pass  # plan declare is handled by its own handler
+                else:
+                    from .plan_protocol import bind_step_on_tool_start
+                    changed = bind_step_on_tool_start(plan, name)
                 if changed:
                     self._store.update_plan(task_id, plan)
                     self._store.update_task_progress(task_id, checkpoint=self._build_checkpoint(task_id))
@@ -665,18 +783,17 @@ class HermesAgentService:
                 task = self._store.get_task(task_id)
                 plan = task.get("plan", [])
                 changed = False
-                if result_status == "ok":
-                    for step in plan:
-                        if step["status"] == "running":
-                            guess = step.get("tool_name") or step.get("tool_guess")
-                            if guess is None or guess == name:
-                                step["status"] = "completed"
-                                changed = True
-                                break
+                if name != "marketing_plan_declare":
+                    if result_status == "ok":
+                        from .plan_protocol import complete_step_on_tool_success
+                        changed = complete_step_on_tool_success(plan, name)
+                    elif result_status in ("error", "blocked", "invalid", "pending_approval"):
+                        from .plan_protocol import fail_step_on_tool_error
+                        changed = fail_step_on_tool_error(plan, name)
                 if changed:
                     self._store.update_plan(task_id, plan)
-                    # Write deterministic checkpoint
-                    ck = self._build_checkpoint(task_id)
+                    ck = self._build_checkpoint(task_id, tool_call_id=tool_call_id,
+                                                tool_name=name, result_status=result_status)
                     self._store.update_task_progress(task_id, checkpoint=ck)
                     updated = self._store.get_task(task_id)
                     self._emit(task_id, "plan.updated", plan=updated.get("plan", []),
@@ -720,16 +837,63 @@ class HermesAgentService:
             "输出计划后，按步骤依次执行。\n\n"
             "你可以使用 marketing_draft_memory_add 写入候选营销记忆。候选不会自动进入上下文；"
             "用户确认后，marketing_read_memory_list 才会把它作为当前用户范围内的有效记忆返回。\n\n"
+            "一次性脚本、完整文案、标题草稿、封面说明等内容产物必须使用 marketing_draft_content_create；"
+            "知乎/微信公众号软文优先使用 marketing_draft_soft_article_create 生成可审稿资产；"
+            "不露脸素材视频优先使用 marketing_draft_faceless_video_create 生成视频草稿资产；"
+            "不要把它们写入长期记忆。长期记忆只用于用户偏好、账号 DNA、长期项目上下文、复盘规律和可复用流程。\n\n"
             "边界：\n"
             "- 只能调用 marketing-desktop 工具集，不得使用 Shell、任意文件或系统设置能力。\n"
             "- Cookie、Token 和 Key 由 Electron 持有，你只能看到登录状态和脱敏业务结果。\n"
             "- 产品内可逆写入可直接执行；登录态资源和外部动作必须遵守产品审批与用户授权范围。\n"
             "- 结论必须保留来源、采集时间和置信度；数据不足时直说，不编造。\n"
             "- 输出必须区分三类：『已证实事实』只能复述工具明确返回的字段；『策略推断』必须标注为推断并说明依据；『创作建议』不得冒充已经发生的事实。\n"
+            "- 默认回复先给结论和下一步，除非用户要求详细报告，否则控制在 800 字以内；少用大表格，避免把工具日志和字段堆给用户。\n"
             "- industries/监控行业是全局配置，不是账号标签；不得把未读取的账号定位、内容数量、活跃粉丝、转化或增长阶段写成事实。\n"
-            "- 多个选题复用同一热点时，必须明确写成『1条证据延展出的多个角度』，不得包装成多条独立热点。\n"
+            "- 多个选题复用同一热点时，必须说明『同一证据延展出的多个角度』；多个来源共同指向同一议题时，说明『同一议题下的多条证据』，不得混写。\n"
+            "- 起号和账号经营遵循：经营目标→目标受众假设→对标证据→定位→内容实验→真实受众→复盘修订。"
+            "目标受众假设、真实粉丝画像和评论推断是三类不同信息，不得混写。\n"
+            "- 用户没有登录账号、没有产业或不知道如何变现时，仍可开始起号规划。此时使用待绑定策略项目，"
+            "不要要求先登录，也不要假装已有粉丝数据。通过自然对话逐步了解：愿意长期谈什么、真实经历/技能、"
+            "可投入时间、是否愿意出镜、可接触的人群、价值观和收入期待。每轮优先问 1~2 个最关键问题，"
+            "不要一次抛出问卷；信息不足时先探索，不急着创建正式定位。\n"
+            "- 用户后来登录账号时，如果待绑定项目已经形成，先说明将迁移哪些经营资料并取得明确确认，"
+            "再调用 marketing_draft_bind_prospect_strategy。目标账号已有项目时停止并让用户选择，禁止静默合并。\n"
+            "- 变现不是用户必须预先知道的答案。先从能力×兴趣×可服务人群形成 2~3 个方向假设，说明各自的"
+            "内容难度、验证周期和潜在变现路径，再由用户选择要验证的方向。\n"
+            "- 用户要求起号、定位或受众分析时，先读取 marketing_read_account_lifecycle；"
+            "没有已确认假设时可创建草案，但必须展示给用户确认后才能进入对标和定位阶段。\n"
+            "- 对标账号必须说明选择理由；添加账号不等于完成研究。只有带 source_ref、captured_at、"
+            "source_kind 和 confidence 的观察才能成为定位证据，推断必须明确标注。\n"
+            "- 起草定位前必须确认 benchmark_readiness.ready=true，并引用具体 observation ID。"
+            "定位草案不能静默生效；批准和回滚均保留版本历史。\n"
+            "- 用户要求找对标时，优先调用 marketing_draft_benchmark_discover。只展示带稳定作者身份、来源 URL 和"
+            "具体样本的候选；匹配分只是排序依据。让用户明确选择正例和 negative 反例后，才继续形成观察。\n"
+            "- 真实粉丝画像只能来自 marketing_read_audience_snapshots 中的 official_api 或 creator_center_mcp。"
+            "目标受众是假设，评论画像是推断，均不得冒充真实粉丝事实；缺失职业/收入时明确说未知。\n"
+            "- 每轮内容策略应写成可证伪实验：假设、单一变量、发布前预测、成功标准。"
+            "选题、资产、评分、发布回执和复盘必须绑定同一 experiment_id；不得事后改写预测。\n"
+            "- 已存在 draft/running 内容实验时，用户要求『继续实验』『根据实验生产内容』或提供 experiment_id，"
+            "先调用 marketing_read_account_experiments 读取实验，再优先调用 marketing_draft_content_from_experiment "
+            "生成并绑定内容资产；不要绕过实验重新做一张无来源生产工单。\n"
+            "- 用户要求内容生产、写软文、不露脸素材视频、真人/数字人/AI人视频时，第一步先调用 "
+            "marketing_plan_content_production 生成生产工单，第二步调用 marketing_draft_content_preflight 保存总预演记录，"
+            "再按工单和预演决定读证据、写草稿、找素材或进入视频项目。"
+            "工单里的 recommended_skills 是本产品允许用于该 lane 的技能白名单：preload 类型优先作为当前任务的写作/分镜/剪辑知识，"
+            "on_demand 类型只在对应步骤需要时使用；不得在内容生产中随机翻找未列入白名单的 skill。\n"
+            "软文优先调用 marketing_draft_soft_article_create 保存父稿、知乎/公众号变体、证据状态、配图需求和发布前预测；"
+            "不露脸视频先调用 marketing_draft_faceless_video_create 保存脚本、镜头清单、素材检索包、版权凭证需求、缺口生成请求和 EDL；"
+            "只有素材文件和 EDL clips 齐全后，才能调用 marketing_prepare_faceless_render 检查渲染命令；该工具也不执行渲染。\n"
+            "真人/数字人高质量视频在 Volcengine/视频 provider 校准前只能交付项目画布、样片计划和预算门，"
+            "不得冒充已经生成成片；它的『片子预演』由 video_core 的高阶视频预演 Agent 单独负责，"
+            "总预演只判断账号/证据/平台/成本/生产可行性，不替代镜头、节奏、美术、连续性判断。\n"
+            "- 受众差距只是一项待验证诊断。读取 marketing_read_audience_gap 后，将 mismatch/partial 转成"
+            "下一轮实验候选，不得自动修改目标受众、定位或 DNA。\n"
+            "- 实验复盘和失败恢复只能生成 pending 策略候选。用户拒绝时保留原因；"
+            "接受候选也不能绕过定位版本审批或直接修改权重。\n"
             "- 寒暄自然简短，不主动倾倒营销数据。\n"
             "- 写入记忆前确认不包含 Cookie/Token/密码等秘密信息。\n\n"
+            "- 只有本轮成功调用 marketing_draft_memory_add 后，才能说『已记录』『已写入记忆』"
+            "或『已沉淀』；否则只能说『建议记录/待你确认后记录』，不得假装已经保存。\n\n"
             "热点趋势分析规范：\n"
             "- 行业热点/趋势请求优先使用 marketing_read_trends 读取本地已缓存热点，"
             "支持 query/platform/limit 参数；该工具为只读自动允许，无需审批\n"
@@ -789,7 +953,8 @@ class HermesAgentService:
             "- 未读取的账号定位、内容数、活跃度、转化和增长阶段不得写成事实。",
             "- 策略推断必须标注为推断；创作建议必须标注为建议。",
             "- 『全网热议』『全民关注』『自然流量大』『完美匹配』等扩大性判断，除非工具明确给出跨平台数据，否则只能作为不确定推断或删除。",
-            "- 多个角度复用同一热点时，明确说明是一条证据的延展。",
+            "- 多个角度复用同一热点时，说明是同一证据的延展；多个来源共同指向同一议题时，说明是同一议题下的多条证据。",
+            "- 回复优先可读、可执行；用户未要求长报告时，不要输出冗长表格或工具流水账。",
         ])
         if authoritative_evidence:
             lines.extend(self._format_authoritative_evidence(authoritative_evidence))
@@ -823,7 +988,7 @@ class HermesAgentService:
         plan = task.get("plan", [])
         required = {
             "marketing_read_context", "marketing_read_trends",
-            "marketing_read_intelligence_report",
+            "marketing_read_intelligence_report", "marketing_read_account_lifecycle",
         }
         evidence: dict[str, Any] = {}
 
@@ -835,8 +1000,15 @@ class HermesAgentService:
             if spec is None:
                 continue
             arguments: dict[str, Any] = {}
+            if name == "marketing_read_account_lifecycle":
+                arguments["__user_id"] = task.get("user_id") or "default"
+                arguments["__task_id"] = task_id
             if task.get("account_id"):
                 arguments["account_id"] = task["account_id"]
+            if name == "marketing_read_trends":
+                query = self._extract_trend_query(task.get("objective", ""))
+                if query:
+                    arguments["query"] = query
             step["status"] = "running"
             self._store.update_plan(task_id, plan)
             self._emit(
@@ -871,6 +1043,48 @@ class HermesAgentService:
             )
         return evidence
 
+    def _completed_tool_names(self, task_id: str) -> list[str]:
+        tools: set[str] = set()
+        try:
+            for event in self._store.list_events_after(task_id, 0):
+                if event.get("event_type") != "tool.completed":
+                    continue
+                payload = event.get("payload") or {}
+                tool = payload.get("tool") or payload.get("name")
+                result = payload.get("result")
+                if isinstance(result, dict):
+                    status = str(result.get("status") or "").lower()
+                    if status in {"error", "failed", "rejected", "blocked", "invalid"}:
+                        continue
+                if tool:
+                    tools.add(str(tool))
+        except Exception:
+            logger.exception("failed to inspect completed tools for task %s", task_id)
+        return sorted(tools)
+
+    @staticmethod
+    def _extract_trend_query(objective: str) -> str | None:
+        """Extract an explicit industry/topic phrase for deterministic filtering."""
+        text = re.sub(r"\s+", " ", str(objective or "")).strip()
+        patterns = (
+            r"(?:分析|研究|查看|查找|整理|关注)\s*(?:最近的|今日|今天的|当前的)?\s*"
+            r"([^，。！？,\n]{2,24}?)(?:行业)?(?:热点|趋势|选题)",
+            r"(?:分析|研究|查看|查找|整理|关注)\s*(?:最近的|今日|今天的|当前的)?\s*"
+            r"([^，。！？,\n]{2,24}?)行业",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, re.I)
+            if match:
+                query = match.group(1).strip(" ：:的")
+                if query:
+                    return query
+        return None
+
+    @staticmethod
+    def _requires_trend_grounding(objective: str) -> bool:
+        text = str(objective or "").lower()
+        return any(marker in text for marker in ("热点", "趋势", "热榜", "热搜", "选题"))
+
     @staticmethod
     def _format_authoritative_evidence(evidence: dict[str, Any]) -> list[str]:
         lines = ["本轮产品层权威证据（优先级高于历史对话）："]
@@ -902,6 +1116,29 @@ class HermesAgentService:
                 f"- 最近巡检状态：{report.get('status', 'unknown')}；"
                 f"错误/降级记录数：{len(errors)}。"
             )
+        lifecycle = evidence.get("marketing_read_account_lifecycle")
+        if isinstance(lifecycle, dict):
+            lines.append(
+                f"- 账号生命周期：project_id={lifecycle.get('project_id') or '未建立'}；"
+                f"stage={lifecycle.get('stage') or 'unknown'}；"
+                f"next_action={lifecycle.get('next_action') or 'unknown'}。"
+            )
+            if not lifecycle.get("project_id"):
+                lines.append("- 当前没有经营项目不代表必须先登录；可通过自然对话建立待绑定起号项目。")
+            gaps = lifecycle.get("data_gaps") or []
+            missing = (lifecycle.get("benchmark_readiness") or {}).get("missing") or []
+            if gaps or missing:
+                lines.append("- 生命周期缺口：" + json.dumps({
+                    "data_gaps": gaps,
+                    "benchmark_missing": missing,
+                }, ensure_ascii=False, default=str))
+            hypothesis = lifecycle.get("audience_hypothesis")
+            if hypothesis:
+                lines.append("- 已确认/草案受众假设摘要：" + json.dumps({
+                    key: hypothesis.get(key)
+                    for key in ("id", "version", "status", "segments", "pains", "scenarios", "exclusions")
+                    if hypothesis.get(key) not in (None, "", [])
+                }, ensure_ascii=False, default=str))
         trends = evidence.get("marketing_read_trends")
         if isinstance(trends, dict):
             items = HermesAgentService._trend_items(trends)
@@ -951,6 +1188,7 @@ class HermesAgentService:
     @staticmethod
     def _detect_evidence_violations(
         reply: str, evidence: dict[str, Any], account_id: str | None,
+        *, enforce_trends: bool = True,
     ) -> list[str]:
         """Return concrete repair instructions for common evidence overclaims."""
         if not reply:
@@ -984,13 +1222,31 @@ class HermesAgentService:
             violations.append(
                 "『新号/冷启动』不是账号快照字段；若根据粉丝数提出，只能明确标注为策略推断。"
             )
+        completed_tools = set(evidence.get("_completed_tools") or [])
+        if "marketing_draft_memory_add" not in completed_tools and re.search(
+            r"(?:已|已经|成功|我已).{0,12}(?:明确)?(?:记录|写入|保存|沉淀|记住|记下)"
+            r".{0,18}(?:记忆|偏好|系统|候选|资料|信息|中)?",
+            reply,
+        ):
+            violations.append(
+                "本轮没有成功调用 marketing_draft_memory_add；不得声称已记录、已写入记忆或已沉淀。"
+                "请改为『建议记录/待用户确认后记录』，或只给出可复制的候选内容。"
+            )
 
         trends = evidence.get("marketing_read_trends")
-        if isinstance(trends, dict):
+        if enforce_trends and isinstance(trends, dict):
             items = HermesAgentService._trend_items(trends)
             allowed_titles = {str(item.get("title", "")).strip() for item in items}
             allowed_urls = {str(item.get("url", "")).strip() for item in items if item.get("url")}
             allowed_platforms = {str(item.get("source_platform", "")).lower() for item in items}
+
+            if trends.get("query") and int(trends.get("matched", len(items)) or 0) == 0:
+                honest_empty_markers = ("没有匹配", "未找到", "暂无匹配", "无匹配", "证据不足", "暂无可靠")
+                if not any(marker in reply for marker in honest_empty_markers):
+                    violations.append(
+                        f"本轮对『{trends['query']}』的热点检索结果为 0；必须明确返回暂无匹配证据，"
+                        "不得使用旧对话、未筛选缓存或无关热点补足结果。"
+                    )
 
             claimed_titles = re.findall(
                 r"\|\s*\*{0,2}(?:原始标题|来源热点)\*{0,2}\s*\|\s*(.*?)\s*\|", reply,
@@ -1008,7 +1264,7 @@ class HermesAgentService:
                 )
 
             platform_aliases = {
-                "抖音": "douyin", "微博": "weibo", "知乎": "zhihu",
+                "抖音": "douyin", "知乎": "zhihu",
                 "b站": "bilibili", "哔哩哔哩": "bilibili", "微信": "wechat",
             }
             source_rows = re.findall(r"\|\s*\*{0,2}来源平台\*{0,2}\s*\|\s*(.*?)\s*\|", reply)
@@ -1044,7 +1300,9 @@ class HermesAgentService:
         return violations
 
     @staticmethod
-    def _build_grounding_failure_reply(evidence: dict[str, Any]) -> str:
+    def _build_grounding_failure_reply(
+        evidence: dict[str, Any], *, objective: str = "",
+    ) -> str:
         context = evidence.get("marketing_read_context") or {}
         accounts = context.get("accounts") or []
         account = accounts[0] if accounts else {}
@@ -1052,6 +1310,14 @@ class HermesAgentService:
         trends = evidence.get("marketing_read_trends") or {}
         platforms = trends.get("platforms_succeeded") or []
         errors = trends.get("source_errors") or trends.get("errors") or {}
+        if not HermesAgentService._requires_trend_grounding(objective):
+            return (
+                "## 本轮未交付结论\n\n"
+                "证据质量守门发现草稿包含当前账号数据中无法验证的事实，因此已拦截。"
+                "这不会被当成账号定位、受众画像或策略结果保存。\n\n"
+                "请继续按照账号生命周期推进：先读取当前阶段和证据缺口，再完成对应的受众、"
+                "对标、定位或实验步骤。"
+            )
         return (
             "## 本轮未交付选题\n\n"
             "证据质量守门发现生成内容引用了本轮数据中不存在的热点标题、平台或指标，"
@@ -1098,6 +1364,13 @@ class HermesAgentService:
         marketing_markers = (
             "热点", "趋势", "选题", "账号", "抖音", "营销", "内容", "脚本",
             "粉丝", "点赞", "播放", "行业", "发布", "复盘", "数据",
+            "起号", "定位", "目标受众", "用户画像", "对标",
+            "变现", "账号方向", "起号方向", "做账号", "个人ip", "个人 ip", "赛道",
+            "内容实验", "实验结果", "盲预测",
+            "内容生产", "生产内容", "写软文", "软文", "公众号", "知乎",
+            "不露脸", "素材拼接", "混剪", "数字人", "ai人", "ai 人", "高质量视频", "视频生成",
+            "受众差距", "目标粉丝", "实际粉丝", "受众偏差",
+            "策略候选", "策略调整", "策略修订", "调整权重",
         )
         if not any(marker in text for marker in marketing_markers):
             return []
@@ -1116,7 +1389,54 @@ class HermesAgentService:
             })
             next_id += 1
 
-        if account_id or any(marker in text for marker in ("账号", "粉丝", "点赞", "播放", "抖音")):
+        lifecycle_request = any(marker in text for marker in (
+            "起号", "定位", "目标受众", "用户画像", "粉丝画像", "真实受众", "对标",
+            "变现", "账号方向", "起号方向", "做账号", "个人ip", "个人 ip", "赛道",
+        ))
+        if lifecycle_request:
+            add("读取账号经营生命周期、有效受众假设和数据缺口", "marketing_read_account_lifecycle")
+            if "对标" in text or "定位" in text:
+                add("读取已选对标账号及其可追溯观察证据", "marketing_read_benchmark_research")
+            if any(marker in text for marker in ("发现对标", "寻找对标", "找对标", "推荐对标账号")):
+                add("从带作者身份和来源的真实内容证据中发现对标候选", "marketing_draft_benchmark_discover")
+            if "定位" in text:
+                add("读取当前生效定位、DNA 投影和历史版本", "marketing_read_account_positioning")
+            if any(marker in text for marker in ("粉丝画像", "真实受众", "年龄分布", "性别分布", "地域分布")):
+                add("读取带来源、时间窗和缺失项的真实粉丝画像快照", "marketing_read_audience_snapshots")
+
+        if any(marker in text for marker in ("绑定起号项目", "绑定定位项目", "迁移起号项目", "把定位绑定")):
+            add("经用户确认后把待绑定起号项目迁移到已连接账号", "marketing_draft_bind_prospect_strategy")
+
+        content_production_request = any(marker in text for marker in (
+            "内容生产", "生产内容", "写软文", "软文", "公众号", "知乎",
+            "不露脸", "素材拼接", "混剪", "数字人", "ai人", "ai 人", "高质量视频", "视频生成",
+        ))
+        experiment_production_request = any(marker in text for marker in (
+            "根据实验生产", "从实验生产", "继续实验", "实验草稿", "实验草案", "experiment_id",
+        ))
+        if experiment_production_request:
+            add("读取内容实验及其资产、预测、发布结果和复盘时间线", "marketing_read_account_experiments")
+            add("根据已有内容实验生成并绑定下一条内容资产", "marketing_draft_content_from_experiment")
+        if content_production_request:
+            add("生成内容生产工单，选择软文/素材拼接视频/高质量视频路线", "marketing_plan_content_production")
+            add("保存内容生产前总预演，判断受众、证据、平台、成本和生产可行性", "marketing_draft_content_preflight")
+            add("读取已有内容资产、发布表现和可复用素材上下文", "marketing_read_content_list")
+            if any(marker in text for marker in ("写软文", "软文", "公众号", "知乎", "文章", "长文")):
+                add("生成并保存知乎/公众号软文可审稿资产", "marketing_draft_soft_article_create")
+            if any(marker in text for marker in ("不露脸", "素材拼接", "混剪", "找素材", "素材视频")):
+                add("生成并保存不露脸素材视频草稿资产", "marketing_draft_faceless_video_create")
+                add("检查 EDL 和素材是否已满足确定性渲染条件", "marketing_prepare_faceless_render")
+
+        if any(marker in text for marker in ("内容实验", "实验结果", "盲预测", "实验复盘")):
+            add("读取内容实验及其资产、预测、发布结果和复盘时间线", "marketing_read_account_experiments")
+        if any(marker in text for marker in ("受众差距", "目标粉丝", "实际粉丝", "受众偏差")):
+            add("比较目标受众、真实粉丝与对标观察并保留未知项", "marketing_read_audience_gap")
+        if any(marker in text for marker in ("策略候选", "策略调整", "策略修订", "调整权重")):
+            add("读取待确认策略候选、证据和历史决定", "marketing_read_strategy_candidates")
+        elif account_id or (
+            not lifecycle_request
+            and any(marker in text for marker in ("账号", "粉丝", "点赞", "播放", "抖音"))
+        ):
             add("读取并核对当前账号的脱敏上下文", "marketing_read_context")
 
         if any(marker in text for marker in ("热点", "趋势", "选题", "行业")):
@@ -1171,11 +1491,20 @@ class HermesAgentService:
             logger.exception("failed to capture plan from Hermes transcript %s", session_id)
         return None
 
-    def _build_checkpoint(self, task_id: str) -> dict[str, Any]:
-        """Build a deterministic checkpoint from current plan + event state."""
+    def _build_checkpoint(self, task_id: str, *, tool_call_id: str | None = None,
+                          tool_name: str | None = None,
+                          result_status: str | None = None) -> dict[str, Any]:
+        """Build a deterministic checkpoint from current plan + event state.
+
+        The checkpoint references artifacts/evidence by ID only — never raw
+        tool output, secrets, or cookies.  A ``last_tool_ref`` is included
+        when the checkpoint is written from a tool callback so that recovery
+        knows which tool call produced this checkpoint.
+        """
         task = self._store.get_task(task_id)
         plan = task.get("plan", [])
         completed = [s["id"] for s in plan if s.get("status") == "completed"]
+        failed = [s["id"] for s in plan if s.get("status") == "failed"]
         running = next((s for s in plan if s.get("status") == "running"), None)
 
         executed_effects: dict[str, dict[str, Any]] = {}
@@ -1210,16 +1539,24 @@ class HermesAgentService:
 
         pending = next((s for s in plan if s.get("status") in {"pending", "running"}), None)
         all_terminal = bool(plan) and all(
-            s.get("status") in {"completed", "skipped"} for s in plan
+            s.get("status") in {"completed", "skipped", "failed"} for s in plan
         )
-        return {
+        checkpoint: dict[str, Any] = {
             "completed_steps": completed,
+            "failed_steps": failed,
             "current_step": None if all_terminal else (
                 running["id"] if running else (pending["id"] if pending else None)
             ),
             "executed_effects": executed_effects,
             "pending_approval_id": pending_approval_id,
         }
+        if tool_call_id:
+            checkpoint["last_tool_ref"] = {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "result_status": result_status,
+            }
+        return checkpoint
 
     def _emit(self, task_id: str, event_type: str, **payload) -> None:
         try:

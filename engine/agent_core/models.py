@@ -270,7 +270,7 @@ class SourceContract:
     Optional fields document richer provenance when available.
     """
     source: str              # backend name: hot_topics_api | bilibili_public | playwright_mcp_creator_center | electron_session
-    platform: str            # douyin | weibo | bilibili | zhihu | ...
+    platform: str            # douyin | bilibili | xiaohongshu | zhihu | ...
     url: str                 # canonical URL
     title: str               # display title, max 500 chars
     collected_at: str        # ISO-8601 timestamp when the item was fetched
@@ -402,4 +402,3 @@ ACCOUNT_DNA_LABELS = {
     "taboos": "禁区",
     "goals": "账号目标",
 }
-

@@ -1,0 +1,693 @@
+"""Governed calibration over repeated publishing retrospectives.
+
+One successful or failed post should not rewrite a creator's strategy.  This
+module looks for repeated, evidence-backed patterns and turns them into
+``weight`` learning candidates.  Candidates remain pending until an explicit
+review path accepts/rejects them.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from typing import Any
+
+from .influence_score import BUCKET_VALUES, INFLUENCE_SCORE_VERSION, RISK_BUCKET_VALUES
+
+
+GOVERNANCE_VERSION = "learning-governance-v0.1"
+WEIGHT_REPLAY_VERSION = "weight-candidate-replay-v0.1"
+
+HIGH_BUCKETS = {"high", "spike"}
+LOW_BUCKETS = {"zero", "low"}
+POSITIVE_REPLAY_DIMENSIONS = ("attention", "retention", "trust", "action", "fit")
+COMPONENT_DIMENSIONS = {
+    "PlatformReachPotential": "attention",
+    "HumanAttentionKernel": "attention",
+    "RetentionDesign": "retention",
+    "PersuasionScore": "trust",
+    "AccountFit": "fit",
+    "BusinessValue": "action",
+    "RiskPenalty": "risk",
+}
+CONFLICTING_RULES: dict[str, set[str]] = {
+    "retention_gap_after_attention": {"retention_strength_after_attention"},
+    "action_gap_after_attention": {"action_strength_after_attention"},
+    "trust_signal_strength": {"trust_signal_absent"},
+    "risk_pressure": {"risk_absent"},
+    "prediction_over_optimistic": {"prediction_under_optimistic"},
+    "prediction_under_optimistic": {"prediction_over_optimistic"},
+}
+
+
+def _proposal(candidate: dict[str, Any]) -> dict[str, Any]:
+    proposal = candidate.get("proposal")
+    return proposal if isinstance(proposal, dict) else {}
+
+
+def _label(candidate: dict[str, Any], dimension: str) -> dict[str, Any] | None:
+    labels = (_proposal(candidate).get("metric_labels") or {}).get("labels") or {}
+    label = labels.get(dimension)
+    return label if isinstance(label, dict) else None
+
+
+def _bucket(candidate: dict[str, Any], dimension: str) -> str:
+    label = _label(candidate, dimension)
+    return str((label or {}).get("bucket") or "")
+
+
+def _retro(candidate: dict[str, Any]) -> dict[str, Any]:
+    retro = _proposal(candidate).get("retro")
+    return retro if isinstance(retro, dict) else {}
+
+
+def _candidate_score(candidate: dict[str, Any]) -> float:
+    score = (_proposal(candidate).get("influence_score") or {}).get("score")
+    if isinstance(score, (int, float)):
+        return float(score)
+    return 0.0
+
+
+def _score_components(candidate: dict[str, Any]) -> dict[str, Any]:
+    components = (_proposal(candidate).get("influence_score") or {}).get("components")
+    return components if isinstance(components, dict) else {}
+
+
+def _component_value(candidate: dict[str, Any], component: str) -> float | None:
+    raw = _score_components(candidate).get(component)
+    value = raw.get("value") if isinstance(raw, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return max(0.0, min(1.0, float(value)))
+    dimension = COMPONENT_DIMENSIONS.get(component)
+    if not dimension:
+        return None
+    bucket = _bucket(candidate, dimension)
+    if dimension == "risk":
+        return RISK_BUCKET_VALUES.get(bucket)
+    return BUCKET_VALUES.get(bucket)
+
+
+def _actual_success_score(candidate: dict[str, Any]) -> float | None:
+    """Approximate realised result quality from published metric labels.
+
+    This is deliberately simple and explainable.  It is used only for replay
+    safety checks, not as a secret strategy score.
+    """
+
+    values = [
+        BUCKET_VALUES[bucket]
+        for dimension in POSITIVE_REPLAY_DIMENSIONS
+        if (bucket := _bucket(candidate, dimension)) in BUCKET_VALUES
+    ]
+    if not values:
+        score = _candidate_score(candidate)
+        return max(0.0, min(1.0, score / 100)) if score else None
+    realised = sum(values) / len(values)
+    risk = RISK_BUCKET_VALUES.get(_bucket(candidate, "risk"))
+    if risk is not None:
+        realised -= risk * 0.2
+    return round(max(0.0, min(1.0, realised)), 3)
+
+
+def _rule_hits(candidate: dict[str, Any]) -> list[str]:
+    hits: list[str] = []
+    attention = _bucket(candidate, "attention")
+    retention = _bucket(candidate, "retention")
+    action = _bucket(candidate, "action")
+    trust = _bucket(candidate, "trust")
+    risk = _bucket(candidate, "risk")
+    bias = str(_retro(candidate).get("bias_direction") or "")
+
+    if attention in HIGH_BUCKETS and retention in LOW_BUCKETS:
+        hits.append("retention_gap_after_attention")
+    if attention in HIGH_BUCKETS and action in LOW_BUCKETS:
+        hits.append("action_gap_after_attention")
+    if trust in HIGH_BUCKETS:
+        hits.append("trust_signal_strength")
+    if risk in {"mid", "high", "spike"}:
+        hits.append("risk_pressure")
+    if bias == "over":
+        hits.append("prediction_over_optimistic")
+    if bias == "under":
+        hits.append("prediction_under_optimistic")
+    return hits
+
+
+def _rule_conflicts(candidate: dict[str, Any], rule_key: str) -> list[str]:
+    attention = _bucket(candidate, "attention")
+    retention = _bucket(candidate, "retention")
+    action = _bucket(candidate, "action")
+    trust = _bucket(candidate, "trust")
+    risk = _bucket(candidate, "risk")
+    conflicts: list[str] = []
+
+    if rule_key == "retention_gap_after_attention" and attention in HIGH_BUCKETS and retention in HIGH_BUCKETS:
+        conflicts.append("retention_strength_after_attention")
+    if rule_key == "action_gap_after_attention" and attention in HIGH_BUCKETS and action in HIGH_BUCKETS:
+        conflicts.append("action_strength_after_attention")
+    if rule_key == "trust_signal_strength" and trust in LOW_BUCKETS:
+        conflicts.append("trust_signal_absent")
+    if rule_key == "risk_pressure" and risk in {"zero", "low"}:
+        conflicts.append("risk_absent")
+
+    hits = set(_rule_hits(candidate))
+    conflicts.extend(sorted(CONFLICTING_RULES.get(rule_key, set()) & hits))
+    return conflicts
+
+
+def _estimated_adjustment_delta(candidate: dict[str, Any], adjustment: dict[str, Any]) -> float | None:
+    component = str(adjustment.get("component") or "")
+    direction = str(adjustment.get("direction") or "")
+    amount = adjustment.get("amount")
+    if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+        return None
+    value = _component_value(candidate, component)
+    if value is None:
+        return None
+
+    # Positive delta means the proposed adjustment would have treated this
+    # historical case as more promising; negative delta means more conservative.
+    if component == "RiskPenalty" or direction == "increase_penalty":
+        delta = -value * float(amount) * 100
+    elif direction in {"increase_weight", "increase_prior"}:
+        delta = (value - 0.5) * float(amount) * 100
+    elif direction == "decrease_prior":
+        delta = (0.5 - value) * float(amount) * 100
+    else:
+        delta = 0.0
+    return round(delta, 3)
+
+
+RULE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
+    "retention_gap_after_attention": {
+        "component": "RetentionDesign",
+        "direction": "increase_weight",
+        "amount": 0.04,
+        "recommendation": "连续内容能拿到注意力但留存偏弱，后续预演应更重视中段结构、节奏和信息密度。",
+    },
+    "action_gap_after_attention": {
+        "component": "BusinessValue",
+        "direction": "increase_weight",
+        "amount": 0.04,
+        "recommendation": "连续内容有曝光但缺少关注/点击/转化，后续预演应更重视行动路径和商业目标。",
+    },
+    "trust_signal_strength": {
+        "component": "PersuasionScore",
+        "direction": "increase_prior",
+        "amount": 0.03,
+        "recommendation": "连续内容出现较强信任/互动信号，相关表达方式可以作为账号优势候选。",
+    },
+    "risk_pressure": {
+        "component": "RiskPenalty",
+        "direction": "increase_penalty",
+        "amount": 0.05,
+        "recommendation": "连续内容出现风险或负反馈，后续预演应更严格扣风险分。",
+    },
+    "prediction_over_optimistic": {
+        "component": "PlatformReachPotential",
+        "direction": "decrease_prior",
+        "amount": 0.04,
+        "recommendation": "连续预测过度乐观，后续预演应下调冷启动分发预期。",
+    },
+    "prediction_under_optimistic": {
+        "component": "PlatformReachPotential",
+        "direction": "increase_prior",
+        "amount": 0.03,
+        "recommendation": "连续预测偏保守，后续预演可适度上调该账号/题材的分发潜力。",
+    },
+}
+
+
+def summarize_learning_patterns(
+    candidates: list[dict[str, Any]],
+    *,
+    min_support: int = 3,
+) -> dict[str, Any]:
+    """Summarise repeated retrospective signals without writing state."""
+
+    usable = [
+        candidate for candidate in candidates
+        if candidate.get("status") in {"pending", "accepted"}
+        and _proposal(candidate).get("kind") == "published_metric_retro"
+    ]
+    counter: Counter[str] = Counter()
+    evidence_by_rule: dict[str, list[dict[str, Any]]] = {}
+    for candidate in usable:
+        for rule_key in _rule_hits(candidate):
+            counter[rule_key] += 1
+            evidence_by_rule.setdefault(rule_key, []).append(candidate)
+
+    if not counter:
+        return {
+            "version": GOVERNANCE_VERSION,
+            "status": "no_pattern",
+            "sample_size": len(usable),
+            "min_support": min_support,
+            "patterns": [],
+        }
+
+    patterns = [
+        {
+            "rule_key": rule_key,
+            "support_count": count,
+            "ready": count >= min_support,
+            "recommendation": RULE_RECOMMENDATIONS[rule_key]["recommendation"],
+        }
+        for rule_key, count in counter.most_common()
+    ]
+    ready = [pattern for pattern in patterns if pattern["ready"]]
+    return {
+        "version": GOVERNANCE_VERSION,
+        "status": "ready" if ready else "insufficient_evidence",
+        "sample_size": len(usable),
+        "min_support": min_support,
+        "patterns": patterns,
+        "top_rule_key": ready[0]["rule_key"] if ready else patterns[0]["rule_key"],
+        "top_support_count": ready[0]["support_count"] if ready else patterns[0]["support_count"],
+        "_evidence": evidence_by_rule,
+    }
+
+
+def propose_weight_candidate_from_recent_retros(
+    store: Any,
+    *,
+    user_id: str = "default",
+    account_id: str | None = None,
+    platform: str | None = None,
+    window: int = 12,
+    min_support: int = 3,
+) -> dict[str, Any]:
+    """Create a pending weight candidate if repeated signals cross threshold."""
+
+    candidates = store.list_learning_candidates(
+        candidate_type="memory",
+        user_id=user_id,
+        account_id=account_id,
+        platform=platform,
+        limit=window,
+    )
+    summary = summarize_learning_patterns(candidates, min_support=min_support)
+    if summary["status"] != "ready":
+        public_summary = {key: value for key, value in summary.items() if key != "_evidence"}
+        return {
+            **public_summary,
+            "weight_candidate_id": None,
+            "candidate_status": None,
+        }
+
+    rule_key = str(summary["top_rule_key"])
+    existing = [
+        candidate for candidate in store.list_learning_candidates(
+            candidate_type="weight",
+            status="pending",
+            user_id=user_id,
+            account_id=account_id,
+            platform=platform,
+            limit=50,
+        )
+        if _proposal(candidate).get("rule_key") == rule_key
+    ]
+    if existing:
+        public_summary = {key: value for key, value in summary.items() if key != "_evidence"}
+        return {
+            **public_summary,
+            "status": "candidate_exists",
+            "weight_candidate_id": existing[0]["id"],
+            "candidate_status": existing[0]["status"],
+        }
+
+    support = summary["_evidence"][rule_key][:summary["top_support_count"]]
+    rule = RULE_RECOMMENDATIONS[rule_key]
+    receipt_refs: list[str] = []
+    evidence_refs: list[str] = []
+    prediction_ids: list[str] = []
+    scores: list[float] = []
+    for candidate in support:
+        evidence_refs.append(f"learning_candidate:{candidate['id']}")
+        evidence_refs.extend(str(ref) for ref in candidate.get("evidence_refs") or [])
+        receipt_refs.extend(str(ref) for ref in candidate.get("receipt_refs") or [])
+        if candidate.get("prediction_id"):
+            prediction_ids.append(str(candidate["prediction_id"]))
+        score = _candidate_score(candidate)
+        if score:
+            scores.append(score)
+
+    # Preserve order while removing duplicates.
+    receipt_refs = list(dict.fromkeys(receipt_refs))
+    evidence_refs = list(dict.fromkeys(evidence_refs))
+    prediction_ids = list(dict.fromkeys(prediction_ids))
+    avg_score = round(sum(scores) / len(scores), 1) if scores else None
+    candidate = store.create_learning_candidate(
+        candidate_type="weight",
+        user_id=user_id,
+        account_id=account_id,
+        platform=platform,
+        receipt_refs=receipt_refs,
+        evidence_refs=evidence_refs,
+        prediction_id=prediction_ids[0] if len(prediction_ids) == 1 else None,
+        proposal={
+            "kind": "influence_weight_adjustment",
+            "version": GOVERNANCE_VERSION,
+            "score_version": INFLUENCE_SCORE_VERSION,
+            "rule_key": rule_key,
+            "support_count": summary["top_support_count"],
+            "sample_size": summary["sample_size"],
+            "observed_patterns": [
+                {key: pattern[key] for key in ("rule_key", "support_count", "recommendation")}
+                for pattern in summary["patterns"]
+            ],
+            "proposed_adjustment": {
+                "component": rule["component"],
+                "direction": rule["direction"],
+                "amount": rule["amount"],
+            },
+            "recommendation": rule["recommendation"],
+            "average_influence_score": avg_score,
+            "guardrail": "pending weight candidate only; do not change durable strategy weights without review and replay",
+        },
+        confidence=min(0.86, 0.42 + 0.08 * summary["top_support_count"] + (0.08 if avg_score else 0.0)),
+    )
+    public_summary = {key: value for key, value in summary.items() if key != "_evidence"}
+    return {
+        **public_summary,
+        "status": "candidate_created",
+        "weight_candidate_id": candidate["id"],
+        "candidate_status": candidate["status"],
+    }
+
+
+def replay_weight_candidate(
+    store: Any,
+    candidate_id: str,
+    *,
+    window: int = 50,
+    min_support: int | None = None,
+    max_conflict_ratio: float = 0.25,
+    max_harm_count: int = 0,
+) -> dict[str, Any]:
+    """Replay a pending weight candidate against historical retrospectives.
+
+    The replay is an internal safety gate.  It explains whether the proposed
+    calibration is consistent with past published-result evidence, but it does
+    not mutate durable strategy weights.
+    """
+
+    if not candidate_id:
+        raise ValueError("candidate_id is required")
+    candidate = store.get_learning_candidate(candidate_id)
+    proposal = _proposal(candidate)
+    if candidate.get("candidate_type") != "weight" or proposal.get("kind") != "influence_weight_adjustment":
+        return {
+            "version": WEIGHT_REPLAY_VERSION,
+            "candidate_id": candidate_id,
+            "candidate_status": candidate.get("status"),
+            "status": "invalid_candidate",
+            "can_accept": False,
+            "required_next_steps": ["选择 influence_weight_adjustment 类型的 weight 候选"],
+            "guardrail": "replay only; no durable weights changed",
+        }
+
+    rule_key = str(proposal.get("rule_key") or "")
+    adjustment = proposal.get("proposed_adjustment")
+    if not rule_key or not isinstance(adjustment, dict):
+        return {
+            "version": WEIGHT_REPLAY_VERSION,
+            "candidate_id": candidate_id,
+            "candidate_status": candidate.get("status"),
+            "status": "invalid_candidate",
+            "can_accept": False,
+            "required_next_steps": ["候选缺少 rule_key 或 proposed_adjustment"],
+            "guardrail": "replay only; no durable weights changed",
+        }
+
+    required_support = max(1, int(min_support or proposal.get("support_count") or 3))
+    retros = [
+        item for item in store.list_learning_candidates(
+            candidate_type="memory",
+            user_id=candidate.get("user_id") or "default",
+            account_id=candidate.get("account_id"),
+            platform=candidate.get("platform"),
+            limit=max(1, min(int(window), 500)),
+        )
+        if item.get("status") in {"pending", "accepted"}
+        and _proposal(item).get("kind") == "published_metric_retro"
+    ]
+
+    support_examples: list[str] = []
+    conflict_examples: list[dict[str, Any]] = []
+    harm_examples: list[dict[str, Any]] = []
+    replayed: list[dict[str, Any]] = []
+    support_count = 0
+    conflict_count = 0
+    harm_count = 0
+    for retro_candidate in retros:
+        hits = _rule_hits(retro_candidate)
+        support = rule_key in hits
+        conflicts = _rule_conflicts(retro_candidate, rule_key)
+        actual_success = _actual_success_score(retro_candidate)
+        estimated_delta = _estimated_adjustment_delta(retro_candidate, adjustment)
+        harmful = (
+            actual_success is not None
+            and estimated_delta is not None
+            and (
+                (actual_success >= 0.68 and estimated_delta < -1.0)
+                or (actual_success <= 0.32 and estimated_delta > 1.0)
+            )
+        )
+        if support:
+            support_count += 1
+            support_examples.append(str(retro_candidate["id"]))
+        if conflicts:
+            conflict_count += 1
+            conflict_examples.append({
+                "candidate_id": retro_candidate["id"],
+                "conflicts": conflicts,
+            })
+        if harmful:
+            harm_count += 1
+            harm_examples.append({
+                "candidate_id": retro_candidate["id"],
+                "actual_success": actual_success,
+                "estimated_delta": estimated_delta,
+            })
+        replayed.append({
+            "candidate_id": retro_candidate["id"],
+            "support": support,
+            "conflicts": conflicts,
+            "actual_success": actual_success,
+            "estimated_delta": estimated_delta,
+        })
+
+    sample_size = len(retros)
+    conflict_ratio = round(conflict_count / sample_size, 3) if sample_size else 0.0
+    if sample_size < required_support:
+        status = "insufficient_replay_samples"
+        next_steps = ["至少需要更多发布复盘样本后再接受权重候选"]
+    elif support_count < required_support:
+        status = "failed_support"
+        next_steps = ["历史样本没有稳定复现该规律，保持候选 pending 或拒绝"]
+    elif conflict_ratio > max_conflict_ratio:
+        status = "failed_conflict"
+        next_steps = ["历史样本存在较高反例比例，先拆分账号/题材/平台上下文再判断"]
+    elif harm_count > max_harm_count:
+        status = "failed_historical_harm"
+        next_steps = ["回放显示可能误伤成功内容，先降低调整幅度或补充分组规则"]
+    else:
+        status = "passed"
+        next_steps = ["可以接受该候选，但仍只进入候选状态；永久权重需由后续策略模块单独生效"]
+
+    can_accept = status == "passed" and candidate.get("status") == "pending"
+    return {
+        "version": WEIGHT_REPLAY_VERSION,
+        "candidate_id": candidate_id,
+        "candidate_status": candidate.get("status"),
+        "status": status,
+        "can_accept": can_accept,
+        "rule_key": rule_key,
+        "proposed_adjustment": adjustment,
+        "sample_size": sample_size,
+        "required_support": required_support,
+        "support_count": support_count,
+        "conflict_count": conflict_count,
+        "conflict_ratio": conflict_ratio,
+        "harm_count": harm_count,
+        "support_examples": support_examples[:8],
+        "conflict_examples": conflict_examples[:8],
+        "harm_examples": harm_examples[:8],
+        "replayed_candidates": replayed[:20],
+        "required_next_steps": next_steps,
+        "guardrail": "replay only; no durable weights changed",
+    }
+
+
+def _confidence(value: Any) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return max(0.0, min(1.0, float(value)))
+    return 0.5
+
+
+def _strategy_candidate_from_weight(
+    store: Any,
+    candidate: dict[str, Any],
+    replay: dict[str, Any],
+) -> dict[str, Any]:
+    """Create a strategy candidate from an accepted weight candidate if scoped.
+
+    This is the bridge from "the model found a repeated signal" to "the account
+    strategy may need an explicit revision/experiment".  It never creates an
+    account project as a side effect.
+    """
+
+    account_id = str(candidate.get("account_id") or "").strip()
+    if not account_id:
+        return {
+            "status": "skipped",
+            "reason": "missing_account_id",
+            "strategy_candidate_id": None,
+        }
+
+    from .account_lifecycle import AccountLifecycleService
+
+    user_id = str(candidate.get("user_id") or "default").strip() or "default"
+    lifecycle = AccountLifecycleService(store)
+    project = lifecycle.get_active_project(user_id=user_id, account_id=account_id)
+    if project is None:
+        return {
+            "status": "skipped",
+            "reason": "no_active_strategy_project",
+            "strategy_candidate_id": None,
+        }
+
+    for existing in lifecycle.list_strategy_candidates(
+        user_id=user_id,
+        account_id=account_id,
+        project_id=project["id"],
+    ):
+        if existing.get("proposal", {}).get("source_weight_candidate_id") == candidate["id"]:
+            return {
+                "status": "exists",
+                "project_id": project["id"],
+                "strategy_candidate_id": existing["id"],
+                "candidate": existing,
+            }
+
+    proposal = _proposal(candidate)
+    adjustment = proposal.get("proposed_adjustment") if isinstance(proposal.get("proposed_adjustment"), dict) else {}
+    evidence_refs = [
+        "learning_candidate:" + str(candidate["id"]),
+        *(str(ref) for ref in candidate.get("evidence_refs") or []),
+        *(str(ref) for ref in candidate.get("receipt_refs") or []),
+        *(f"learning_candidate:{ref}" for ref in replay.get("support_examples") or []),
+    ]
+    evidence_refs = list(dict.fromkeys(ref for ref in evidence_refs if ref))
+    created = lifecycle.create_strategy_candidate(
+        user_id=user_id,
+        account_id=account_id,
+        project_id=project["id"],
+        trigger="weight_candidate_replay",
+        proposal={
+            "type": "calibrate_influence_weight",
+            "source_weight_candidate_id": candidate["id"],
+            "rule_key": proposal.get("rule_key"),
+            "proposed_adjustment": adjustment,
+            "recommendation": proposal.get("recommendation"),
+            "replay_summary": {
+                "version": replay.get("version"),
+                "status": replay.get("status"),
+                "support_count": replay.get("support_count"),
+                "sample_size": replay.get("sample_size"),
+                "conflict_ratio": replay.get("conflict_ratio"),
+                "harm_count": replay.get("harm_count"),
+            },
+            "scope": {
+                "user_id": user_id,
+                "account_id": account_id,
+                "platform": candidate.get("platform"),
+                "project_id": project["id"],
+            },
+            "next_action": "把该权重校准转化为下一轮内容实验或定位修订草案，不直接修改永久权重。",
+            "guardrail": "strategy candidate only; no durable positioning or weight changed",
+        },
+        evidence_refs=evidence_refs,
+        confidence=min(0.9, _confidence(candidate.get("confidence")) + 0.06),
+    )
+    return {
+        "status": "created",
+        "project_id": project["id"],
+        "strategy_candidate_id": created["id"],
+        "candidate": created,
+    }
+
+
+def decide_weight_candidate_with_replay(
+    store: Any,
+    candidate_id: str,
+    *,
+    decision: str,
+    reason: str | None = None,
+    window: int = 50,
+    min_support: int | None = None,
+) -> dict[str, Any]:
+    """Accept/reject a weight candidate through replay governance.
+
+    Accepting here only marks the candidate as accepted.  It does not mutate
+    durable strategy weights; a later strategy module must consume accepted
+    candidates with its own versioned migration.
+    """
+
+    decision = str(decision or "").strip()
+    if decision not in {"accepted", "rejected"}:
+        raise ValueError("weight candidate decision must be accepted or rejected")
+    current = store.get_learning_candidate(candidate_id)
+    if current.get("candidate_type") != "weight":
+        raise ValueError("candidate_id must reference a weight learning candidate")
+    replay = replay_weight_candidate(
+        store,
+        candidate_id,
+        window=window,
+        min_support=min_support,
+    )
+    if current.get("status") == decision:
+        strategy_candidate = (
+            _strategy_candidate_from_weight(store, current, replay)
+            if decision == "accepted" and replay.get("status") == "passed"
+            else {"status": "skipped", "reason": "not_accepted", "strategy_candidate_id": None}
+        )
+        return {
+            "status": decision,
+            "already_decided": True,
+            "candidate": current,
+            "replay": replay,
+            "strategy_candidate": strategy_candidate,
+            "strategy_candidate_id": strategy_candidate.get("strategy_candidate_id"),
+            "guardrail": "candidate already decided; no durable weights changed",
+        }
+    if decision == "accepted" and not replay.get("can_accept"):
+        return {
+            "status": "blocked",
+            "reason": "replay_not_passed",
+            "candidate": current,
+            "replay": replay,
+            "guardrail": "candidate not changed; no durable weights changed",
+        }
+    decided = store.decide_learning_candidate(
+        candidate_id,
+        status=decision,
+        reason=reason or (
+            "weight replay passed; accepted as governed candidate"
+            if decision == "accepted"
+            else "rejected by reviewer"
+        ),
+    )
+    strategy_candidate = (
+        _strategy_candidate_from_weight(store, decided, replay)
+        if decision == "accepted"
+        else {"status": "skipped", "reason": "rejected", "strategy_candidate_id": None}
+    )
+    return {
+        "status": decision,
+        "candidate": decided,
+        "replay": replay,
+        "strategy_candidate": strategy_candidate,
+        "strategy_candidate_id": strategy_candidate.get("strategy_candidate_id"),
+        "guardrail": "candidate status changed only; no durable weights changed",
+    }

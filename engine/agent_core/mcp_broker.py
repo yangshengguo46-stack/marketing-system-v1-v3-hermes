@@ -36,10 +36,10 @@ PLAYWRIGHT_MINIMAL_TOOLS = frozenset({
     "browser_wait_for",
     "browser_tabs",
     "browser_close",
-    "browser_evaluate",
 })
 
 PLAYWRIGHT_FORBIDDEN_TOOLS = frozenset({
+    "browser_evaluate",
     "browser_run_code_unsafe",
     "browser_file_upload",
     "browser_fill_form",

@@ -34,13 +34,16 @@ _EXPLICIT: dict[str, CapabilitySpec] = {}
 _PREFIX_RULES: list[tuple[str, CapabilityLevel, bool, str]] = [
     ("marketing_read_", CapabilityLevel.READ_ONLY, False, "只读认知 — 自动允许"),
     ("marketing_draft_", CapabilityLevel.REVERSIBLE_WRITE, False, "可逆业务写入 — 自动允许"),
+    ("marketing_plan_", CapabilityLevel.REVERSIBLE_WRITE, False, "计划声明 — 可逆结构化操作，自动允许"),
     ("marketing_accounts_", CapabilityLevel.CONTROLLED_RESOURCE, True, "账号操作 — 受控资源，首次/按范围确认"),
     ("marketing_trending_", CapabilityLevel.CONTROLLED_RESOURCE, True, "趋势抓取 — 受控资源，按范围确认"),
     ("marketing_workflow_", CapabilityLevel.CONTROLLED_RESOURCE, True, "巡检编排 — 受控资源，首次确认"),
     ("marketing_effect_", CapabilityLevel.EXTERNAL_EFFECT, True, "外部副作用 — 每次明确确认"),
     ("marketing_session_", CapabilityLevel.CONTROLLED_RESOURCE, True, "会话操作 — 受控资源，按范围确认"),
     ("marketing_research_", CapabilityLevel.READ_ONLY, False, "只读研究 — 自动允许"),
+    ("marketing_publish_", CapabilityLevel.CONTROLLED_RESOURCE, True, "发布准备 — 受控资源，仅允许预检与页面准备"),
     ("marketing_skill_", CapabilityLevel.CONTROLLED_RESOURCE, True, "技能治理 — 受控资源，首次确认"),
+    ("marketing_prepare_", CapabilityLevel.READ_ONLY, False, "只读准备 — 生成计划/命令但不执行"),
     ("system_", CapabilityLevel.SYSTEM_FORBIDDEN, False, "系统能力 — 桌面 Agent 永久禁止"),
 ]
 

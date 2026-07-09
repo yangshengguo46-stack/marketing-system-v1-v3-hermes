@@ -32,17 +32,60 @@ def get_task_context() -> dict | None:
     return _current_task_ctx.get()
 
 
+_RUNTIME_KWARG_KEYS = {
+    "task_id",
+    "session_id",
+    "user_task",
+    "enabled_tools",
+    "turn_id",
+    "api_request_id",
+}
+
+
+def _normalise_invocation_args(config, kwargs: dict) -> dict:
+    """Extract tool arguments from Hermes' registry invocation shape.
+
+    Hermes' registry dispatch calls handlers as ``handler(args, task_id=...)``.
+    Some direct tests and legacy wrappers call them as ``handler(None, **args)``.
+    The marketing gateway must support both shapes; otherwise the model's
+    visible function-call arguments are logged correctly while the business
+    handler receives an empty parameter dict.
+    """
+    params: dict = {}
+    if isinstance(config, dict):
+        params.update(config)
+    elif config is not None:
+        # Be tolerant of pydantic/dataclass-ish config objects without binding
+        # the gateway to any Hermes implementation detail.
+        if hasattr(config, "model_dump"):
+            try:
+                dumped = config.model_dump()
+                if isinstance(dumped, dict):
+                    params.update(dumped)
+            except Exception:
+                pass
+        elif hasattr(config, "__dict__"):
+            params.update({k: v for k, v in vars(config).items() if not k.startswith("_")})
+
+    for key, value in (kwargs or {}).items():
+        if key in _RUNTIME_KWARG_KEYS:
+            continue
+        params[key] = value
+    return params
+
+
 def _wrap_handler(tool_name: str, handler_callable):
     """Return a handler that enforces policy and normalises output.
 
-    Hermes passes a config object as the first positional argument.
-    The actual tool parameters arrive as **kwargs.
+    Hermes passes the actual tool parameters as the first positional argument
+    and runtime metadata as **kwargs.  Legacy direct calls may still pass the
+    tool parameters as **kwargs, so both shapes are normalised here.
     """
     decision = _policy.evaluate(tool_name)
 
     def wrapped(_config=None, **kwargs) -> str:
         ctx = get_task_context()
-        kwargs = dict(kwargs)
+        kwargs = _normalise_invocation_args(_config, dict(kwargs))
         # The selected account belongs to the durable task context, not to the
         # model.  Inject it before policy evaluation and approval persistence so
         # every controlled Electron action is bound to the same account.
