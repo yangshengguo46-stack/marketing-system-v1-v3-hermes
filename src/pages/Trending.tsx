@@ -4,14 +4,16 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { api, PLATFORM_NAMES, PLATFORM_COLORS } from '@/api/client'
 import { Radio, TrendingUp } from 'lucide-react'
+import { formatAudienceHeat } from '@/lib/formatters'
 
 const PLATFORM_TABS = [
   { id: 'all', label: '全部平台' },
-  { id: 'weibo', label: '微博' },
   { id: 'douyin', label: '抖音' },
   { id: 'bilibili', label: 'B站' },
   { id: 'zhihu', label: '知乎' },
 ]
+
+const HIDDEN_PLATFORMS = new Set(['weibo'])
 
 export default function Trending() {
   const [data, setData] = useState<Record<string, unknown> | null>(null)
@@ -34,7 +36,7 @@ export default function Trending() {
     return () => { unsubscribe?.(); window.clearInterval(timer) }
   }, [load])
 
-  const allTrends = (data?.top_trends as TrendItem[]) || []
+  const allTrends = ((data?.top_trends as TrendItem[]) || []).filter((trend) => !HIDDEN_PLATFORMS.has(trend.source_platform))
   const trends = activeTab === 'all'
     ? allTrends
     : allTrends.filter((trend) => trend.source_platform === activeTab)
@@ -104,7 +106,7 @@ export default function Trending() {
                   style={{color: PLATFORM_COLORS[t.source_platform], borderColor: `${PLATFORM_COLORS[t.source_platform]}30`}}>
                   {PLATFORM_NAMES[t.source_platform]}
                 </Badge>
-                {(t.heat || t.heat_value) && <span className="text-xs text-muted-foreground min-w-[64px] text-right tabular-nums">{t.heat || t.heat_value}</span>}
+                {(t.heat || t.heat_value) && <span className="text-xs text-muted-foreground min-w-[88px] text-right tabular-nums">{formatAudienceHeat(t.heat || t.heat_value)}</span>}
               </CardContent>
             </Card>
           ))}

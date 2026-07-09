@@ -20,15 +20,22 @@ if str(HERMES_ROOT) not in sys.path:
 
 
 def emit(event: str, **payload) -> None:
-    print(json.dumps({"event": event, **payload}, ensure_ascii=False), flush=True)
+    sys.stdout.write(json.dumps({"event": event, **payload}, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
 
 
 def qr_data_uri(value: str) -> str:
-    import qrcode
+    try:
+        import qrcode
+    except Exception:
+        return ""
 
-    stream = io.BytesIO()
-    qrcode.make(value).save(stream, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(stream.getvalue()).decode("ascii")
+    try:
+        stream = io.BytesIO()
+        qrcode.make(value).save(stream, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(stream.getvalue()).decode("ascii")
+    except Exception:
+        return ""
 
 
 def env_values() -> dict[str, str]:
@@ -57,14 +64,21 @@ def hermes_executable() -> str:
 
 
 def restart_gateway() -> None:
-    result = subprocess.run(
-        [hermes_executable(), "gateway", "restart"],
+    executable = hermes_executable()
+    subprocess.run(
+        [executable, "gateway", "stop"],
         capture_output=True,
         text=True,
         timeout=30,
     )
+    result = subprocess.run(
+        [executable, "gateway", "start"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
     if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "Hermes gateway restart failed").strip())
+        raise RuntimeError((result.stderr or result.stdout or "Hermes gateway start failed").strip())
 
 
 def status() -> None:
@@ -92,9 +106,18 @@ def configure() -> None:
     if not target:
         raise RuntimeError("缺少桌面数据目录")
     values = env_values()
-    changed = values.get("MARKETING_OS_CONFIG_DIR") != target
+    desired = {"MARKETING_OS_CONFIG_DIR": target}
+    for key in (
+        "MARKETING_OS_API_BASE",
+        "MARKETING_OS_API_TOKEN",
+        "MARKETING_OS_MOBILE_BRIDGE_ENABLED",
+    ):
+        current = str(os.environ.get(key, "")).strip()
+        if current:
+            desired[key] = current
+    changed = any(values.get(key, "") != value for key, value in desired.items())
     if changed:
-        save_values({"MARKETING_OS_CONFIG_DIR": target})
+        save_values(desired)
         configured = bool(
             values.get("WEIXIN_ACCOUNT_ID")
             or (values.get("FEISHU_APP_ID") and values.get("FEISHU_APP_SECRET"))
@@ -106,11 +129,15 @@ def configure() -> None:
 
 async def connect_weixin() -> None:
     import builtins
-    import qrcode
     from gateway.platforms.weixin import qr_login
 
+    try:
+        import qrcode
+    except Exception:
+        qrcode = None  # type: ignore[assignment]
+
     original_print = builtins.print
-    original_ascii = qrcode.QRCode.print_ascii
+    original_ascii = qrcode.QRCode.print_ascii if qrcode is not None else None
     qr_sent = False
 
     def intercepted_print(*args, **kwargs):
@@ -121,12 +148,14 @@ async def connect_weixin() -> None:
             emit("qr", platform="weixin", qr_url=line, qr_image=qr_data_uri(line))
 
     builtins.print = intercepted_print
-    qrcode.QRCode.print_ascii = lambda *_args, **_kwargs: None
+    if qrcode is not None:
+        qrcode.QRCode.print_ascii = lambda *_args, **_kwargs: None
     try:
         credentials = await qr_login(str(HERMES_HOME), timeout_seconds=480)
     finally:
         builtins.print = original_print
-        qrcode.QRCode.print_ascii = original_ascii
+        if qrcode is not None and original_ascii is not None:
+            qrcode.QRCode.print_ascii = original_ascii
 
     if not credentials:
         raise RuntimeError("微信扫码未完成或二维码已失效")

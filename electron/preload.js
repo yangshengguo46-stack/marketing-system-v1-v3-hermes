@@ -1,17 +1,19 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('marketingOS', {
-  // Hermes API
-  api: (method, path, body) => ipcRenderer.invoke('hermes:api', { method, path, body }),
+  // Marketing Agent Runtime API
+  runtimeApi: (method, path, body) => ipcRenderer.invoke('runtime:api', { method, path, body }),
 
-  // Hermes 状态
-  getHermesStatus: () => ipcRenderer.invoke('hermes:status'),
-  restartHermes: () => ipcRenderer.invoke('hermes:restart'),
-  onHermesStatus: (cb) => {
+  // Marketing Agent Runtime 状态
+  getRuntimeStatus: () => ipcRenderer.invoke('runtime:status'),
+  restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
+  onRuntimeStatus: (cb) => {
     const h = (_e, d) => cb(d)
-    ipcRenderer.on('hermes:status', h)
-    return () => ipcRenderer.removeListener('hermes:status', h)
+    ipcRenderer.on('runtime:status', h)
+    return () => ipcRenderer.removeListener('runtime:status', h)
   },
+  setProviderSecret: (name, value) => ipcRenderer.invoke('provider:set-secret', { name, value }),
+  openAttribution: (url) => ipcRenderer.invoke('app:open-attribution', url),
 
   // 内嵌浏览器登录（旧路径，feature flag 关闭时使用）
   openLoginBrowser: (platform, accountId) => ipcRenderer.invoke('login:open', { platform, account_id: accountId }),
@@ -27,13 +29,12 @@ contextBridge.exposeInMainWorld('marketingOS', {
   closeAllLoginBrowsers: () => ipcRenderer.invoke('login:close-all'),
   navigateLoginBrowser: (platform, accountId, action) => ipcRenderer.invoke('login:navigate', { platform, account_id: accountId, action }),
   getLoginCookies: (platform, accountId) => ipcRenderer.invoke('login:cookies', { platform, account_id: accountId }),
-  scrapeIndustry: (platform, keyword, accountId) => ipcRenderer.invoke('session:scrape-industry', { platform, keyword, account_id: accountId }),
-  syncAccountSession: (platform, username, accountId) => ipcRenderer.invoke('session:sync-account', { platform, username, account_id: accountId }),
   runIntelligence: () => ipcRenderer.invoke('intelligence:run'),
   onIntelligenceProgress: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on('intelligence:progress', h); return () => ipcRenderer.removeListener('intelligence:progress', h) },
   onTrendingUpdated: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on('trending:updated', h); return () => ipcRenderer.removeListener('trending:updated', h) },
   getChannelStatus: () => ipcRenderer.invoke('channels:status'),
   connectChannel: (platform) => ipcRenderer.invoke('channels:connect', platform),
+  cancelChannel: (platform) => ipcRenderer.invoke('channels:cancel', platform),
   testChannel: (platform) => ipcRenderer.invoke('channels:test', platform),
   retryChannel: (deliveryId) => ipcRenderer.invoke('channels:retry', deliveryId),
   onChannelProgress: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on('channels:progress', h); return () => ipcRenderer.removeListener('channels:progress', h) },
@@ -53,6 +54,7 @@ contextBridge.exposeInMainWorld('marketingOS', {
 
   // Account health & diagnostics
   checkAccountHealth: (platform, username, accountId) => ipcRenderer.invoke('account:health', { platform, username, account_id: accountId }),
+  syncAccountMetrics: (accountId) => ipcRenderer.invoke('account:sync', { account_id: accountId }),
   clearAccountSession: (platform, accountId) => ipcRenderer.invoke('account:clear', { platform, account_id: accountId }),
   runNetworkDiagnostic: () => ipcRenderer.invoke('app:networkDiagnostic'),
 
@@ -60,4 +62,7 @@ contextBridge.exposeInMainWorld('marketingOS', {
   // before touching an Electron session. The renderer never supplies either.
   executeApprovedCapability: (approvalId, scope) =>
     ipcRenderer.invoke('agent:execute-approved-capability', { approvalId, scope }),
+  importMediaAttachment: (assetId) => ipcRenderer.invoke('media:import', { assetId }),
+  importStockImage: (assetId, candidate) => ipcRenderer.invoke('media:import-stock-image', { assetId, candidate }),
+  deleteMediaAttachmentForAsset: (assetId) => ipcRenderer.invoke('media:delete-for-asset', { assetId }),
 })

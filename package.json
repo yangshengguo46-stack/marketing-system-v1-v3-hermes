@@ -17,6 +17,7 @@
     "preview": "vite preview",
     "runtime:bootstrap": "./scripts/bootstrap-hermes-runtime.sh",
     "runtime:status": "./scripts/run-hermes-source.sh status",
+    "clean:local": "bash scripts/clean-local-artifacts.sh",
     "test:core": ".venv/bin/python -m pytest -q tests/test_agent_core.py",
     "test": ".venv/bin/python -m pytest -q && tsc --noEmit"
   },

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, Tray, Menu, nativeImage, safeStorage } = require('electron')
+const { app, BrowserWindow, ipcMain, session, Tray, Menu, nativeImage, safeStorage, dialog, shell } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
@@ -18,7 +18,14 @@ const channelProcesses = new Map()
 const agentEventStreams = new Map()
 let serverPort = 19519
 const isDev = !app.isPackaged
-const API_BASE = '/api/plugins/marketing-os'
+const API_BASE = '/api/marketing-os'
+
+function emitRuntimeStatus(payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('runtime:status', payload)
+  // Legacy channel kept while older renderer builds still listen on hermes:status.
+  mainWindow.webContents.send('hermes:status', payload)
+}
 
 // Per-install persistent API token — generated once, reused across restarts
 function loadOrCreateApiToken() {
@@ -48,6 +55,33 @@ const API_ALLOWLIST = [
   ['PUT', new RegExp(`^${API_BASE}/accounts/[^/]+/stats$`)],
   ['POST', new RegExp(`^${API_BASE}/accounts/[^/]+/video-metrics$`)],
   ['GET', new RegExp(`^${API_BASE}/accounts/[^/]+/video-metrics$`)],
+  ['GET', new RegExp(`^${API_BASE}/accounts/[^/]+/lifecycle$`)],
+  ['POST', new RegExp(`^${API_BASE}/accounts/[^/]+/lifecycle/bind-prospect$`)],
+  ['POST', new RegExp(`^${API_BASE}/accounts/[^/]+/mcp-sync$`)],
+  ['GET', new RegExp(`^${API_BASE}/lifecycle/prospect$`)],
+  ['POST', new RegExp(`^${API_BASE}/accounts/[^/]+/benchmarks/discover$`)],
+  ['GET', new RegExp(`^${API_BASE}/content/assets/[^/]+/attachment$`)],
+  ['GET', new RegExp(`^${API_BASE}/stock-images/status$`)],
+  ['POST', new RegExp(`^${API_BASE}/stock-images/search$`)],
+  ['GET', new RegExp(`^${API_BASE}/firecrawl/status$`)],
+  ['POST', new RegExp(`^${API_BASE}/firecrawl/search$`)],
+  ['GET', new RegExp(`^${API_BASE}/tts/index-tts2/status$`)],
+  ['POST', new RegExp(`^${API_BASE}/tts/volcengine/v1/synthesize$`)],
+  ['POST', new RegExp(`^${API_BASE}/content/production/plan$`)],
+  ['POST', new RegExp(`^${API_BASE}/content/production/preflight$`)],
+  ['GET', new RegExp(`^${API_BASE}/preflight/decision(?:\\?.*)?$`)],
+  ['POST', new RegExp(`^${API_BASE}/preflight/decision$`)],
+  ['GET', new RegExp(`^${API_BASE}/influence/score(?:\\?.*)?$`)],
+  ['GET', new RegExp(`^${API_BASE}/learning/candidates(?:\\?.*)?$`)],
+  ['GET', new RegExp(`^${API_BASE}/learning/weight-replay(?:\\?.*)?$`)],
+  ['POST', new RegExp(`^${API_BASE}/learning/weight-decision$`)],
+  ['POST', new RegExp(`^${API_BASE}/content/production/article-soft$`)],
+  ['POST', new RegExp(`^${API_BASE}/content/production/faceless-video$`)],
+  ['POST', new RegExp(`^${API_BASE}/content/production/from-experiment$`)],
+  ['POST', new RegExp(`^${API_BASE}/content/production/faceless-render/prepare$`)],
+  ['POST', new RegExp(`^${API_BASE}/content/production/faceless-render/animatic$`)],
+  ['POST', new RegExp(`^${API_BASE}/content/production/faceless-render/fill-image-materials$`)],
+  ['POST', new RegExp(`^${API_BASE}/content/production/faceless-render/final$`)],
   ['GET', new RegExp(`^${API_BASE}/suggestions$`)],
   ['GET', new RegExp(`^${API_BASE}/profiles$`)],
   ['PUT', new RegExp(`^${API_BASE}/profiles/[^/]+$`)],
@@ -56,6 +90,9 @@ const API_ALLOWLIST = [
   ['GET', new RegExp(`^${API_BASE}/publishing/tasks$`)],
   ['POST', new RegExp(`^${API_BASE}/publishing/tasks$`)],
   ['DELETE', new RegExp(`^${API_BASE}/publishing/tasks/[^/]+$`)],
+  ['GET', new RegExp(`^${API_BASE}/publishing/sql-tasks(?:\\?.*)?$`)],
+  ['POST', new RegExp(`^${API_BASE}/publishing/sql-tasks/[^/]+/query$`)],
+  ['POST', new RegExp(`^${API_BASE}/publishing/sql-tasks/[^/]+/metrics$`)],
   ['GET', new RegExp(`^${API_BASE}/analytics/summary$`)],
   ['GET', new RegExp(`^${API_BASE}/workflow/status$`)],
   ['PUT', new RegExp(`^${API_BASE}/workflow/status$`)],
@@ -66,7 +103,9 @@ const API_ALLOWLIST = [
   ['GET', new RegExp(`^${API_BASE}/intelligence/report$`)],
   ['POST', new RegExp(`^${API_BASE}/intelligence/report$`)],
   ['POST', new RegExp(`^/agent/sessions$`)],
+  ['GET', new RegExp(`^/agent/sessions(?:\\?.*)?$`)],
   ['GET', new RegExp(`^/agent/sessions/[^/]+$`)],
+  ['GET', new RegExp(`^/agent/sessions/[^/]+/messages$`)],
   ['POST', new RegExp(`^/agent/messages$`)],
   ['GET', new RegExp(`^/agent/runs/[^/]+$`)],
   ['GET', new RegExp(`^/agent/runs/[^/]+/events$`)],
@@ -91,15 +130,29 @@ const API_ALLOWLIST = [
   ['DELETE', new RegExp(`^${API_BASE}/content/assets/[^/]+$`)],
 ]
 
+function canonicalLocalApiPath(rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath.startsWith('/') || rawPath.startsWith('//')) {
+    throw new Error('Invalid local API path')
+  }
+  if (/[\\\x00-\x1f\x7f]/.test(rawPath) || /%(?:2f|5c)/i.test(rawPath)) {
+    throw new Error('Invalid encoded local API path')
+  }
+  const parsed = new URL(rawPath, 'http://marketing-os.local')
+  if (parsed.origin !== 'http://marketing-os.local' || parsed.username || parsed.password) {
+    throw new Error('Local API path escaped its origin')
+  }
+  return { pathname: parsed.pathname, requestPath: `${parsed.pathname}${parsed.search}` }
+}
+
 // 平台登录页
 const LOGIN_URLS = {
   douyin: 'https://creator.douyin.com/',
-  weibo: 'https://weibo.com/login.php',
   bilibili: 'https://passport.bilibili.com/login',
   xiaohongshu: 'https://www.xiaohongshu.com',
   kuaishou: 'https://www.kuaishou.com',
   zhihu: 'https://www.zhihu.com/signin',
   wechat_channels: 'https://channels.weixin.qq.com/login.html',
+  wechat_official: 'https://mp.weixin.qq.com/',
   youtube: 'https://accounts.google.com/signin',
   tiktok: 'https://www.tiktok.com/login',
   instagram: 'https://www.instagram.com/accounts/login/',
@@ -110,12 +163,12 @@ const LOGIN_URLS = {
 // 各平台 cookie 域名范围
 const COOKIE_DOMAINS = {
   douyin: ['.douyin.com'],
-  weibo: ['.weibo.com'],
   bilibili: ['.bilibili.com'],
   xiaohongshu: ['.xiaohongshu.com'],
   kuaishou: ['.kuaishou.com'],
   zhihu: ['.zhihu.com'],
   wechat_channels: ['.weixin.qq.com'],
+  wechat_official: ['.weixin.qq.com', '.qq.com'],
   youtube: ['.youtube.com', '.google.com'],
   tiktok: ['.tiktok.com'],
   instagram: ['.instagram.com'],
@@ -280,12 +333,12 @@ function findLoginKey(platform, accountId) {
 const LOGIN_COOKIE_HINTS = {
   // uid_tt/sid_tt can exist for anonymous visitors and must not complete login.
   douyin: ['sessionid', 'sessionid_ss', 'sid_guard'],
-  weibo: ['SUB', 'SUBP', 'WBPSESS'],
   bilibili: ['SESSDATA', 'DedeUserID'],
   xiaohongshu: ['web_session'],
   kuaishou: ['userId', 'passToken', 'kuaishou.server.web_st'],
   zhihu: ['z_c0'],
   wechat_channels: ['loginStatus', 'token'],
+  wechat_official: ['slave_sid', 'slave_user', 'bizuin', 'data_bizuin', 'data_ticket', 'ticket', 'wxuin'],
   youtube: ['SID', 'SAPISID', '__Secure-1PSID', '__Secure-3PSID'],
   tiktok: ['sessionid', 'sessionid_ss', 'sid_guard'],
   instagram: ['sessionid', 'ds_user_id'],
@@ -657,6 +710,26 @@ function readProviderEnvironment() {
   return result
 }
 
+function saveProviderSecret(name, value) {
+  if (!['PEXELS_API_KEY', 'FIRECRAWL_API_KEY'].includes(name)) throw new Error('不允许保存该 Provider 密钥')
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储当前不可用')
+  value = String(value || '').trim()
+  if (value.length < 10 || value.length > 500 || /[\r\n\0]/.test(value)) throw new Error('Pexels API Key 格式无效')
+  const environment = readProviderEnvironment()
+  environment[name] = value
+  const plaintext = Object.entries(environment)
+    .filter(([key, item]) => /^[A-Z][A-Z0-9_]*$/.test(key) && typeof item === 'string')
+    .map(([key, item]) => `${key}=${item}`)
+    .join('\n') + '\n'
+  const secretsDir = providerSecretsDir()
+  const encryptedPath = path.join(secretsDir, 'providers.env.encrypted')
+  const tempPath = `${encryptedPath}.tmp`
+  fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(tempPath, safeStorage.encryptString(plaintext), { mode: 0o600 })
+  fs.renameSync(tempPath, encryptedPath)
+  return { saved: true, name }
+}
+
 function agentRuntimeEnvironment() {
   const home = agentRuntimeHome()
   fs.mkdirSync(home, { recursive: true, mode: 0o700 })
@@ -668,6 +741,9 @@ function agentRuntimeEnvironment() {
     ...readProviderEnvironment(),
     HERMES_HOME: home,
     HERMES_AGENT_ROOT: agentRuntimeRoot(),
+    MARKETING_OS_API_BASE: `http://127.0.0.1:${serverPort}`,
+    MARKETING_OS_API_TOKEN: apiToken,
+    MARKETING_OS_MOBILE_BRIDGE_ENABLED: '1',
   }
 }
 
@@ -700,7 +776,7 @@ function recordDelivery({ platform, message, kind, success, error, parent_id }) 
   return entry
 }
 
-function runChannelBridge(args, onEvent) {
+function runChannelBridge(args, onEvent, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(channelPython(), [channelBridgePath(), ...args], {
       env: {
@@ -713,6 +789,28 @@ function runChannelBridge(args, onEvent) {
     let buffer = ''
     let stderr = ''
     let latest = null
+    let settled = false
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout)
+    }
+    const settleResolve = value => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(value)
+    }
+    const settleReject = error => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
+    }
+    const timeout = options.timeoutMs ? setTimeout(() => {
+      const message = options.timeoutMessage || '消息渠道操作超时，请检查网络后重试'
+      try { child.kill('SIGTERM') } catch {}
+      settleReject(new Error(message))
+    }, options.timeoutMs) : null
+    options.onChild?.(child)
     child.stdout.on('data', chunk => {
       buffer += chunk.toString()
       const lines = buffer.split('\n')
@@ -726,10 +824,11 @@ function runChannelBridge(args, onEvent) {
       }
     })
     child.stderr.on('data', chunk => { stderr += chunk.toString() })
-    child.on('error', reject)
+    child.on('error', settleReject)
     child.on('exit', code => {
-      if (code === 0 && latest) resolve(latest)
-      else reject(new Error(latest?.message || stderr.trim() || '消息渠道操作失败'))
+      if (settled) return
+      if (code === 0 && latest) settleResolve(latest)
+      else settleReject(new Error(latest?.message || stderr.trim() || '消息渠道操作失败'))
     })
   })
 }
@@ -760,16 +859,43 @@ async function getChannelStatus() {
 async function connectChannel(platform) {
   if (!['weixin', 'feishu'].includes(platform)) throw new Error('不支持的消息渠道')
   if (channelProcesses.has(platform)) throw new Error('该渠道正在连接')
+  mainWindow?.webContents.send('channels:progress', {
+    event: 'starting',
+    platform,
+    message: platform === 'weixin' ? '正在联系微信二维码服务…' : '正在联系飞书授权服务…',
+  })
+  const controller = { child: null, operation: null }
   const operation = runChannelBridge(['connect', '--platform', platform], event => {
     mainWindow?.webContents.send('channels:progress', event)
+  }, {
+    timeoutMs: platform === 'weixin' ? 45000 : 60000,
+    timeoutMessage: platform === 'weixin'
+      ? '微信二维码生成超时，请检查网络/VPN 后重试。'
+      : '飞书授权二维码生成超时，请检查网络/VPN 后重试。',
+    onChild: child => { controller.child = child },
   })
-  channelProcesses.set(platform, operation)
+  controller.operation = operation
+  channelProcesses.set(platform, controller)
   try {
     await operation
     return { connected: true }
   } finally {
     channelProcesses.delete(platform)
   }
+}
+
+function cancelChannel(platform) {
+  if (!['weixin', 'feishu'].includes(platform)) throw new Error('不支持的消息渠道')
+  const controller = channelProcesses.get(platform)
+  if (!controller) return { cancelled: false }
+  try { controller.child?.kill('SIGTERM') } catch {}
+  channelProcesses.delete(platform)
+  mainWindow?.webContents.send('channels:progress', {
+    event: 'cancelled',
+    platform,
+    message: '已取消扫码连接',
+  })
+  return { cancelled: true }
 }
 
 function runHermesSend(platform, message) {
@@ -1234,7 +1360,6 @@ async function syncAccountWithSession(platform, username, accountId) {
         total_shares: parse(text('[class*="share-count"], [class*="shares"]')),
         total_collects: parse(text('[class*="collect-count"], [class*="favorites"], [class*="collects"]')),
         total_comments: parse(text('[class*="comment-count"], [class*="comments"]')),
-        interaction: 0,
       }
       if (!stats.followers) stats.followers = metricNear(['粉丝数', '粉丝'])
       if (!stats.total_likes) stats.total_likes = metricNear(['获赞数', '获赞', '点赞'])
@@ -1244,12 +1369,10 @@ async function syncAccountWithSession(platform, username, accountId) {
       if (!stats.total_shares) stats.total_shares = metricNear(['分享数', '转发数', '分享'])
       if (!stats.total_collects) stats.total_collects = metricNear(['收藏数', '收藏'])
       if (!stats.total_comments) stats.total_comments = metricNear(['评论数', '评论'])
-      stats.interaction = (stats.total_likes || 0) + (stats.total_comments || 0) + (stats.total_shares || 0) + (stats.total_collects || 0)
 
       // Try to extract recent 30-day data from data center page
       const recent30 = {}
       try {
-        const body30 = body
         recent30.views_30d = metricNear(['近30天播放', '30天播放', '近30日播放'])
         recent30.likes_30d = metricNear(['近30天点赞', '30天点赞', '近30日点赞'])
         recent30.comments_30d = metricNear(['近30天评论', '30天评论', '近30日评论'])
@@ -1375,17 +1498,262 @@ async function syncAccountWithSession(platform, username, accountId) {
   return stats
 }
 
-async function publishContentAsset(assetId, platform) {
-  const resp = await callLocalApi('GET', `${API_BASE}/content/assets?asset_id=${encodeURIComponent(assetId)}`)
-  const assets = Array.isArray(resp) ? resp : (resp.tasks || [])
-  if (!assets.length) throw new Error(`未找到内容资产：${assetId}`)
+async function syncAccountById(accountId) {
+  const safeAccountId = String(accountId || '').trim()
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(safeAccountId)) {
+    throw new Error('invalid account_id')
+  }
+  const data = await callLocalApi('GET', `${API_BASE}/accounts`)
+  const account = (data.accounts || []).find((item) => item.id === safeAccountId)
+  if (!account) throw new Error('未找到账号，请先在账号管理完成登录')
+  return syncAccountWithSession(account.platform, account.username || account.label || '', account.id)
+}
 
-  const asset = assets[0]
+async function publishContentAsset(assetId, platform) {
+  const asset = await callLocalApi('GET', `${API_BASE}/content/assets/${encodeURIComponent(assetId)}`)
   const targetPlatform = platform || asset.platform
+  if (asset.type === 'video') {
+    await callLocalApi(
+      'GET', `${API_BASE}/media/attachments/active?asset_id=${encodeURIComponent(assetId)}` +
+      `&account_id=${encodeURIComponent(asset.account_id || '')}`,
+    )
+  }
+  if (asset.type === 'image') {
+    const result = await callLocalApi(
+      'GET', `${API_BASE}/media/attachments?asset_id=${encodeURIComponent(assetId)}` +
+      `&account_id=${encodeURIComponent(asset.account_id || '')}`,
+    )
+    if (!result.attachments?.length) throw new Error('请先为图文资产添加至少一张图片')
+  }
+  if (asset.type === 'video' || asset.type === 'image') {
+    const prepared = await callLocalApi(
+      'POST', `${API_BASE}/content/assets/${encodeURIComponent(assetId)}/publish-prepare`,
+      { platform: targetPlatform || 'douyin' }, 120000,
+    )
+    if (prepared.status !== 'ready') {
+      throw new Error(`抖音${asset.type === 'image' ? '图文' : '视频'}发布页尚未就绪：${prepared.reason || '未识别到上传控件'}`)
+    }
+    throw new Error(
+      `已安全打开并识别抖音${asset.type === 'image' ? '图文' : '视频'}上传页；本次没有上传或发布。下一步将接入受控文件上传和发布前确认。`
+    )
+  }
   throw new Error(
     `尚未配置 ${targetPlatform || '目标平台'} 的真实发布 Provider；内容“${asset.title}”未发布。` +
     '系统不会用空 post ID 冒充成功。'
   )
+}
+
+async function queryPublishingTask(taskId, refresh = false) {
+  if (!/^pub_[a-zA-Z0-9_-]+$/.test(String(taskId || ''))) {
+    throw new Error('无效的发布任务 ID')
+  }
+  const result = await callLocalApi(
+    'POST',
+    `${API_BASE}/publishing/sql-tasks/${encodeURIComponent(taskId)}/query`,
+    { refresh: Boolean(refresh) },
+    120000,
+  )
+  if (result.status === 'verified' || result.status === 'already_verified') {
+    return {
+      status: 'succeeded',
+      query_status: result.status,
+      receipt: result.receipt,
+      task_id: taskId,
+    }
+  }
+  return {
+    status: 'unknown',
+    query_status: result.status,
+    reason: result.reason || '未在官方作品列表中找到稳定作品证据',
+    task_id: taskId,
+    match: result.match,
+  }
+}
+
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256')
+    const stream = fs.createReadStream(filePath)
+    stream.on('error', reject)
+    stream.on('data', chunk => hash.update(chunk))
+    stream.on('end', () => resolve(hash.digest('hex')))
+  })
+}
+
+function managedMediaPath(storageKey) {
+  if (!/^[a-f0-9]{32}\/media\.(mp4|mov|webm|jpg|jpeg|png|webp)$/.test(String(storageKey || ''))) {
+    throw new Error('无效的媒体存储标识')
+  }
+  const root = path.resolve(app.getPath('userData'), 'media')
+  const resolved = path.resolve(root, storageKey)
+  if (!resolved.startsWith(`${root}${path.sep}`)) throw new Error('媒体路径越界')
+  return resolved
+}
+
+async function importMediaAttachment(assetId) {
+  if (!/^asset_[a-f0-9]{32}$/.test(String(assetId || ''))) {
+    throw new Error('无效的内容资产 ID')
+  }
+  const asset = await callLocalApi('GET', `${API_BASE}/content/assets/${encodeURIComponent(assetId)}`)
+  if (!['video', 'image'].includes(asset.type)) throw new Error('只有视频或图片资产可以导入媒体')
+  if (!asset.account_id) throw new Error('请先把内容资产绑定到一个账号')
+  const video = asset.type === 'video'
+  const picked = await dialog.showOpenDialog(mainWindow, {
+    title: video ? '选择要导入的视频' : '选择要导入的图片',
+    properties: ['openFile'],
+    filters: video
+      ? [{ name: '视频', extensions: ['mp4', 'mov', 'webm'] }]
+      : [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
+  })
+  if (picked.canceled || picked.filePaths.length !== 1) return { cancelled: true }
+  const source = picked.filePaths[0]
+  const stat = await fs.promises.lstat(source)
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('只能导入普通媒体文件，不能使用符号链接')
+  if (stat.size <= 0 || stat.size > 5 * 1024 ** 3) throw new Error('媒体文件必须在 1 字节到 5 GiB 之间')
+  const extension = path.extname(source).toLowerCase().replace(/[^a-z0-9.]/g, '')
+  const mimeByExtension = {
+    '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+  }
+  const mimeType = mimeByExtension[extension]
+  if (!mimeType || (video ? !mimeType.startsWith('video/') : !mimeType.startsWith('image/'))) {
+    throw new Error('不支持的媒体格式')
+  }
+  const storageId = crypto.randomBytes(16).toString('hex')
+  const storageName = `media${extension}`
+  const storageKey = `${storageId}/${storageName}`
+  const mediaRoot = path.join(app.getPath('userData'), 'media')
+  const targetDir = path.join(mediaRoot, storageId)
+  const target = path.join(targetDir, storageName)
+  let previousAttachment = null
+  if (video) {
+    try {
+      previousAttachment = await callLocalApi(
+        'GET', `${API_BASE}/media/attachments/active?asset_id=${encodeURIComponent(asset.id)}` +
+        `&account_id=${encodeURIComponent(asset.account_id)}`,
+      )
+    } catch {}
+  }
+  await fs.promises.mkdir(targetDir, { recursive: false, mode: 0o700 })
+  try {
+    await fs.promises.copyFile(source, target, fs.constants.COPYFILE_EXCL)
+    await fs.promises.chmod(target, 0o600)
+    const digest = await sha256File(target)
+    const attachment = await callLocalApi('POST', `${API_BASE}/media/attachments`, {
+      user_id: asset.user_id || 'default', account_id: asset.account_id, asset_id: asset.id,
+      original_name: path.basename(source), mime_type: mimeType,
+      byte_size: stat.size, sha256: digest, storage_key: storageKey,
+    })
+    if (previousAttachment?.storage_key) {
+      const previousPath = managedMediaPath(previousAttachment.storage_key)
+      await fs.promises.rm(path.dirname(previousPath), { recursive: true, force: true }).catch(() => {})
+    }
+    return {
+      cancelled: false, id: attachment.id, asset_id: asset.id,
+      original_name: attachment.original_name, mime_type: attachment.mime_type,
+      byte_size: attachment.byte_size, sha256: attachment.sha256,
+      position: attachment.position,
+    }
+  } catch (error) {
+    await fs.promises.rm(targetDir, { recursive: true, force: true }).catch(() => {})
+    throw error
+  }
+}
+
+function downloadPexelsImage(url, target, maxBytes = 25 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let parsed
+    try { parsed = new URL(url) } catch { reject(new Error('无效的图片地址')); return }
+    if (parsed.protocol !== 'https:' || parsed.hostname !== 'images.pexels.com') {
+      reject(new Error('只允许下载 Pexels 官方图片域名')); return
+    }
+    const request = https.get(parsed, { headers: { 'User-Agent': 'MarketingOS/0.1' } }, response => {
+      if (response.statusCode !== 200) {
+        response.resume(); reject(new Error(`图片下载失败：HTTP ${response.statusCode}`)); return
+      }
+      const contentType = String(response.headers['content-type'] || '').split(';')[0]
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) {
+        response.resume(); reject(new Error('远程资源不是受支持的图片')); return
+      }
+      const declared = Number(response.headers['content-length'] || 0)
+      if (declared > maxBytes) {
+        response.resume(); reject(new Error('图片超过 25 MB')); return
+      }
+      let received = 0
+      const output = fs.createWriteStream(target, { flags: 'wx', mode: 0o600 })
+      response.on('data', chunk => {
+        received += chunk.length
+        if (received > maxBytes) request.destroy(new Error('图片超过 25 MB'))
+      })
+      response.pipe(output)
+      output.on('finish', () => output.close(() => resolve({ contentType, byteSize: received })))
+      output.on('error', reject)
+    })
+    request.setTimeout(30000, () => request.destroy(new Error('图片下载超时')))
+    request.on('error', reject)
+  })
+}
+
+async function importStockImage(assetId, candidate) {
+  if (!/^asset_[a-f0-9]{32}$/.test(String(assetId || ''))) throw new Error('无效的内容资产 ID')
+  const asset = await callLocalApi('GET', `${API_BASE}/content/assets/${encodeURIComponent(assetId)}`)
+  if (asset.type !== 'image' || !asset.account_id) throw new Error('只能给已绑定账号的图文资产添加图库图片')
+  if (!candidate || candidate.provider !== 'pexels' || candidate.license !== 'Pexels License') {
+    throw new Error('不受信任的图库候选')
+  }
+  if (!String(candidate.source_url || '').startsWith('https://www.pexels.com/')) {
+    throw new Error('Pexels 来源页面无效')
+  }
+  const storageId = crypto.randomBytes(16).toString('hex')
+  const targetDir = path.join(app.getPath('userData'), 'media', storageId)
+  const target = path.join(targetDir, 'media.jpg')
+  await fs.promises.mkdir(targetDir, { recursive: false, mode: 0o700 })
+  try {
+    const downloaded = await downloadPexelsImage(candidate.download_url, target)
+    const digest = await sha256File(target)
+    const attachment = await callLocalApi('POST', `${API_BASE}/media/attachments`, {
+      user_id: asset.user_id || 'default', account_id: asset.account_id, asset_id: asset.id,
+      original_name: `pexels-${String(candidate.provider_id || 'image')}.jpg`,
+      mime_type: downloaded.contentType, byte_size: downloaded.byteSize,
+      sha256: digest, storage_key: `${storageId}/media.jpg`,
+      provenance: {
+        provider: 'pexels', provider_id: String(candidate.provider_id || ''),
+        source_url: candidate.source_url, author: String(candidate.author || 'Unknown'),
+        author_url: String(candidate.author_url || ''), license: 'Pexels License',
+        imported_at: new Date().toISOString(),
+      },
+    })
+    return { imported: true, id: attachment.id, position: attachment.position }
+  } catch (error) {
+    await fs.promises.rm(targetDir, { recursive: true, force: true }).catch(() => {})
+    throw error
+  }
+}
+
+async function deleteMediaAttachmentForAsset(assetId) {
+  if (!/^asset_[a-f0-9]{32}$/.test(String(assetId || ''))) throw new Error('无效的内容资产 ID')
+  const asset = await callLocalApi('GET', `${API_BASE}/content/assets/${encodeURIComponent(assetId)}`)
+  if (!asset.account_id) return { deleted: false, reason: 'asset_has_no_account' }
+  let attachments
+  try {
+    const result = await callLocalApi(
+      'GET', `${API_BASE}/media/attachments?asset_id=${encodeURIComponent(asset.id)}` +
+      `&account_id=${encodeURIComponent(asset.account_id)}`,
+    )
+    attachments = result.attachments || []
+  } catch {
+    return { deleted: false, reason: 'no_active_attachment' }
+  }
+  if (!attachments.length) return { deleted: false, reason: 'no_active_attachment' }
+  for (const attachment of attachments) {
+    const target = managedMediaPath(attachment.storage_key)
+    await fs.promises.rm(path.dirname(target), { recursive: true, force: true })
+    await callLocalApi(
+      'DELETE', `${API_BASE}/media/attachments/${encodeURIComponent(attachment.id)}` +
+      `?account_id=${encodeURIComponent(asset.account_id)}`,
+    )
+  }
+  return { deleted: true, id: attachments[0].id, count: attachments.length }
 }
 
 // ---- API 服务器生命周期 ----
@@ -1467,22 +1835,22 @@ async function startServer() {
   child.on('error', (err) => {
     serverReady = false
     if (serverProcess === child) serverProcess = null
-    mainWindow?.webContents.send('hermes:status', { status: 'error', error: err.message })
+    emitRuntimeStatus({ status: 'error', error: err.message })
   })
   child.on('exit', (code) => {
     serverReady = false
     if (serverProcess === child) serverProcess = null
-    if (!app.isQuitting) mainWindow?.webContents.send('hermes:status', { status: 'stopped', code })
+    if (!app.isQuitting) emitRuntimeStatus({ status: 'stopped', code })
   })
   waitForServer()
 }
 
 function waitForServer(retries = 30) {
-  if (retries <= 0) return mainWindow?.webContents.send('hermes:status', { status: 'timeout' })
+  if (retries <= 0) return emitRuntimeStatus({ status: 'timeout' })
   const req = http.get(`http://127.0.0.1:${serverPort}/health`, (res) => {
     if (res.statusCode === 200) {
       serverReady = true
-      mainWindow?.webContents.send('hermes:status', { status: 'ready', port: serverPort })
+      emitRuntimeStatus({ status: 'ready', port: serverPort })
       setTimeout(() => refreshPublicTrendsInBackground(), 1500)
       setTimeout(() => hydratePlaceholderAccountIdentities(), 2500)
     } else setTimeout(() => waitForServer(retries - 1), 1000)
@@ -1747,6 +2115,8 @@ async function executeApprovedCapability(approvalId, scope) {
       receipt = await openLoginBrowserAndWait(args.platform, args.account_id)
     } else if (capability === 'marketing_effect_publish') {
       receipt = await publishContentAsset(args.asset_id, args.platform)
+    } else if (capability === 'marketing_publish_query') {
+      receipt = await queryPublishingTask(args.task_id, args.refresh)
     } else {
       throw new Error(`未注册的受控能力：${capability}`)
     }
@@ -1769,23 +2139,46 @@ async function executeApprovedCapability(approvalId, scope) {
 // ---- IPC ----
 
 function setupIPC() {
-  ipcMain.handle('hermes:api', async (_e, { method, path, body }) => {
-    const normalizedMethod = method || 'GET'
-    const allowed = API_ALLOWLIST.some(([m, pattern]) => m === normalizedMethod && pattern.test(path))
+  ipcMain.handle('media:import', async (_event, { assetId } = {}) => importMediaAttachment(assetId))
+  ipcMain.handle('media:import-stock-image', async (_event, { assetId, candidate } = {}) => importStockImage(assetId, candidate))
+  ipcMain.handle('media:delete-for-asset', async (_event, { assetId } = {}) => deleteMediaAttachmentForAsset(assetId))
+  const handleRuntimeApi = async (_e, { method, path, body }) => {
+    const normalizedMethod = String(method || 'GET').toUpperCase()
+    const { pathname, requestPath } = canonicalLocalApiPath(path)
+    const allowed = API_ALLOWLIST.some(([m, pattern]) => m === normalizedMethod && pattern.test(pathname))
     if (!allowed) {
-      throw new Error(`Blocked API request: ${normalizedMethod} ${path}`)
+      throw new Error(`Blocked API request: ${normalizedMethod} ${pathname}`)
     }
     await waitForBackendReady()
-    const timeout = path.includes('/workflow/run') ? 120000 : 30000
-    return callLocalApi(normalizedMethod, path, body, timeout)
-  })
+    const timeout = pathname.includes('/workflow/run') ? 120000 : 30000
+    return callLocalApi(normalizedMethod, requestPath, body, timeout)
+  }
+  ipcMain.handle('runtime:api', handleRuntimeApi)
+  ipcMain.handle('hermes:api', handleRuntimeApi)
 
-  ipcMain.handle('hermes:status', () => ({
+  const getRuntimeStatus = () => ({
     running: serverReady, port: serverPort,
-  }))
+  })
+  ipcMain.handle('runtime:status', getRuntimeStatus)
+  ipcMain.handle('hermes:status', getRuntimeStatus)
 
-  ipcMain.handle('hermes:restart', async () => {
+  const restartRuntime = async () => {
     stopServer(); await new Promise(r => setTimeout(r, 2000)); await startServer(); return { status: 'restarting' }
+  }
+  ipcMain.handle('runtime:restart', restartRuntime)
+  ipcMain.handle('hermes:restart', restartRuntime)
+  ipcMain.handle('provider:set-secret', async (_event, { name, value } = {}) => {
+    const result = saveProviderSecret(name, value)
+    stopServer(); await new Promise(resolve => setTimeout(resolve, 500)); await startServer()
+    return result
+  })
+  ipcMain.handle('app:open-attribution', async (_event, rawUrl) => {
+    const url = new URL(String(rawUrl || ''))
+    if (url.protocol !== 'https:' || !['www.pexels.com', 'pexels.com'].includes(url.hostname)) {
+      throw new Error('只允许打开 Pexels 来源页面')
+    }
+    await shell.openExternal(url.toString())
+    return { opened: true }
   })
 
   // 内嵌浏览器登录
@@ -1834,6 +2227,7 @@ function setupIPC() {
   ipcMain.handle('intelligence:run', () => runIntelligence())
   ipcMain.handle('channels:status', () => getChannelStatus())
   ipcMain.handle('channels:connect', (_e, platform) => connectChannel(platform))
+  ipcMain.handle('channels:cancel', (_e, platform) => cancelChannel(platform))
   ipcMain.handle('channels:test', (_e, platform) => testChannel(platform))
   ipcMain.handle('channels:retry', (_e, deliveryId) => retryChannelDelivery(deliveryId))
   ipcMain.handle('agent:stream-events', (_e, taskId) => {
@@ -1901,7 +2295,7 @@ async function startServerWithRecovery() {
       serverCrashCount++
       serverRestartPending = true
       console.error(`[server:crash] Server died unexpectedly (crash #${serverCrashCount}), restarting in 3s...`)
-      mainWindow?.webContents.send('hermes:status', { status: 'restarting', crashCount: serverCrashCount })
+      emitRuntimeStatus({ status: 'restarting', crashCount: serverCrashCount })
       setTimeout(async () => {
         serverRestartPending = false
         if (!app.isQuitting && !serverProcess) await startServer()
@@ -1951,6 +2345,7 @@ app.whenReady().then(() => {
   })
 
   // IPC: account management
+  ipcMain.handle('account:sync', async (_e, { account_id }) => syncAccountById(account_id))
   ipcMain.handle('account:clear', async (_e, { platform, account_id }) => {
     const key = loginKey(platform, account_id)
     const loginWindow = loginWindows.get(key)
@@ -1985,7 +2380,7 @@ app.whenReady().then(() => {
     }
 
     // 2. Target sites
-    for (const [platform, url] of [['douyin', 'https://www.douyin.com'], ['weibo', 'https://weibo.com']]) {
+    for (const [platform, url] of [['douyin', 'https://www.douyin.com'], ['bilibili', 'https://www.bilibili.com']]) {
       try {
         await new Promise((resolve, reject) => {
           const req = https.get(url, { timeout: 8000 }, (res) => { res.resume(); resolve(null) })

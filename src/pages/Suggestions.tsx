@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { api } from '@/api/client'
 import { Lightbulb, Clock, Users, ArrowRight } from 'lucide-react'
+import { encodeCreativeBrief } from '@/lib/creativeBrief'
 
 export default function Suggestions({ onNavigate }: { onNavigate?: (page: string) => void }) {
   const [data, setData] = useState<Record<string, unknown> | null>(null)
@@ -25,12 +26,32 @@ export default function Suggestions({ onNavigate }: { onNavigate?: (page: string
         platform: suggestion.trend_source || 'douyin',
         status: 'review',
       })
-      setNotice('已加入发布中心的待审核队列。')
+      setNotice('已加入内容工厂的待审核队列。')
     } catch (reason) {
       setError(String((reason as Error)?.message || reason || '加入发布任务失败'))
     } finally {
       setAdding(null)
     }
+  }
+  const startDrafting = (suggestion: Suggestion) => {
+    const brief: CreativeBrief = {
+      id: suggestion.id || `idea-${Date.now()}`,
+      kind: 'idea',
+      title: suggestion.trend,
+      source_platform: suggestion.trend_source,
+      source_label: suggestion.trend_source || '未知平台',
+      heat: suggestion.hot_level || suggestion.estimated_traffic || '待判断',
+      hot_level: suggestion.hot_level,
+      target_audience: suggestion.target_audience,
+      angles: suggestion.angles || [],
+      evidence: [
+        suggestion.estimated_traffic ? { label: '预估流量', value: suggestion.estimated_traffic } : null,
+        suggestion.hot_level ? { label: '热度等级', value: suggestion.hot_level } : null,
+      ].filter(Boolean) as Array<{ label: string; value: string }>,
+      recommended_action: '请先判断它是否适合当前账号，再给我 3 个更强的切入角度、标题、脚本结构和需要补充的证据。不要编造未验证数据。',
+      created_at: new Date().toISOString(),
+    }
+    onNavigate?.(`chat-brief:${encodeCreativeBrief(brief)}`)
   }
 
   if (error) return <Card><CardContent className="py-5 text-sm text-destructive">{error}</CardContent></Card>
@@ -89,7 +110,7 @@ export default function Suggestions({ onNavigate }: { onNavigate?: (page: string
               <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Users className="h-3 w-3" />{s.target_audience}</span>
               <div className="flex-1" />
               <Button variant="outline" size="sm" disabled={adding === s.id} onClick={() => addToPublishing(s)}>{adding === s.id ? '添加中' : '加入发布任务'}</Button>
-              <Button size="sm" className="gap-1.5" onClick={() => onNavigate?.('factory')}>开始创作 <ArrowRight className="h-3.5 w-3.5" /></Button>
+              <Button size="sm" className="gap-1.5" onClick={() => startDrafting(s)}>开始创作 <ArrowRight className="h-3.5 w-3.5" /></Button>
             </div>
           </Card>
         ))}

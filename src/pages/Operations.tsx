@@ -11,6 +11,19 @@ type PublishingTask = {
   metrics?: { views?: number }
 }
 
+type SqlPublishingTask = {
+  id: string
+  asset_id: string
+  platform: string
+  status: string
+  receipt?: null | Record<string, unknown>
+  published_at?: string | null
+  next_metrics_at?: string | null
+  recommended_next_action?: string | null
+  metric_checkpoints?: Array<{ id: string; checkpoint_label: string; status: string; due_at?: string; last_error?: string | null }>
+  metric_snapshots?: Array<{ id: string; metrics?: Record<string, unknown>; provenance?: Record<string, unknown> }>
+}
+
 type AnalyticsSummary = {
   views: number
   engagements: number
@@ -39,13 +52,25 @@ type IntelligenceConfig = {
 
 export function PublishCenter() {
   const [tasks, setTasks] = useState<PublishingTask[]>([])
+  const [sqlTasks, setSqlTasks] = useState<SqlPublishingTask[]>([])
   const [draft, setDraft] = useState('')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+  const [querying, setQuerying] = useState<Record<string, boolean>>({})
+  const [queryNotice, setQueryNotice] = useState<Record<string, string>>({})
 
-  const load = () => api.publishingTasks()
-    .then((value) => setTasks((value as { tasks?: PublishingTask[] }).tasks || []))
-    .catch((reason) => setError(String(reason?.message || reason || '发布任务加载失败')))
+  const load = async () => {
+    try {
+      const [legacy, sql] = await Promise.all([
+        api.publishingTasks(),
+        api.sqlPublishingTasks().catch(() => ({ tasks: [], total: 0, source: 'sql_store' })),
+      ])
+      setTasks(((legacy as { tasks?: PublishingTask[] }).tasks || []))
+      setSqlTasks(((sql as { tasks?: SqlPublishingTask[] }).tasks || []))
+    } catch (reason) {
+      setError(String((reason as Error)?.message || reason || '发布任务加载失败'))
+    }
+  }
 
   useEffect(() => { load() }, [])
 
@@ -66,6 +91,28 @@ export function PublishCenter() {
     await load()
   }
 
+  const queryPublish = async (task: SqlPublishingTask) => {
+    setQuerying((current) => ({ ...current, [task.id]: true }))
+    setQueryNotice((current) => ({ ...current, [task.id]: '正在反查官方作品列表…' }))
+    try {
+      const result = await api.querySqlPublishingTask(task.id, true) as { status?: string; reason?: string; receipt?: Record<string, unknown> }
+      const status = result.status || 'unknown'
+      const message = status === 'verified' || status === 'already_verified'
+        ? `已验证：${String(result.receipt?.published_url || result.receipt?.platform_post_id || '官方作品已匹配')}`
+        : status === 'found_unverified'
+          ? '只匹配到疑似作品，但没有稳定 URL / post_id，暂不标记成功。'
+          : status === 'not_found'
+            ? '官方作品列表暂未找到匹配内容。'
+            : `反查未完成：${result.reason || status}`
+      setQueryNotice((current) => ({ ...current, [task.id]: message }))
+      await load()
+    } catch (reason) {
+      setQueryNotice((current) => ({ ...current, [task.id]: `反查失败：${String((reason as Error)?.message || reason)}` }))
+    } finally {
+      setQuerying((current) => ({ ...current, [task.id]: false }))
+    }
+  }
+
   const columns = [
     { title: '待审核', status: 'review' },
     { title: '等待发布', status: 'scheduled' },
@@ -74,8 +121,45 @@ export function PublishCenter() {
 
   return (
     <div className="operations-page animate-fade-up">
-      <StandardHeader kicker="PUBLISH PIPELINE" title="发布中心" copy={`${tasks.length} 条真实任务保存在本机。`} action="创建发布任务" onAction={() => setCreating(true)} />
+      <StandardHeader kicker="PUBLISH PIPELINE" title="发布管道" copy={`${tasks.length + sqlTasks.length} 条任务保存在本机；主入口已并入内容工厂，真实回执以官方作品反查为准。`} action="创建发布任务" onAction={() => setCreating(true)} />
       {error && <div className="empty-inline text-destructive">{error}</div>}
+      <section className="insight-block">
+        <span className="page-kicker">OFFICIAL RECEIPTS</span>
+        <h2>{sqlTasks.length ? '真实发布回执' : '暂无真实发布回执'}</h2>
+        <p>这里展示 SQL 发布链路：只有从官方作品列表反查到稳定 URL 或 post_id，才会标记为已发布并启动指标回收。</p>
+        <div className="memory-list">
+          {sqlTasks.map((task) => {
+            const receipt = task.receipt || {}
+            const verified = Boolean(receipt.published_url || receipt.platform_post_id)
+            const checkpoints = task.metric_checkpoints || []
+            const nextCheckpoint = checkpoints.find((item) => item.status === 'scheduled')
+            return (
+              <div className="memory-card" key={task.id}>
+                <div className="memory-card-header">
+                  <span className="memory-kind-badge">{PLATFORM_NAMES[task.platform] || task.platform}</span>
+                  <span style={{fontSize:8,color:verified ? '#62c4a0' : '#f59e0b',fontWeight:600}}>{verified ? '已验证' : task.status}</span>
+                  {task.recommended_next_action === 'marketing_publish_query' && <span className="memory-account">建议反查</span>}
+                  <span className="memory-confidence">{checkpoints.filter((item) => item.status === 'collected').length}/{checkpoints.length || 5} 指标点</span>
+                </div>
+                <p className="memory-content">{task.id} · asset {task.asset_id}</p>
+                <p className="memory-evidence">
+                  {verified
+                    ? `官方证据：${String(receipt.published_url || receipt.platform_post_id)}`
+                    : '未获得稳定官方作品 ID，系统不会把它当成发布成功。'}
+                </p>
+                {nextCheckpoint && <span className="metric-chip">下一次指标回收：{nextCheckpoint.checkpoint_label}</span>}
+                {queryNotice[task.id] && <p className="memory-evidence">{queryNotice[task.id]}</p>}
+                <div className="content-detail-actions">
+                  <button className="tab active" disabled={querying[task.id]} onClick={() => queryPublish(task)}>
+                    {querying[task.id] ? '反查中…' : '反查官方作品'}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+          {sqlTasks.length === 0 && <div className="empty-inline">通过内容资产创建真实发布任务后，这里会显示回执和指标回收状态。</div>}
+        </div>
+      </section>
       {creating && (
         <div className="publish-summary">
           <input className="flex-1 bg-transparent outline-none text-sm" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="输入内容标题" autoFocus onKeyDown={(event) => event.key === 'Enter' && create()} />

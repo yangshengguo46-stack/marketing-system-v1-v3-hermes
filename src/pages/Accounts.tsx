@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { api, PLATFORM_NAMES, PLATFORM_COLORS } from '@/api/client'
-import { Activity, BellRing, ChevronRight, ExternalLink, Globe2, Loader2, LogOut, MessageCircle, RefreshCw, Send, ShieldCheck, Trash2 } from 'lucide-react'
+import { api, PLATFORM_NAMES } from '@/api/client'
+import { CHANNEL_BRAND_ICONS, PLATFORM_BRAND_ICONS, type BrandIcon } from '@/lib/platformBrandIcons'
+import { Activity, BellRing, ChevronRight, ExternalLink, Globe2, Loader2, LogOut, RefreshCw, Send, ShieldCheck, Trash2 } from 'lucide-react'
 
 const DOMESTIC_PLATFORMS: Platform[] = [
-  'douyin', 'wechat_channels', 'xiaohongshu', 'kuaishou', 'bilibili', 'weibo', 'zhihu',
+  'douyin', 'wechat_channels', 'wechat_official', 'xiaohongshu', 'kuaishou', 'bilibili', 'zhihu',
 ]
 
 const GLOBAL_PLATFORMS: Platform[] = [
@@ -14,14 +15,13 @@ const GLOBAL_PLATFORMS: Platform[] = [
 ]
 
 const mOS = window.marketingOS
+const HIDDEN_PLATFORMS = new Set(['weibo'])
 
 export default function Accounts() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading] = useState(true)
   const [loggingIn, setLoggingIn] = useState<string | null>(null)
   const [loginAccountId, setLoginAccountId] = useState<string | null>(null)
-  const [loginAttemptId, setLoginAttemptId] = useState<string | null>(null)
-  const [loginMode, setLoginMode] = useState<'electron' | 'mcp'>('electron')
   const [loginInteraction, setLoginInteraction] = useState<'qrcode' | 'verification' | 'interactive'>('interactive')
   const [syncing, setSyncing] = useState<string | null>(null)
   const [takingOver, setTakingOver] = useState<string | null>(null)
@@ -30,38 +30,14 @@ export default function Accounts() {
 
   const load = () => {
     api.accounts()
-      .then((data) => { setAccounts(data.accounts || []); setLoading(false) })
+      .then((data) => {
+        setAccounts((data.accounts || []).filter((account) => !HIDDEN_PLATFORMS.has(account.platform)))
+        setLoading(false)
+      })
       .catch(() => setLoading(false))
   }
 
   useEffect(() => { load() }, [])
-
-  useEffect(() => {
-    if (loginMode !== 'mcp' || !loginAccountId || !mOS) return
-    const timer = window.setInterval(() => {
-      mOS.mcpLoginStatus(loginAccountId).then((attempt) => {
-        if (attempt.status === 'authenticated') {
-          window.clearInterval(timer)
-          if (attempt.platform) localStorage.removeItem(`mcp-pending-account:${attempt.platform}`)
-          setLoggingIn(null)
-          setLoginAccountId(null)
-          setLoginAttemptId(null)
-          load()
-          return
-        }
-        if (attempt.status === 'timed_out' || attempt.status === 'error' || attempt.status === 'cancelled') {
-          window.clearInterval(timer)
-          if (attempt.status !== 'cancelled') {
-            setNotice({ tone: 'error', message: attempt.status === 'timed_out' ? '登录等待超时，请重新扫码。' : (attempt.reason || 'MCP 登录窗口异常关闭。') })
-          }
-          setLoggingIn(null)
-          setLoginAccountId(null)
-          setLoginAttemptId(null)
-        }
-      }).catch(() => {})
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [loginMode, loginAccountId])
 
   useEffect(() => {
     if (!mOS) return
@@ -121,27 +97,6 @@ export default function Accounts() {
     setLoginAccountId(accountId || null)
     setLoginInteraction('interactive')
     try {
-      if (platform === 'douyin') {
-        const pendingKey = `mcp-pending-account:${platform}`
-        const pendingAccountId = localStorage.getItem(pendingKey)
-        const scopedAccountId = accountId || pendingAccountId || `acct_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
-        if (!accountId) localStorage.setItem(pendingKey, scopedAccountId)
-        try {
-          const attempt = await mOS.mcpLoginStart(scopedAccountId, platform)
-          if (attempt.status === 'browser_open' || attempt.status === 'starting') {
-            setLoginMode('mcp')
-            setLoginAccountId(scopedAccountId)
-            setLoginAttemptId(attempt.login_attempt_id || null)
-            return
-          }
-          throw new Error(attempt.reason || 'MCP 登录未能启动')
-        } catch (mcpReason) {
-          const message = String((mcpReason as Error)?.message || mcpReason || '')
-          // Feature flag defaults off; preserve the proven Electron login path.
-          if (!message.includes('MCP login is not enabled')) throw mcpReason
-        }
-      }
-      setLoginMode('electron')
       const opened = await mOS.openLoginBrowser(platform, accountId)
       setLoginAccountId(opened.account_id)
     } catch (reason: unknown) {
@@ -153,12 +108,10 @@ export default function Accounts() {
 
   const cancelLogin = () => {
     if (mOS && loggingIn) {
-      if (loginMode === 'mcp' && loginAccountId) mOS.mcpLoginCancel(loginAccountId, loginAttemptId || undefined).catch(() => {})
-      else mOS.closeLoginBrowser(loggingIn, loginAccountId || undefined)
+      mOS.closeLoginBrowser(loggingIn, loginAccountId || undefined)
     }
     setLoggingIn(null)
     setLoginAccountId(null)
-    setLoginAttemptId(null)
   }
 
   const remove = async (account: Account) => {
@@ -191,9 +144,13 @@ export default function Accounts() {
     setNotice(null)
     try {
       const account = accounts.find((item) => item.id === id)
-      if (!account || !mOS) throw new Error('账号会话不可用')
-      const stats = await mOS.syncAccountSession(account.platform, account.username, account.id)
-      await api.updateAccountStats(id, stats)
+      if (!account) throw new Error('账号会话不可用')
+      if (!mOS) throw new Error('账号同步通道不可用')
+      const result = await mOS.syncAccountMetrics(account.id)
+      const stats = Object.fromEntries(
+        Object.entries(result).filter(([, value]) => typeof value === 'number' && Number.isFinite(value)),
+      ) as Record<string, number>
+      if (Object.keys(stats).length > 0) await api.updateAccountStats(id, stats)
       await load()
     } catch (reason) {
       setNotice({ tone: 'error', message: String((reason as Error)?.message || reason || '账号指标同步失败') })
@@ -202,14 +159,15 @@ export default function Accounts() {
     }
   }
 
-  const takeover = async (account: Account) => {
+  const entrust = async (account: Account) => {
     if (!mOS) return
     setTakingOver(account.id)
     setNotice(null)
     try {
-      await mOS.mcpBrowserTakeover(account.id)
+      await mOS.mcpBrowserBackground(account.id)
+      setNotice({ tone: 'warning', message: `${account.label || PLATFORM_NAMES[account.platform]} 已进入托管模式；应用运行期间会在后台完成获权任务。` })
     } catch (reason) {
-      setNotice({ tone: 'error', message: String((reason as Error)?.message || reason || '无法打开账号浏览器') })
+      setNotice({ tone: 'error', message: String((reason as Error)?.message || reason || '无法启用账号托管') })
     } finally {
       setTakingOver(null)
     }
@@ -251,16 +209,17 @@ export default function Accounts() {
               </div>
             </div>
             <div className="login-popup-actions">
-              {loginMode === 'electron' && <Button variant="outline" size="sm" disabled={!loginAccountId} onClick={() => loginAccountId && mOS.navigateLoginBrowser(loggingIn, loginAccountId, 'focus')}><ExternalLink />显示登录窗口</Button>}
+              <Button variant="outline" size="sm" disabled={!loginAccountId} onClick={() => loginAccountId && mOS.navigateLoginBrowser(loggingIn, loginAccountId, 'focus')}><ExternalLink />显示登录窗口</Button>
               <Button variant="ghost" size="sm" onClick={cancelLogin}>取消</Button>
             </div>
           </CardContent>
         </Card>
       )}
 
-      <NetworkDiagnostic />
-
-      <MessagingChannels />
+      <div className="account-command-grid">
+        <NetworkDiagnostic />
+        <MessagingChannels />
+      </div>
 
       {accounts.length > 0 && (
         <section className="connected-accounts">
@@ -270,14 +229,18 @@ export default function Accounts() {
               <div className="connected-row" key={account.id}>
                 <PlatformMark platform={account.platform} />
                 <div className="connected-identity"><strong>{account.label || PLATFORM_NAMES[account.platform]}</strong><span>@{account.username} · {account.id.slice(-6)}</span></div>
-                <div className="account-stat"><strong>{formatMetric(account.stats?.followers)}</strong><span>粉丝</span></div>
-                <div className="account-stat"><strong>{formatMetric(account.stats?.total_views)}</strong><span>近7日播放</span></div>
+                <div className="connected-metrics">
+                  <div className="account-stat"><strong>{formatMetric(account.stats?.followers)}</strong><span>粉丝</span></div>
+                  <div className="account-stat"><strong>{formatMetric(account.stats?.total_views)}</strong><span>近7日播放</span></div>
+                </div>
                 <AccountHealthBadge account={account} />
-                <Button variant="outline" size="sm" onClick={() => startLogin(account.platform, account.id)}>重新登录</Button>
-                {account.platform === 'douyin' && <Button variant="outline" size="sm" disabled={takingOver === account.id} onClick={() => takeover(account)}>{takingOver === account.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}接管</Button>}
-                <Button variant="ghost" size="icon" className="h-8 w-8" title="同步账号指标" disabled={syncing === account.id} onClick={() => sync(account.id)}><RefreshCw className={`h-4 w-4 text-muted-foreground ${syncing === account.id ? 'animate-spin' : ''}`} /></Button>
-                {account.status === 'connected' && <Button variant="ghost" size="icon" className="h-8 w-8" title="退出登录并保留账号资料" onClick={() => logout(account)}><LogOut className="h-4 w-4 text-muted-foreground" /></Button>}
-                <Button variant="ghost" size="icon" className="h-8 w-8" title="删除账号及本地登录会话" onClick={() => remove(account)}><Trash2 className="h-4 w-4 text-muted-foreground" /></Button>
+                <div className="connected-actions">
+                  <Button variant="outline" size="sm" onClick={() => startLogin(account.platform, account.id)}>重新登录</Button>
+                  {account.platform === 'douyin' && <Button variant="outline" size="sm" disabled={takingOver === account.id} onClick={() => entrust(account)}>{takingOver === account.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}托管</Button>}
+                  <Button variant="ghost" size="icon" className="h-8 w-8" title="同步账号指标" disabled={syncing === account.id} onClick={() => sync(account.id)}><RefreshCw className={`h-4 w-4 text-muted-foreground ${syncing === account.id ? 'animate-spin' : ''}`} /></Button>
+                  {account.status === 'connected' && <Button variant="ghost" size="icon" className="h-8 w-8" title="退出登录并保留账号资料" onClick={() => logout(account)}><LogOut className="h-4 w-4 text-muted-foreground" /></Button>}
+                  <Button variant="ghost" size="icon" className="h-8 w-8" title="删除账号及本地登录会话" onClick={() => remove(account)}><Trash2 className="h-4 w-4 text-muted-foreground" /></Button>
+                </div>
               </div>
             ))}
           </div>
@@ -311,7 +274,7 @@ function MessagingChannels() {
   const [channels, setChannels] = useState<MessagingChannelStatus | null>(null)
   const [connecting, setConnecting] = useState<MessagingPlatform | null>(null)
   const [testing, setTesting] = useState<MessagingPlatform | null>(null)
-  const [qr, setQr] = useState<{ platform: MessagingPlatform; image: string; url: string } | null>(null)
+  const [qr, setQr] = useState<{ platform: MessagingPlatform; image?: string; url: string } | null>(null)
   const [message, setMessage] = useState('')
 
   const load = () => mOS?.getChannelStatus().then(setChannels).catch((reason) => setMessage(String(reason?.message || reason)))
@@ -320,14 +283,19 @@ function MessagingChannels() {
     load()
     if (!mOS) return
     return mOS.onChannelProgress((event) => {
-      if (event.event === 'qr' && event.platform && event.qr_image) {
-        setQr({ platform: event.platform, image: event.qr_image, url: event.qr_url || '' })
+      if (event.event === 'qr' && event.platform && (event.qr_image || event.qr_url)) {
+        setQr({ platform: event.platform, image: event.qr_image || '', url: event.qr_url || '' })
         setMessage(`请用${event.platform === 'weixin' ? '微信' : '飞书'}扫描二维码并确认授权`)
       }
       if (event.event === 'connected') {
         setQr(null)
         setMessage(event.platform === 'feishu' ? '连接成功。打开飞书机器人随便发一句话，当前对话会自动成为通知窗口。' : '连接成功，微信已成为你的随身营销助手。')
         load()
+      }
+      if (event.event === 'starting') setMessage(event.message || '正在生成安全二维码…')
+      if (event.event === 'cancelled') {
+        setQr(null)
+        setMessage(event.message || '已取消扫码连接')
       }
       if (event.event === 'error') setMessage(event.message || '连接失败')
     })
@@ -348,6 +316,16 @@ function MessagingChannels() {
     }
   }
 
+  const cancel = async (platform: MessagingPlatform) => {
+    if (!mOS) return
+    try {
+      await mOS.cancelChannel(platform)
+    } catch {}
+    setConnecting(null)
+    setQr(null)
+    setMessage('已取消扫码连接')
+  }
+
   const test = async (platform: MessagingPlatform, retryId?: string) => {
     if (!mOS) return
     setTesting(platform)
@@ -364,48 +342,60 @@ function MessagingChannels() {
   }
 
   return (
-    <section className="messaging-section">
+    <section className="account-panel mobile-assistant-panel">
       <div className="account-section-heading">
         <div><span className="page-kicker">MOBILE ASSISTANT</span><h2>随身助手</h2><p>离开电脑也能接收行业简报、异常提醒，并继续聊营销方案</p></div>
         <span><ShieldCheck size={12} /> 扫码人自动授权</span>
       </div>
-      <div className="messaging-grid">
-        <ChannelCard
-          platform="weixin"
-          name="微信"
-          description="个人微信扫码，热点与方案随时聊"
-          state={channels?.weixin}
-          busy={connecting === 'weixin'}
-          testing={testing === 'weixin'}
-          onConnect={connect}
-          onTest={test}
-        />
-        <ChannelCard
-          platform="feishu"
-          name="飞书"
-          description="扫码自动创建机器人，无需公网地址"
-          state={channels?.feishu}
-          busy={connecting === 'feishu'}
-          testing={testing === 'feishu'}
-          onConnect={connect}
-          onTest={test}
-        />
-      </div>
-      {(qr || message) && (
-        <div className="channel-onboarding">
-          {qr && <img src={qr.image} alt={`${qr.platform === 'weixin' ? '微信' : '飞书'}连接二维码`} />}
+      <div className="mobile-assistant-body">
+        <div className="messaging-grid">
+          <ChannelCard
+            platform="weixin"
+            name="微信"
+            description="个人微信扫码，热点与方案随时聊"
+            state={channels?.weixin}
+            busy={connecting === 'weixin'}
+            testing={testing === 'weixin'}
+            onConnect={connect}
+            onCancel={cancel}
+            onTest={test}
+          />
+          <ChannelCard
+            platform="feishu"
+            name="飞书"
+            description="扫码自动创建机器人，无需公网地址"
+            state={channels?.feishu}
+            busy={connecting === 'feishu'}
+            testing={testing === 'feishu'}
+            onConnect={connect}
+            onCancel={cancel}
+            onTest={test}
+          />
+        </div>
+        <div className={`channel-onboarding ${qr ? 'has-qr' : ''}`}>
+          {qr?.image ? (
+            <img src={qr.image} alt={`${qr.platform === 'weixin' ? '微信' : '飞书'}连接二维码`} />
+          ) : (
+            <div className="channel-placeholder"><ShieldCheck size={18} /><span>等待扫码</span></div>
+          )}
           <div>
-            <strong>{qr ? '扫码连接随身助手' : '连接提示'}</strong>
-            <p>{message}</p>
-            {qr?.url && <span>二维码有效期有限，过期后重新点击连接即可。</span>}
+            <strong>{qr ? `${qr.platform === 'weixin' ? '微信' : '飞书'}扫码授权` : '连接提示'}</strong>
+            <p>{message || '选择左侧渠道扫码连接。连接后，你可以直接在手机上继续和 Marketing Agent 对话。'}</p>
+            {qr?.url && (
+              <span>
+                二维码有效期有限，过期后重新点击连接即可。
+                {!qr.image && ' 当前环境缺少二维码渲染时，可打开授权链接完成扫码。'}
+                {!qr.image && <button className="channel-link-button" type="button" onClick={() => mOS.openAttribution(qr.url)}>打开授权链接</button>}
+              </span>
+            )}
           </div>
         </div>
-      )}
+      </div>
     </section>
   )
 }
 
-function ChannelCard({ platform, name, description, state, busy, testing, onConnect, onTest }: {
+function ChannelCard({ platform, name, description, state, busy, testing, onConnect, onCancel, onTest }: {
   platform: MessagingPlatform
   name: string
   description: string
@@ -413,11 +403,12 @@ function ChannelCard({ platform, name, description, state, busy, testing, onConn
   busy: boolean
   testing: boolean
   onConnect: (platform: MessagingPlatform) => void
+  onCancel: (platform: MessagingPlatform) => void
   onTest: (platform: MessagingPlatform, retryId?: string) => void
 }) {
   return (
     <div className={`messaging-card ${state?.connected ? 'connected' : ''}`}>
-      <span className={`channel-logo ${platform}`}><MessageCircle size={18} /></span>
+      <span className={`channel-logo ${platform}`}><ChannelLogo platform={platform} /></span>
       <div className="channel-copy">
         <strong>{name}</strong>
         <p>{description}</p>
@@ -429,8 +420,8 @@ function ChannelCard({ platform, name, description, state, busy, testing, onConn
           {state.last_delivery?.success === false ? '重试' : state.ready_to_push ? '发测试消息' : '检查通知'}
         </Button>
       ) : (
-        <Button size="sm" disabled={busy} onClick={() => onConnect(platform)}>
-          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{busy ? '等待扫码' : '扫码连接'}
+        <Button size="sm" variant={busy ? 'outline' : 'default'} onClick={() => busy ? onCancel(platform) : onConnect(platform)}>
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{busy ? '取消' : '扫码连接'}
         </Button>
       )}
     </div>
@@ -469,9 +460,40 @@ function PlatformGroup({ eyebrow, title, description, platforms, accounts, disab
 
 function PlatformMark({ platform }: { platform: Platform }) {
   return (
-    <span className="platform-mark" style={{ backgroundColor: PLATFORM_COLORS[platform] }}>
-      {PLATFORM_NAMES[platform]?.slice(0, 1)}
+    <span className={`platform-mark platform-mark-${platform}`} title={PLATFORM_NAMES[platform]}>
+      <PlatformLogo platform={platform} />
     </span>
+  )
+}
+
+function PlatformLogo({ platform }: { platform: Platform }) {
+  const icon = PLATFORM_BRAND_ICONS[platform]
+  if (!icon) return <span>{PLATFORM_NAMES[platform]?.slice(0, 1)}</span>
+  return <BrandIconSvg icon={icon} platform={platform} />
+}
+
+function ChannelLogo({ platform }: { platform: MessagingPlatform }) {
+  return <BrandIconSvg icon={CHANNEL_BRAND_ICONS[platform]} platform={platform} />
+}
+
+function BrandIconSvg({ icon, platform }: { icon: BrandIcon; platform: string }) {
+  const isToneStack = platform === 'douyin' || platform === 'tiktok'
+  return (
+    <svg viewBox={icon.viewBox} aria-hidden="true">
+      {isToneStack && icon.path && <path className="brand-shadow-cyan" d={icon.path} transform="translate(-.65 -.25)" />}
+      {isToneStack && icon.path && <path className="brand-shadow-red" d={icon.path} transform="translate(.65 .35)" />}
+      {icon.path && <path d={icon.path} />}
+      {icon.strokePath && (
+        <path
+          d={icon.strokePath}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={icon.strokeWidth || 2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
   )
 }
 
@@ -538,7 +560,7 @@ function NetworkDiagnostic() {
   const ok = results.filter((r) => r.status === 'ok').length
 
   return (
-    <section className="messaging-section">
+    <section className="account-panel diagnostic-panel">
       <div className="account-section-heading">
         <div><span className="page-kicker">DIAGNOSTICS</span><h2>网络诊断</h2></div>
         <Button size="sm" variant="outline" disabled={running} onClick={run}>

@@ -4,7 +4,7 @@ declare global {
   type Platform =
     | 'douyin'
     | 'wechat_channels'
-    | 'weibo'
+    | 'wechat_official'
     | 'bilibili'
     | 'xiaohongshu'
     | 'kuaishou'
@@ -17,10 +17,12 @@ declare global {
 
   interface Window {
     marketingOS: {
-      api: (method: string, path: string, body?: unknown) => Promise<unknown>
-      getHermesStatus: () => Promise<{ running: boolean; port: number }>
-      restartHermes: () => Promise<{ status: string }>
-      onHermesStatus: (cb: (data: { status: string; port?: number; error?: string }) => void) => () => void
+      runtimeApi: (method: string, path: string, body?: unknown) => Promise<unknown>
+      getRuntimeStatus: () => Promise<{ running: boolean; port: number }>
+      restartRuntime: () => Promise<{ status: string }>
+      setProviderSecret: (name: 'PEXELS_API_KEY' | 'FIRECRAWL_API_KEY', value: string) => Promise<{ saved: boolean; name: string }>
+      openAttribution: (url: string) => Promise<{ opened: boolean }>
+      onRuntimeStatus: (cb: (data: { status: string; port?: number; error?: string }) => void) => () => void
       openLoginBrowser: (platform: string, accountId?: string) => Promise<{ platform: string; account_id: string }>
       mcpLoginStart: (accountId: string, platform: string) => Promise<MCPLoginAttempt>
       mcpLoginStatus: (accountId: string) => Promise<MCPLoginAttempt>
@@ -32,13 +34,12 @@ declare global {
       closeAllLoginBrowsers: () => Promise<{ closed: boolean }>
       navigateLoginBrowser: (platform: string, accountId: string, action: 'back' | 'reload' | 'home' | 'focus') => Promise<{ url: string }>
       getLoginCookies: (platform: string, accountId: string) => Promise<{ platform: string; count: number; account_id: string }>
-      scrapeIndustry: (platform: string, keyword: string, accountId: string) => Promise<{ platform: string; keyword: string; items: Array<{ rank: number; title: string; url: string }>; collected_at: string }>
-      syncAccountSession: (platform: string, username: string, accountId: string) => Promise<Record<string, number>>
       runIntelligence: () => Promise<IntelligenceReport>
       onIntelligenceProgress: (cb: (report: IntelligenceReport) => void) => () => void
       onTrendingUpdated: (cb: (result: { status: string; trends_count?: number; error?: string }) => void) => () => void
       getChannelStatus: () => Promise<MessagingChannelStatus>
       connectChannel: (platform: MessagingPlatform) => Promise<{ connected: boolean }>
+      cancelChannel: (platform: MessagingPlatform) => Promise<{ cancelled: boolean }>
       testChannel: (platform: MessagingPlatform) => Promise<{ success: boolean; detail?: string }>
       retryChannel: (deliveryId: string) => Promise<{ success: boolean; detail?: string }>
       onChannelProgress: (cb: (event: MessagingChannelEvent) => void) => () => void
@@ -52,9 +53,19 @@ declare global {
       stopAgentEvents: (taskId: string) => Promise<{ stopped: boolean; task_id: string }>
       onAgentEvent: (cb: (event: LiveAgentEvent) => void) => () => void
       checkAccountHealth: (platform: string, username: string, accountId: string) => Promise<{ status: string; detail: string }>
+      syncAccountMetrics: (accountId: string) => Promise<Record<string, unknown>>
       clearAccountSession: (platform: string, accountId: string) => Promise<{ cleared: boolean }>
       runNetworkDiagnostic: () => Promise<{ results: Array<{ target: string; status: string; detail: string }>; summary: string }>
       executeApprovedCapability: (approvalId: string, scope: 'once' | 'session' | 'permanent') => Promise<unknown>
+      importMediaAttachment: (assetId: string) => Promise<{
+        cancelled: boolean; id?: string; asset_id?: string; original_name?: string
+        mime_type?: string; byte_size?: number; sha256?: string; position?: number
+      }>
+      importStockImage: (assetId: string, candidate: {
+        provider: string; provider_id: string; download_url: string; source_url: string
+        author: string; author_url: string; license: string
+      }) => Promise<{ imported: boolean; id: string; position: number }>
+      deleteMediaAttachmentForAsset: (assetId: string) => Promise<{ deleted: boolean; id?: string; count?: number; reason?: string }>
     }
   }
 
@@ -100,7 +111,7 @@ declare global {
   }
 
   interface MessagingChannelEvent {
-    event: 'qr' | 'connected' | 'error' | 'status'
+    event: 'starting' | 'qr' | 'connected' | 'error' | 'status' | 'cancelled'
     platform?: MessagingPlatform
     qr_url?: string
     qr_image?: string
@@ -115,6 +126,10 @@ declare global {
     heat?: string
     heat_value?: string | number
     source_platform: Platform
+    relevance_score?: number
+    relevance_label?: string
+    match_reasons?: string[]
+    fit_mode?: 'exploration' | 'account_positioning' | string
   }
 
   interface Account {
@@ -137,6 +152,44 @@ declare global {
     estimated_traffic: string
   }
 
+  interface CreativeBrief {
+    id: string
+    kind: 'daily' | 'trend' | 'idea' | 'all_tasks'
+    title: string
+    source_platform?: Platform | string
+    source_label?: string
+    heat?: string
+    rank?: number
+    hot_level?: string
+    target_audience?: string
+    angles?: string[]
+    evidence?: Array<{ label: string; value: string }>
+    recommended_action?: string
+    created_at?: string
+  }
+
+  interface AgentSessionSummary {
+    session_id: string
+    user_id: string
+    workspace?: string | null
+    active_task_id?: string | null
+    title: string
+    last_objective?: string | null
+    last_task_id?: string | null
+    last_task_status?: string | null
+    account_id?: string | null
+    task_count: number
+    created_at: string
+    updated_at: string
+  }
+
+  interface AgentChatMessage {
+    role: 'user' | 'assistant' | 'system'
+    content: string
+    task_id?: string
+    created_at?: string
+  }
+
   interface OverviewData {
     accounts_connected: number
     trending_topics_today: number
@@ -144,6 +197,47 @@ declare global {
     videos_published: number
     total_followers: number
     follower_growth_today: number
+    content_pipeline: {
+      total_assets: number
+      drafts: number
+      in_review: number
+      approved: number
+      published: number
+      ready_to_publish: number
+      latest_draft?: null | {
+        id?: string
+        title?: string
+        platform?: string | null
+        updated_at?: string | null
+      }
+    }
+    publishing_receipts: {
+      total: number
+      verified: number
+      pending_verification: number
+      failed: number
+      metric_checkpoints: {
+        total: number
+        scheduled: number
+        collected: number
+        due: number
+      }
+      next_metrics_at?: string | null
+      latest?: null | {
+        id?: string
+        asset_id?: string
+        platform?: string
+        status?: string
+        verified?: boolean
+        published_at?: string | null
+        next_metrics_at?: string | null
+      }
+    }
+    platform_accounts: Array<{
+      id: string; platform: Platform; label: string; status: Account['status']
+      stats: Record<string, unknown>
+      history: Array<{ at: string; followers: number | string; views: number | string }>
+    }>
   }
 
   interface IntelligenceStep {
