@@ -20,7 +20,9 @@ if [[ ! -x "$VENV/bin/python" ]]; then
   uv venv "$VENV" --python 3.13
 fi
 
-uv pip install --python "$VENV/bin/python" -e "$HERMES_SOURCE[mcp]"
+uv pip install --python "$VENV/bin/python" -e "$HERMES_SOURCE[mcp,feishu]"
+uv pip install --python "$VENV/bin/python" aiohttp==3.13.4
+uv pip install --python "$VENV/bin/python" "python-socks[asyncio]==2.8.2"
 
 if [[ -f "$SECRET_DIR/provider-config.yaml" && ! -f "$RUNTIME_HOME/config.yaml" ]]; then
   cp "$SECRET_DIR/provider-config.yaml" "$RUNTIME_HOME/config.yaml"

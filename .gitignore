@@ -12,9 +12,15 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .pytest-cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 backend/build/
 backend/dist/
 backend/*.spec
+*.log
+*.tmp
 
 # Local runtime and secrets
 .env
@@ -30,6 +36,10 @@ engine/marketing-os/config/monitor_data/
 
 # Upstream runtime checkout is tracked as its own repository boundary.
 runtime/hermes-agent/
+runtime/index-tts/
+runtime/tts-smoke/
+runtime/e2e/
+runtime/research/
 
 # Local agent tooling installed for development, not product runtime.
 .agents/
@@ -39,3 +49,4 @@ skills-lock.json
 .DS_Store
 .idea/
 .vscode/
+engine/marketing-os/agent-runtime/
