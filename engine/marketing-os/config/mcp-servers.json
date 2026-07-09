@@ -14,8 +14,7 @@
           "browser_click",
           "browser_wait_for",
           "browser_tabs",
-          "browser_close",
-          "browser_evaluate"
+          "browser_close"
         ]
       },
       "timeout": 120,

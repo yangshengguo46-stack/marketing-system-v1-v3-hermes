@@ -80,17 +80,6 @@
         "textGone": {"type": "string"}
       },
       "additionalProperties": false
-    },
-    "browser_evaluate": {
-      "type": "object",
-      "properties": {
-        "element": {"type": "string"},
-        "target": {"type": "string"},
-        "function": {"type": "string"},
-        "filename": {"type": "string"}
-      },
-      "required": ["function"],
-      "additionalProperties": false
     }
   },
   "parameter_risks_deferred_to_mcp_05": {
@@ -98,7 +87,6 @@
     "browser_tabs": ["action=new with url is navigation and needs origin policy"],
     "browser_click": ["right/middle/double click and modifiers need narrower policy"],
     "browser_wait_for": ["time needs a bounded maximum"],
-    "browser_navigate": ["URL needs scheme and platform-origin allowlist"],
-    "browser_evaluate": ["script content is validated by mcp_browser_policy; output goes through recursive secret sanitizer"]
+    "browser_navigate": ["URL needs scheme and platform-origin allowlist"]
   }
 }

@@ -15,7 +15,9 @@ PLATFORM_CONSTRAINTS = {
 
 
 def validate_publish_request(
-    asset: dict[str, Any], *, now: str | None = None,
+    asset: dict[str, Any], *, attachment: dict[str, Any] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    now: str | None = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
     platform = str(asset.get("platform", "")).strip().lower()
@@ -34,7 +36,34 @@ def validate_publish_request(
         errors.append("missing account_id")
     if asset.get("type") == "video":
         content = asset.get("content") or {}
+        if isinstance(content, dict) and any(
+            content.get(key) for key in ("file_path", "local_path", "media_path")
+        ):
+            errors.append("raw local media paths are forbidden; import a managed attachment")
+        if not attachment or attachment.get("status") != "active":
+            errors.append("missing active media attachment")
+        elif attachment.get("asset_id") != asset.get("id"):
+            errors.append("media attachment asset mismatch")
+        elif attachment.get("account_id") != account_id:
+            errors.append("media attachment account mismatch")
+        elif not str(attachment.get("sha256") or ""):
+            errors.append("media attachment hash missing")
         duration = content.get("duration") if isinstance(content, dict) else None
         if duration is not None and not isinstance(duration, (int, float)):
             errors.append("invalid duration")
+    if asset.get("type") == "image":
+        active = attachments or ([attachment] if attachment else [])
+        if not 1 <= len(active) <= 9:
+            errors.append("image posts require 1 to 9 active media attachments")
+        for item in active:
+            if item.get("status") != "active":
+                errors.append("image attachment is not active")
+            elif item.get("asset_id") != asset.get("id"):
+                errors.append("media attachment asset mismatch")
+            elif item.get("account_id") != account_id:
+                errors.append("media attachment account mismatch")
+            elif not str(item.get("mime_type") or "").startswith("image/"):
+                errors.append("image posts require image attachments")
+            elif not str(item.get("sha256") or ""):
+                errors.append("media attachment hash missing")
     return {"valid": len(errors) == 0, "errors": errors}

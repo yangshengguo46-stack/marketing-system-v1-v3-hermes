@@ -57,14 +57,6 @@ def scrape_douyin_trending(params=None, **kwargs) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def scrape_weibo_trending(params=None, **kwargs) -> str:
-    count = (params or {}).get("count", 50)
-    result = _fetch_with_backend("weibo", count)
-    result["platform"] = "weibo"
-    result["scraped_at"] = datetime.now().isoformat()
-    return json.dumps(result, ensure_ascii=False)
-
-
 def scrape_bilibili_popular(params=None, **kwargs) -> str:
     count = (params or {}).get("count", 30)
     result = _fetch_with_backend("bilibili", count)
@@ -130,7 +122,8 @@ def scrape_twitter_trending(params=None, **kwargs) -> str:
 # ---- 聚合 ----
 
 def aggregate_all_trending(params=None, **kwargs) -> str:
-    platforms = (params or {}).get("platforms", ["douyin", "weibo", "bilibili", "xiaohongshu", "kuaishou", "zhihu", "tiktok", "youtube"])
+    platforms = (params or {}).get("platforms", ["douyin", "bilibili", "xiaohongshu", "kuaishou", "zhihu", "tiktok", "youtube"])
+    platforms = [platform for platform in platforms if platform != "weibo"]
     results = {}
     backends_used = set()
 
@@ -183,17 +176,6 @@ TOOLS = [
             }
         },
         "handler": scrape_douyin_trending,
-    },
-    {
-        "name": "scrape_weibo_trending",
-        "description": "抓取微博实时热搜榜 TOP50，自动选择最佳可用后端",
-        "schema": {
-            "type": "object",
-            "properties": {
-                "count": {"type": "integer", "description": "抓取条数，默认50", "default": 50}
-            }
-        },
-        "handler": scrape_weibo_trending,
     },
     {
         "name": "scrape_bilibili_popular",
@@ -295,8 +277,8 @@ TOOLS = [
             "properties": {
                 "platforms": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["douyin", "weibo", "bilibili", "xiaohongshu", "kuaishou", "zhihu", "wechat_article", "tiktok", "youtube", "twitter"]},
-                    "description": "要抓取的平台列表，默认 ['douyin', 'weibo', 'bilibili']"
+                    "items": {"type": "string", "enum": ["douyin", "bilibili", "xiaohongshu", "kuaishou", "zhihu", "wechat_article", "tiktok", "youtube", "twitter"]},
+                    "description": "要抓取的平台列表，默认 ['douyin', 'bilibili', 'xiaohongshu', 'kuaishou', 'zhihu', 'tiktok', 'youtube']"
                 }
             }
         },

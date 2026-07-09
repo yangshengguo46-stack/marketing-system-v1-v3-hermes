@@ -8,7 +8,7 @@ import httpx
 from .base import ScrapingBackend
 
 API_BASE = "https://60s.viki.moe/v2"
-PLATFORM_MAP = {"weibo": "weibo", "douyin": "douyin", "zhihu": "zhihu", "baidu": "baidu", "toutiao": "toutiao"}
+PLATFORM_MAP = {"douyin": "douyin", "zhihu": "zhihu", "baidu": "baidu", "toutiao": "toutiao"}
 
 
 def _http_get(url: str, timeout: int = 8) -> str:
@@ -20,7 +20,7 @@ def _http_get(url: str, timeout: int = 8) -> str:
 class HotTopicsApiBackend(ScrapingBackend):
     name = "hot_topics_api"
     priority = 80
-    platforms = ["weibo", "douyin", "zhihu", "baidu", "toutiao"]
+    platforms = ["douyin", "zhihu", "baidu", "toutiao"]
 
     def available(self) -> bool:
         # Availability is resolved by the real fetch. A separate network probe

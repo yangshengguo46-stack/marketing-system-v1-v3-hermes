@@ -7,7 +7,7 @@ Each variant inherits from the parent but has its own metadata.
 from __future__ import annotations
 from typing import Any
 
-VALID_PLATFORMS = frozenset({"douyin", "bilibili", "weibo", "xiaohongshu", "kuaishou", "zhihu"})
+VALID_PLATFORMS = frozenset({"douyin", "bilibili", "xiaohongshu", "kuaishou", "zhihu", "wechat_official"})
 
 
 def create_variants(

@@ -11,7 +11,6 @@ from typing import Any
 
 DEFAULT_RATE_LIMITS: dict[str, dict[str, float]] = {
     "douyin": {"max_per_second": 1, "max_per_minute": 20, "max_per_hour": 500, "max_per_day": 2000},
-    "weibo": {"max_per_second": 1, "max_per_minute": 30, "max_per_hour": 800, "max_per_day": 3000},
     "bilibili": {"max_per_second": 2, "max_per_minute": 50, "max_per_hour": 1000, "max_per_day": 3000},
     "zhihu": {"max_per_second": 1, "max_per_minute": 15, "max_per_hour": 300, "max_per_day": 1000},
     "default": {"max_per_second": 1, "max_per_minute": 20, "max_per_hour": 400, "max_per_day": 1500},

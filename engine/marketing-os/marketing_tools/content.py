@@ -19,6 +19,19 @@ CATEGORY_KEYWORDS = {
     "娱乐/影视": ("电影", "综艺", "电视剧", "明星", "演唱会", "音乐"),
 }
 
+GENERIC_TAG_TOKENS = {
+    "fyp", "fy", "foryou", "foryoupage", "foru", "viral", "trending",
+    "hot", "trend", "热门", "热点", "上热门", "推荐", "流量", "挑战",
+    "搞笑", "短剧", "短剧推荐", "好剧推荐", "剧集推荐", "追剧", "日常", "生活", "记录", "好物", "种草", "娱乐",
+    "douyin", "抖音", "tiktok", "tik tok",
+}
+
+GENERIC_TAG_PATTERNS = (
+    re.compile(r"(因为.*片段.*看.*整部剧|短剧|好剧|追剧|剧荒|影视推荐|电视剧推荐|全集|完整版)"),
+    re.compile(r"(搞笑|沙雕|段子|名场面|解压|治愈|反转|爽文|爽剧)"),
+    re.compile(r"(上热门|热门推荐|热门话题|流量密码|推荐一下|挑战赛?)"),
+)
+
 
 def _extract(data):
     if isinstance(data, list):
@@ -40,6 +53,160 @@ def _identity(title: str) -> str:
     return re.sub(r"[^\w\u4e00-\u9fff]", "", title).lower()
 
 
+def _tag_tokens(title: str) -> list[str]:
+    return [
+        token.strip().lower()
+        for token in re.findall(r"#\s*([A-Za-z0-9_\-\u4e00-\u9fff]{1,30})", title)
+        if token.strip()
+    ]
+
+
+def _invalid_trend_reason(title: str, platform: str = "", source_category: str = "") -> str:
+    text = re.sub(r"\s+", " ", str(title or "")).strip()
+    if not text:
+        return "empty_title"
+    lowered = text.lower()
+    identity = _identity(text)
+    tags = _tag_tokens(text)
+    without_tags = re.sub(r"#\s*[A-Za-z0-9_\-\u4e00-\u9fff]{1,30}", "", text).strip()
+
+    if lowered in GENERIC_TAG_TOKENS or identity in GENERIC_TAG_TOKENS:
+        return "generic_tag_title"
+    if tags and not without_tags:
+        normalized_tags = {re.sub(r"[^\w\u4e00-\u9fff]", "", tag).lower() for tag in tags}
+        if normalized_tags and normalized_tags.issubset(GENERIC_TAG_TOKENS):
+            return "generic_hashtag_only"
+        if any(pattern.search(tag) for pattern in GENERIC_TAG_PATTERNS for tag in normalized_tags):
+            return "generic_promo_hashtag_only"
+    if re.fullmatch(r"#?\s*(?:fyp|fy|foryou|foryoupage|foru|viral|trending)[\W_]*", lowered):
+        return "fyp_distribution_tag"
+    if str(platform).lower() in {"douyin", "tiktok"} and tags and not without_tags:
+        normalized_tags = {re.sub(r"[^\w\u4e00-\u9fff]", "", tag).lower() for tag in tags}
+        if normalized_tags & GENERIC_TAG_TOKENS:
+            return "platform_distribution_hashtag_only"
+    if source_category and any(marker in source_category for marker in ("热门话题", "热门挑战")):
+        if tags and not without_tags:
+            return "creator_center_tag_topic"
+    return ""
+
+
+def _term_candidates(value) -> set[str]:
+    terms: set[str] = set()
+    if value is None:
+        return terms
+    if isinstance(value, dict):
+        for item in value.values():
+            terms |= _term_candidates(item)
+        return terms
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            terms |= _term_candidates(item)
+        return terms
+
+    text = re.sub(r"\s+", " ", str(value or "")).strip().lower()
+    if not text:
+        return terms
+    for part in re.split(r"[\s,，、/|;；:：()（）【】\[\]<>《》]+|和|与|及|或", text):
+        part = part.strip(" -_")
+        if 2 <= len(part) <= 24:
+            terms.add(part)
+    for token in re.findall(r"[a-z][a-z0-9+\-.]{1,24}|[\u4e00-\u9fff]{2,12}", text):
+        if 2 <= len(token) <= 24:
+            terms.add(token)
+    return terms
+
+
+def _trend_search_text(item: dict) -> str:
+    return " ".join(str(item.get(key) or "") for key in (
+        "title", "category", "source_category", "source_platform",
+    )).lower()
+
+
+def rank_trends_for_context(payload: dict, context: dict | None = None, *, limit: int = 30) -> dict:
+    """Score trends against account DNA without inventing semantic facts.
+
+    No positioning/DNA means exploration mode: keep quality-filtered evidence.
+    With positioning/DNA, require at least one positive account match and drop
+    taboo matches. Heat/rank only break ties after fit.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    context = context or {}
+    dna = context.get("dna") if isinstance(context.get("dna"), dict) else {}
+    account_platform = str(context.get("platform") or "").lower()
+
+    positive_terms = (
+        _term_candidates(dna.get("audience"))
+        | _term_candidates(dna.get("persona"))
+        | _term_candidates(dna.get("content_pillars"))
+        | _term_candidates(dna.get("goals"))
+        | _term_candidates(dna.get("promise"))
+    )
+    taboo_terms = _term_candidates(dna.get("taboos")) | _term_candidates(dna.get("exclusions"))
+    has_positioning = bool(positive_terms)
+
+    scored: list[dict] = []
+    rejected: list[dict] = []
+    for item in payload.get("top_trends") or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("trend") or "")
+        invalid = _invalid_trend_reason(
+            title,
+            str(item.get("source_platform") or item.get("trend_source") or ""),
+            str(item.get("source_category") or item.get("category") or ""),
+        )
+        if invalid:
+            rejected.append({"title": title[:200], "reason": invalid})
+            continue
+        search_text = _trend_search_text(item)
+        taboo_hits = sorted(term for term in taboo_terms if term and term in search_text)[:5]
+        if taboo_hits:
+            rejected.append({"title": title[:200], "reason": "account_taboo", "matches": taboo_hits})
+            continue
+        matches = sorted(term for term in positive_terms if term and term in search_text)[:8]
+        platform_bonus = 0.08 if account_platform and str(item.get("source_platform", "")).lower() == account_platform else 0
+        rank = item.get("rank")
+        try:
+            evidence_bonus = max(0, 0.12 - min(max(int(rank or 999), 1), 30) * 0.003)
+        except (TypeError, ValueError):
+            evidence_bonus = 0.03
+        if has_positioning and not matches:
+            rejected.append({"title": title[:200], "reason": "account_mismatch"})
+            continue
+        score = min(1.0, (0.34 if has_positioning else 0.18) + len(matches) * 0.12 + platform_bonus + evidence_bonus)
+        label = "适合当前账号" if score >= 0.62 else "可观察" if score >= 0.42 else "探索"
+        scored.append({
+            **item,
+            "relevance_score": round(score, 3),
+            "relevance_label": label,
+            "match_reasons": matches,
+            "fit_mode": "account_positioning" if has_positioning else "exploration",
+        })
+
+    if has_positioning:
+        scored.sort(key=lambda item: (item.get("relevance_score", 0), -(item.get("rank") or 999)), reverse=True)
+
+    ranked = scored[: max(1, min(int(limit or 30), 30))]
+    categories: dict[str, list[dict]] = {}
+    for item in ranked:
+        categories.setdefault(str(item.get("category") or "其他"), []).append(item)
+    return {
+        **payload,
+        "top_trends": ranked,
+        "categories": categories,
+        "matched": len(ranked),
+        "relevance_mode": "account_positioning" if has_positioning else "exploration",
+        "relevance_context": {
+            "account_id": context.get("account_id"),
+            "platform": account_platform or None,
+            "has_positioning": has_positioning,
+            "positive_terms_count": len(positive_terms),
+        },
+        "relevance_rejections": rejected[:80],
+    }
+
+
 def _category(title: str) -> str:
     lowered = title.lower()
     for category, keywords in CATEGORY_KEYWORDS.items():
@@ -59,6 +226,7 @@ def analyze_trends(params, **_kwargs) -> str:
 
     collected_at = hot_data.get("aggregated_at")
     per_platform: dict[str, list[dict]] = {}
+    rejected: list[dict] = []
     for platform, result in hot_data.get("results", {}).items():
         if not isinstance(result, dict) or not result.get("success"):
             continue
@@ -68,6 +236,18 @@ def analyze_trends(params, **_kwargs) -> str:
             title = str(item.get("title", "")).strip()
             if not title:
                 continue
+            source_category = str(item.get("category") or item.get("source_category") or "")
+            invalid_reason = _invalid_trend_reason(title, platform, source_category)
+            if invalid_reason:
+                rejected.append({
+                    "title": title[:200],
+                    "source_platform": platform,
+                    "source_backend": item.get("source_backend") or result.get("backend_used"),
+                    "rank": item.get("rank", index + 1),
+                    "reason": invalid_reason,
+                    "source_category": source_category,
+                })
+                continue
             per_platform.setdefault(platform, []).append({
                 "title": title[:200],
                 "source_platform": platform,
@@ -76,6 +256,10 @@ def analyze_trends(params, **_kwargs) -> str:
                 "heat_value": item.get("heat_value", item.get("heat", "")),
                 "url": str(item.get("url", ""))[:1000],
                 "collected_at": item.get("collected_at") or collected_at,
+                "source_category": source_category or None,
+                "video_id": item.get("video_id"),
+                "author": item.get("author") if isinstance(item.get("author"), dict) else None,
+                "metrics": item.get("metrics") if isinstance(item.get("metrics"), dict) else None,
             })
 
     # Network completion order must not decide the feed. Interleave each
@@ -120,8 +304,10 @@ def analyze_trends(params, **_kwargs) -> str:
         "analyzed_at": datetime.now().isoformat(),
         "total_raw": len(flat),
         "total_deduped": len(deduped),
+        "total_rejected": len(rejected),
         "categories": categories,
         "top_trends": deduped[:30],
+        "quality_rejections": rejected[:50],
         "source_errors": failures,
         "data_quality_note": note,
         "analysis_method": "deterministic_evidence_index",
