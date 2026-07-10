@@ -58,8 +58,8 @@ function modeRemovesUserData(mode) {
  * Resolve the on-disk app bundle/dir to remove for the running desktop app,
  * given the path to the running executable (`process.execPath`) and platform.
  *
- *   macOS:   …/Hermes.app/Contents/MacOS/Hermes  → …/Hermes.app
- *   Windows: …\Hermes\Hermes.exe                 → …\Hermes  (install dir)
+ *   macOS:   …/Marketing OS.app/Contents/MacOS/Marketing OS → …/Marketing OS.app
+ *   Windows: …\Marketing OS\Marketing OS.exe             → …\Marketing OS
  *   Linux:   AppImage → the APPIMAGE env path; unpacked → the *-unpacked dir
  *
  * Returns null when we can't confidently identify a removable bundle (e.g.
@@ -84,9 +84,15 @@ function resolveRemovableAppPath(execPath, platform, env = {}) {
   }
 
   if (platform === 'win32') {
-    // NSIS per-user installs Hermes.exe directly in the install dir.
+    // NSIS per-user installs the executable directly in the install dir. Keep
+    // the former Hermes names as migration compatibility for older installs.
     const dir = p.dirname(exe)
-    if (/[\\/]Hermes$/i.test(dir) || /[\\/]hermes-desktop$/i.test(dir)) return dir
+    if (
+      /[\\/]Marketing OS$/i.test(dir) ||
+      /[\\/]marketing-os-desktop$/i.test(dir) ||
+      /[\\/]Hermes$/i.test(dir) ||
+      /[\\/]hermes-desktop$/i.test(dir)
+    ) return dir
     return null
   }
 

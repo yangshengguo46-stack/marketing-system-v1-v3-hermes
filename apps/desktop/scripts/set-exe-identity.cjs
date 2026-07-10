@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// set-exe-identity.cjs — stamp the Hermes icon + version metadata onto the
-// built Hermes.exe using rcedit, completely decoupled from electron-builder's
+// set-exe-identity.cjs — stamp the Marketing OS icon + version metadata onto
+// the built Windows executable using rcedit, decoupled from electron-builder's
 // signing path.
 //
 // WHY THIS EXISTS
@@ -13,7 +13,7 @@
 // try to extract winCodeSign.
 //
 // The cost of disabling signAndEditExecutable is that electron-builder also
-// skips rcedit, so the unpacked Hermes.exe keeps the stock Electron icon and
+// skips rcedit, so the unpacked executable keeps the stock Electron icon and
 // "Electron" taskbar name. This script restores the icon + identity by calling
 // rcedit DIRECTLY. rcedit is a pure PE resource editor: no signing, no certs,
 // no winCodeSign, no symlinks.
@@ -28,7 +28,7 @@
 // shipped a stock "Electron" exe. Keeping it in afterPack closes that gap.
 //
 // Also runnable standalone for ad-hoc re-stamping:
-//   node scripts/set-exe-identity.cjs <path-to-Hermes.exe>
+//   node scripts/set-exe-identity.cjs <path-to-Marketing-OS.exe>
 //
 // Exits 0 on success, non-zero on failure when run as a CLI. As a hook,
 // stampExeIdentity() resolves on success and rejects on failure; the caller
@@ -38,7 +38,7 @@
 const path = require('node:path')
 const fs = require('node:fs')
 
-// Stamp the Hermes icon + identity onto `exe`. Resolves on success, throws on
+// Stamp the Marketing OS icon + identity onto `exe`. Resolves on success, throws on
 // failure. `desktopRoot` defaults to this script's package root so the icon and
 // the rcedit dependency resolve regardless of cwd.
 async function stampExeIdentity(exe, desktopRoot = path.resolve(__dirname, '..')) {
@@ -68,14 +68,14 @@ async function stampExeIdentity(exe, desktopRoot = path.resolve(__dirname, '..')
   await rcedit(exe, {
     icon,
     'version-string': {
-      ProductName: 'Hermes',
-      FileDescription: 'Hermes',
-      CompanyName: 'Nous Research',
-      LegalCopyright: 'Copyright (c) 2026 Nous Research'
+      ProductName: 'Marketing OS',
+      FileDescription: 'Marketing OS',
+      CompanyName: 'Marketing OS',
+      LegalCopyright: 'Copyright (c) 2026 Marketing OS'
     }
   })
 
-  console.log('[set-exe-identity] done — Hermes icon + identity stamped')
+  console.log('[set-exe-identity] done — Marketing OS icon + identity stamped')
 }
 
 module.exports = { stampExeIdentity }
