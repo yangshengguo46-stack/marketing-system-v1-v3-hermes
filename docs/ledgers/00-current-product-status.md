@@ -62,7 +62,7 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 | 两套桌面 UI | 当前产品壳为根目录 `src/` + `electron/`；Hermes fork 自身已有 `apps/desktop/`（Electron + React、原生 chat/session/skills/messaging/cron/approval/settings，约 437 个 src 文件）。继续维护前者会形成第二套壳 |
 | 自动化 | 2026-07-10 当前工作树全量 Python：1325 passed，TypeScript `tsc --noEmit` 通过，秘密扫描通过；1 个已知 Starlette/httpx 弃用警告 |
 | 构建 | backend 43MB、Hermes 发行源树 39MB、MCP+Chromium 407MB；Electron x64 DMG 约 352MB（未签名） |
-| Hermes fork | 嵌套产品分支 `codex/marketing-os-runtime` 已提交至 `b87fabfb7`；上游 SHA + 产品 tree `15e529a5b252` + 六个 checksummed patch 已锁定，nested repo clean，bootstrap/verifier 可得到同一 tree |
+| Hermes fork | 嵌套产品分支 `codex/marketing-os-runtime` 已提交至 `ebc4004c4`；上游 SHA + 产品 tree `3956f1edc7f5` + 七个 checksummed patch 已锁定，nested repo clean，bootstrap/verifier 可得到同一 tree |
 | 打包验收 | 包内 Hermes manifest/source、MCP CLI/Chromium 均通过结构 hard gate；冻结 backend 真实创建 Agent session 并调用 L0，未调用外部模型 |
 
 ### 自动化不能证明的事情
@@ -92,7 +92,9 @@ UI 同样必须纠偏。`runtime/hermes-agent/apps/desktop` 已经拥有 Hermes 
 
 同一投影已注册为 Hermes 原生 `marketing` toolset：`marketing_read_accounts` 与 `marketing_read_account_context` 默认进入桌面、消息渠道和 cron 的核心工具集。真实工具 dispatcher 已在本机读取账号 `acct_194dedab3145` 并返回 `not_started → draft_audience_hypothesis`，不经过外层 `HermesAgentService/tool_manifest/FastAPI`。这完成了“UI 能看”到“Agent 自己能取证”的第一步；会话级账号绑定见下一段，账号领域写入仍待迁移。
 
-会话级账号绑定已经进入 fork 原生 SessionDB，而不是 UI 临时状态：`sessions` 直接保存 `marketing_user_id/marketing_account_id`，新对话从工作台选中账号后随 `session.create` 一次绑定，历史恢复、分支和压缩后继会话自动继承。账号作用域只把稳定路由 ID 放入缓存友好的会话提示，动态 DNA、受众、生命周期和指标仍必须调用原生账号工具取最新事实；首次模型调用后禁止在原会话偷换账号，避免多账号串记忆。没有账号的用户绑定 `prospect_*` 作用域，可从自然对话建模。该纵切通过 303 个 SessionDB/产品定向测试、75 个 Gateway protocol 测试、19 个 UI 定向测试、完整 Desktop lint/typecheck/production build；尚未完成真实用户点击与跨重启人工验收，账号领域写入仍在旧业务库。
+会话级账号绑定已经进入 fork 原生 SessionDB，而不是 UI 临时状态：`sessions` 直接保存 `marketing_user_id/marketing_account_id`，新对话从工作台选中账号后随 `session.create` 一次绑定，历史恢复、分支和压缩后继会话自动继承。账号作用域只把稳定路由 ID 放入缓存友好的会话提示，动态 DNA、受众、生命周期和指标仍必须调用原生账号工具取最新事实；首次模型调用后禁止在原会话偷换账号，避免多账号串记忆。没有账号的用户绑定 `prospect_*` 作用域，可从自然对话建模。该纵切通过 303 个 SessionDB/产品定向测试、75 个 Gateway protocol 测试、19 个 UI 定向测试、完整 Desktop lint/typecheck/production build；尚未完成真实用户点击与跨重启人工验收，其余账号领域写入仍在旧业务层。
+
+账号写入的第一段所有权也已进入 fork：`AccountLifecycleRepository` 原生初始化并写入版本化 `account_strategy_projects/audience_hypotheses`，支持经营目标、受众草案和显式用户确认；`marketing_update_account_lifecycle` 只有一个动作入口，不接受模型提供的账号 ID，dispatcher 按 SessionDB 强制写当前会话绑定账号，跨账号 read/write 会被拒绝。确认前不推进生命周期，确认后从同一真相库读回 `audience_hypothesis_ready`。本段 380 个 SessionDB/产品/Gateway 回归通过；定位、对标、实际受众、实验等剩余 schema 的写入所有权与旧库升级迁移仍待逐段接管，不能宣称 Account 领域已全部迁完。
 
 ### P0-00 迁移映射（当前 → 唯一目标）
 
@@ -217,13 +219,13 @@ UserGoal
 | 顺序 | ID | 工作 | 完成证据 | 状态 |
 |---:|---|---|---|---|
 | 1 | R0-00 | Hermes 产品 fork 纠偏 | `apps/desktop` 成为唯一 UI；fork 成为一等产品源码；Agent 生命周期不再由外层 `HermesAgentService` 拥有；建立逐段迁移与兼容测试，最终删除根目录旧 UI/IPC/adapter 主路径 | code + automated baseline：原生身份/gateway/workbench/chat route/branding 已完成；领域迁移与旧主路径删除 pending |
-| 2 | R0-01 | Hermes fork 可复现基线 | 当前 lock/patch 可复现；下一步改成可直接开发、提交、构建的产品 fork 源码边界 | automated complete：nested commit + tree lock + 6-patch replay；verifier/bootstrap 及 reproducibility tests passed |
+| 2 | R0-01 | Hermes fork 可复现基线 | 当前 lock/patch 可复现；下一步改成可直接开发、提交、构建的产品 fork 源码边界 | automated complete：nested commit + tree lock + 7-patch replay；verifier/bootstrap 及 reproducibility tests passed |
 | 3 | R0-02 | 打包 runtime 闭环 | Hermes/MCP 缺失 hard fail；冻结 backend 真实创建 session + L0；真实 Provider 对话和干净机待验 | packaged partial（结构、session、L0、MCP CLI 已通过） |
 | 4 | R1-01 | 统一 ToolOutcome | blocked/error 不再被标 completed；审批等待/回执按 approval_id 投影；未知外部结果不自动重试 | automated complete（迁入 fork 后必须重验） |
 | 5 | R1-02 | 图文真实生产纵切 | Agent 正文/双平台变体进入 ContentAsset；缺正文、缺引用、复制/重复变体均阻断；不自动评分 | automated partial（迁入 fork 后必须重验） |
 | 6 | R2-01 | 发布单真相源 | 已确认 JSON/UI/SQL 双路径；暂不继续改，待 R0-00 迁移骨架确定后在新边界完成 | audit complete，implementation paused |
 | 7 | R2-02 | 未校准预测降级 | 软文已只给 uncalibrated readiness；不露脸视频及其他生产路线仍需清除固定区间 | automated partial（soft article only） |
-| 8 | R3-01 | 领域服务接入 fork | 取消 Tool Manifest → FastAPI server 反向依赖；Account/Content/Publishing 作为 fork 内建领域端口 | code + automated + dev-runtime partial：Account 只读投影、Gateway、原生 toolset、SessionDB 会话作用域和工作台选账号已接入；真实账号读取已验。Account 写入、Content、Publishing pending |
+| 8 | R3-01 | 领域服务接入 fork | 取消 Tool Manifest → FastAPI server 反向依赖；Account/Content/Publishing 作为 fork 内建领域端口 | code + automated + dev-runtime partial：Account 只读投影、Gateway、原生 toolset、SessionDB 会话作用域、工作台选账号，以及经营目标/受众草案/确认写入已接入；真实账号读取已验。其余 Account 写入、Content、Publishing pending |
 | 9 | R3-02 | 单一账号浏览器 profile | 登录与后台托管复用同一身份，跨重启不重复扫码 | pending |
 | 10 | R4-01 | 真人/打包验收门 | Electron UI E2E + 干净机 + 真实内容审稿 + 回执/指标闭环 | pending |
 
