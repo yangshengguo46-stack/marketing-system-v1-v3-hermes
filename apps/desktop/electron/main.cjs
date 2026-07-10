@@ -42,7 +42,7 @@ const { waitForDashboardPortAnnouncement } = require('./backend-ready.cjs')
 const { serializeJsonBody, setJsonRequestHeaders } = require('./oauth-net-request.cjs')
 const { fetchMarketplaceThemes, searchMarketplaceThemes } = require('./vscode-marketplace.cjs')
 const { buildDesktopBackendEnv, normalizeHermesHomeRoot } = require('./backend-env.cjs')
-const { readWindowsUserEnvVar } = require('./windows-user-env.cjs')
+const { migrateLegacyProviderEnvironment } = require('./legacy-provider-migration.cjs')
 const { readWslWindowsClipboardImage } = require('./wsl-clipboard-image.cjs')
 const { nativeOverlayWidth: computeNativeOverlayWidth } = require('./titlebar-overlay-width.cjs')
 const { readDirForIpc } = require('./fs-read-dir.cjs')
@@ -289,43 +289,11 @@ if (INSTALL_STAMP) {
   )
 }
 
-// HERMES_HOME — the user-facing root for everything Hermes-related. Mirrors
-// scripts/install.ps1's $HermesHome and scripts/install.sh's $HERMES_HOME.
-//
-// Defaults:
-//   Windows: %LOCALAPPDATA%\hermes (matches install.ps1)
-//   macOS / Linux: ~/.hermes (matches install.sh)
-//
-// Special case for Windows: if the user has a legacy ~/.hermes directory
-// (e.g., from a prior pip install or a manual setup) AND no
-// %LOCALAPPDATA%\hermes yet, prefer the legacy path so we don't orphan their
-// existing config / sessions / .env. New installs go to %LOCALAPPDATA%.
-//
-// HERMES_DESKTOP_USER_DATA_DIR (used by test:desktop:fresh) puts the sandbox
-// HERMES_HOME beneath the throwaway userData dir so a fresh-install run never
-// touches the user's real ~/.hermes / %LOCALAPPDATA%\hermes.
+// Marketing OS owns one app-scoped Hermes home. It must not depend on, mutate,
+// or silently split state with a user's separately installed ~/.hermes.
 function resolveHermesHome() {
   if (process.env.HERMES_HOME) return normalizeHermesHomeRoot(process.env.HERMES_HOME)
-  if (USER_DATA_OVERRIDE) return path.join(path.resolve(USER_DATA_OVERRIDE), 'hermes-home')
-  if (IS_WINDOWS) {
-    // A GUI app launched from Explorer inherits the environment block captured
-    // at login, so a HERMES_HOME set via `setx` AFTER login is invisible in
-    // process.env even though the CLI (a fresh shell) sees it. Without this the
-    // backend silently falls back to %LOCALAPPDATA%\hermes and reports "No
-    // inference provider configured" despite a valid configured home (#45471).
-    // Consult the live User-scoped registry value before the default below.
-    const fromRegistry = readWindowsUserEnvVar('HERMES_HOME')
-    if (fromRegistry) return normalizeHermesHomeRoot(fromRegistry)
-  }
-  if (IS_WINDOWS && process.env.LOCALAPPDATA) {
-    const localappdata = path.join(process.env.LOCALAPPDATA, 'hermes')
-    const legacy = path.join(app.getPath('home'), '.hermes')
-    // Migrate transparently to LOCALAPPDATA, but honour an existing legacy
-    // ~/.hermes setup (no LOCALAPPDATA install yet) so users don't lose state.
-    if (!directoryExists(localappdata) && directoryExists(legacy)) return legacy
-    return localappdata
-  }
-  return path.join(app.getPath('home'), '.hermes')
+  return path.join(path.resolve(USER_DATA_OVERRIDE || app.getPath('userData')), 'agent-runtime')
 }
 
 const HERMES_HOME = resolveHermesHome()
@@ -5497,13 +5465,9 @@ async function startHermes() {
         env: {
           ...process.env,
           // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
-          // resolves to the SAME location our resolveHermesHome() picked. Without
-          // this pin, Python falls back to ~/.hermes on every platform — fine on
-          // mac/linux (where our default matches), but on Windows our default is
-          // %LOCALAPPDATA%\hermes, which differs from C:\Users\<u>\.hermes.
-          // Mismatch would split config / sessions / .env / logs across two
-          // directories. install.ps1 sets HERMES_HOME via setx; the desktop
-          // can't reliably do that, so we set it inline for every spawn.
+          // resolves to this product's app-scoped agent-runtime directory. The
+          // native Hermes settings API, sessions, profiles and logs therefore
+          // share one owner instead of falling back to a separate ~/.hermes.
           HERMES_HOME,
           ...backend.env,
           TERMINAL_CWD: hermesCwd,
@@ -7511,6 +7475,19 @@ app.on('open-url', (event, url) => {
 })
 
 app.whenReady().then(() => {
+  const providerMigration = migrateLegacyProviderEnvironment({
+    userDataPath: app.getPath('userData'),
+    hermesHome: HERMES_HOME,
+    safeStorage
+  })
+  if (providerMigration.migrated) {
+    rememberLog(
+      `[migration] moved ${providerMigration.importedKeys.length} legacy provider setting(s) ` +
+        'into Hermes native configuration'
+    )
+  } else if (!['no-legacy-store', 'secure-storage-unavailable'].includes(providerMigration.reason)) {
+    rememberLog(`[migration] legacy provider settings not migrated: ${providerMigration.reason}`)
+  }
   if (IS_MAC) {
     Menu.setApplicationMenu(buildApplicationMenu())
   } else {
