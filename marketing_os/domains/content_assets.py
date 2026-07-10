@@ -1,0 +1,319 @@
+"""Account-scoped content assets owned by the native Hermes runtime."""
+
+from __future__ import annotations
+
+import json
+import hashlib
+import sqlite3
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from typing import Any, Iterator
+
+from marketing_os.data_paths import MarketingDataPaths
+from marketing_os.domains.content_production import CONTENT_KINDS, VALID_PLATFORMS
+
+
+ASSET_TYPES = {"script", "video", "image", "caption"}
+
+
+class ContentAssetRepository:
+    def __init__(self, paths: MarketingDataPaths | None = None):
+        self.paths = paths or MarketingDataPaths.from_env()
+        self._ensure_schema()
+
+    def save_production_plan(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not isinstance(plan, dict) or plan.get("status") != "planned":
+            raise ValueError("a valid production plan is required")
+        kind = str(plan.get("kind") or "")
+        if kind not in CONTENT_KINDS:
+            raise ValueError("production plan kind is invalid")
+        objective = _bounded_text(plan.get("objective"), "objective", 2_000)
+        platforms = plan.get("target_platforms")
+        if not isinstance(platforms, list) or not platforms:
+            raise ValueError("production plan requires target platforms")
+        if any(platform not in VALID_PLATFORMS for platform in platforms):
+            raise ValueError("production plan contains unsupported platform")
+        fingerprint = json.dumps(
+            {
+                "user_id": user_id,
+                "account_id": account_id,
+                "kind": kind,
+                "objective": objective,
+                "platforms": platforms,
+                "constraints": plan.get("constraints") or {},
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:24]
+        plan_id = f"production_plan_{digest}"
+        payload = dict(plan)
+        payload["plan_id"] = plan_id
+        encoded = _bounded_json(payload, "production_plan", 500_000)
+        now = _now()
+        with self._transaction() as db:
+            db.execute(
+                """INSERT INTO content_production_plans
+                (id,user_id,account_id,kind,objective,platforms_json,plan_json,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,'planned',?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    plan_json=excluded.plan_json,
+                    updated_at=excluded.updated_at""",
+                (
+                    plan_id,
+                    user_id,
+                    account_id,
+                    kind,
+                    objective,
+                    json.dumps(platforms, ensure_ascii=False),
+                    encoded,
+                    now,
+                    now,
+                ),
+            )
+            row = db.execute(
+                "SELECT * FROM content_production_plans WHERE id=?",
+                (plan_id,),
+            ).fetchone()
+        return _plan_record(row)
+
+    def create_draft(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        title: str,
+        plan_id: str,
+        asset_type: str,
+        platform: str,
+        production_kind: str,
+        content: dict[str, Any],
+        topic: str = "",
+        hook: str = "",
+        evidence_refs: list[str] | None = None,
+        memory_refs: list[str] | None = None,
+    ) -> dict[str, Any]:
+        title_value = _bounded_text(title, "title", 300)
+        plan_id_value = _bounded_text(plan_id, "plan_id", 120)
+        if asset_type not in ASSET_TYPES:
+            raise ValueError(f"unsupported asset type: {asset_type}")
+        if platform not in VALID_PLATFORMS:
+            raise ValueError(f"unsupported content platform: {platform}")
+        if production_kind not in CONTENT_KINDS:
+            raise ValueError(f"unsupported production kind: {production_kind}")
+        if not isinstance(content, dict) or not content:
+            raise ValueError("content must be a non-empty object")
+        if any(str(key).startswith("_") for key in content):
+            raise ValueError("content keys beginning with '_' are reserved")
+        payload = dict(content)
+        payload["_production_kind"] = production_kind
+        payload["_provenance_evidence_refs"] = _bounded_refs(evidence_refs or [], "evidence_refs")
+        payload["_provenance_memory_refs"] = _bounded_refs(memory_refs or [], "memory_refs")
+        payload["_created_by"] = "hermes-native-marketing"
+        encoded = _bounded_json(payload, "content", 500_000)
+        now = _now()
+        asset_id = f"asset_{uuid.uuid4().hex}"
+        with self._transaction() as db:
+            plan_row = db.execute(
+                """SELECT * FROM content_production_plans
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (plan_id_value, user_id, account_id),
+            ).fetchone()
+            if plan_row is None:
+                raise KeyError("production plan not found in account scope")
+            plan_platforms = json.loads(plan_row["platforms_json"])
+            if plan_row["kind"] != production_kind:
+                raise ValueError("draft production kind does not match its plan")
+            if platform not in plan_platforms:
+                raise ValueError("draft platform is outside its production plan")
+            payload["_production_plan_id"] = plan_id_value
+            encoded = _bounded_json(payload, "content", 500_000)
+            db.execute(
+                """INSERT INTO content_assets
+                (id,user_id,account_id,platform,title,type,status,parent_id,experiment_id,
+                 topic,hook,version,content_json,metrics_json,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,'draft',NULL,NULL,?,?,1,?,'{}',?,?)""",
+                (
+                    asset_id,
+                    user_id,
+                    account_id,
+                    platform,
+                    title_value,
+                    asset_type,
+                    _optional_text(topic, 200),
+                    _optional_text(hook, 200),
+                    encoded,
+                    now,
+                    now,
+                ),
+            )
+            db.execute(
+                """UPDATE content_production_plans
+                SET status='draft_created', updated_at=? WHERE id=?""",
+                (now, plan_id_value),
+            )
+        return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
+
+    def get(self, *, asset_id: str, user_id: str, account_id: str) -> dict[str, Any]:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM content_assets WHERE id=? AND user_id=? AND account_id=?",
+                (asset_id, user_id, account_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError("content asset not found in account scope")
+        return _record(row)
+
+    def list(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        status: str | None = None,
+        platform: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        safe_limit = max(1, min(int(limit), 50))
+        query = "SELECT * FROM content_assets WHERE user_id=? AND account_id=?"
+        params: list[Any] = [user_id, account_id]
+        if status:
+            query += " AND status=?"
+            params.append(status)
+        if platform:
+            if platform not in VALID_PLATFORMS:
+                raise ValueError(f"unsupported content platform: {platform}")
+            query += " AND platform=?"
+            params.append(platform)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(safe_limit)
+        with self._connect() as db:
+            rows = db.execute(query, params).fetchall()
+        return {
+            "user_id": user_id,
+            "account_id": account_id,
+            "assets": [_record(row) for row in rows],
+            "total": len(rows),
+        }
+
+    def _ensure_schema(self) -> None:
+        self.paths.agent_db.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as db:
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS content_assets (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL DEFAULT 'default',
+                    account_id TEXT,
+                    platform TEXT,
+                    title TEXT NOT NULL,
+                    type TEXT NOT NULL DEFAULT 'script',
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    parent_id TEXT,
+                    experiment_id TEXT,
+                    topic TEXT,
+                    hook TEXT,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    content_json TEXT NOT NULL DEFAULT '{}',
+                    metrics_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_content_assets_status ON content_assets(status);
+                CREATE INDEX IF NOT EXISTS idx_content_assets_account ON content_assets(account_id);
+                CREATE INDEX IF NOT EXISTS idx_content_assets_scope
+                    ON content_assets(user_id, account_id, updated_at);
+                CREATE TABLE IF NOT EXISTS content_production_plans (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    objective TEXT NOT NULL,
+                    platforms_json TEXT NOT NULL,
+                    plan_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'planned',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_content_production_plan_scope
+                    ON content_production_plans(user_id, account_id, updated_at);
+                """
+            )
+
+    def _connect(self) -> sqlite3.Connection:
+        db = sqlite3.connect(self.paths.agent_db, timeout=10)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")
+        return db
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+
+def _record(row: sqlite3.Row) -> dict[str, Any]:
+    value = dict(row)
+    value["content"] = json.loads(value.pop("content_json"))
+    value["metrics"] = json.loads(value.pop("metrics_json"))
+    return value
+
+
+def _plan_record(row: sqlite3.Row) -> dict[str, Any]:
+    value = json.loads(row["plan_json"])
+    value["plan_id"] = row["id"]
+    value["checkpoint_status"] = row["status"]
+    value["created_at"] = row["created_at"]
+    value["updated_at"] = row["updated_at"]
+    return value
+
+
+def _bounded_text(value: Any, field: str, limit: int) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field} is required")
+    if len(text) > limit:
+        raise ValueError(f"{field} exceeds {limit} characters")
+    return text
+
+
+def _optional_text(value: Any, limit: int) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _bounded_refs(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be a list")
+    result = [str(item).strip() for item in value if str(item).strip()]
+    if len(result) > 100 or any(len(item) > 500 for item in result):
+        raise ValueError(f"{field} exceeds limits")
+    return result
+
+
+def _bounded_json(value: Any, field: str, limit: int) -> str:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be JSON serializable") from exc
+    if len(encoded.encode("utf-8")) > limit:
+        raise ValueError(f"{field} exceeds {limit} bytes")
+    return encoded
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()

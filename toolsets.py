@@ -32,6 +32,7 @@ _HERMES_CORE_TOOLS = [
     # Marketing OS product context. These bounded read tools are always present
     # so desktop, messaging and cron sessions operate on the same accounts.
     "marketing_read_accounts", "marketing_read_account_context", "marketing_update_account_lifecycle",
+    "marketing_plan_content_production", "marketing_read_content_assets", "marketing_draft_content_create",
     # Web
     "web_search", "web_extract",
     # Terminal + process management
@@ -98,11 +99,14 @@ _HERMES_WEBHOOK_SAFE_TOOLS = [
 TOOLSETS = {
     # Basic toolsets - individual tool categories
     "marketing": {
-        "description": "Marketing OS account, audience, positioning and operating-context tools",
+        "description": "Marketing OS account, audience, content planning and durable asset tools",
         "tools": [
             "marketing_read_accounts",
             "marketing_read_account_context",
             "marketing_update_account_lifecycle",
+            "marketing_plan_content_production",
+            "marketing_read_content_assets",
+            "marketing_draft_content_create",
         ],
         "includes": [],
     },

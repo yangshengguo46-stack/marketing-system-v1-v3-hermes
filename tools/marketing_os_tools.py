@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import json
 
-from marketing_os.domains import AccountContextRepository, AccountLifecycleRepository
+from marketing_os.domains import (
+    AccountContextRepository,
+    AccountLifecycleRepository,
+    ContentAssetRepository,
+    ContentProductionPlanner,
+)
 from marketing_os.session_scope import enforce_tool_account_scope
 from tools.registry import registry
 
@@ -83,6 +88,81 @@ UPDATE_ACCOUNT_LIFECYCLE_SCHEMA = {
     },
 }
 
+PLAN_CONTENT_PRODUCTION_SCHEMA = {
+    "name": "marketing_plan_content_production",
+    "description": (
+        "Build a Hermes-native production work order for a soft article, faceless material video, "
+        "or premium human/digital-human video. It reads the current conversation's account context, "
+        "selects a lane and shared capabilities, and exposes audience/evidence/rights/cost gates. "
+        "The work order is persisted as a checkpoint and returns a plan_id required for drafting."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "objective": {"type": "string"},
+            "kind": {
+                "type": "string",
+                "enum": ["auto", "article_soft", "faceless_video", "premium_human_video"],
+                "default": "auto",
+            },
+            "platforms": {"type": "array", "items": {"type": "string"}},
+            "audience": {"type": "string"},
+            "evidence_refs": {"type": "array", "items": {"type": "string"}},
+            "constraints": {"type": "object"},
+        },
+        "required": ["objective"],
+    },
+}
+
+READ_CONTENT_ASSETS_SCHEMA = {
+    "name": "marketing_read_content_assets",
+    "description": (
+        "List durable content drafts and assets for the account bound to this conversation. "
+        "Use it to resume prior work instead of recreating or storing drafts in long-term memory."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string"},
+            "platform": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+        },
+        "required": [],
+    },
+}
+
+CREATE_CONTENT_DRAFT_SCHEMA = {
+    "name": "marketing_draft_content_create",
+    "description": (
+        "Save a substantive, reversible content draft for the account bound to this conversation. "
+        "Use after planning and evidence collection. The account id is taken from the Hermes session "
+        "and cannot be supplied or overridden by the model."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "plan_id": {"type": "string"},
+            "type": {
+                "type": "string",
+                "enum": ["script", "video", "image", "caption"],
+                "default": "script",
+            },
+            "platform": {"type": "string"},
+            "production_kind": {
+                "type": "string",
+                "enum": ["article_soft", "faceless_video", "premium_human_video"],
+            },
+            "topic": {"type": "string"},
+            "hook": {"type": "string"},
+            "content": {"type": "object"},
+            "evidence_refs": {"type": "array", "items": {"type": "string"}},
+            "memory_refs": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["title", "plan_id", "platform", "production_kind", "content"],
+    },
+}
+
 
 def _list_accounts(_args: dict, **_kwargs) -> str:
     return json.dumps(AccountContextRepository().list_accounts(), ensure_ascii=False)
@@ -150,6 +230,72 @@ def _update_account_lifecycle(args: dict, **kwargs) -> str:
     )
 
 
+def _plan_content_production(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    context = AccountContextRepository().read(user_id=user_id, account_id=account_id)
+    result = ContentProductionPlanner().plan(
+        objective=str(args.get("objective") or ""),
+        kind=str(args.get("kind") or "auto"),
+        platforms=args.get("platforms"),
+        audience=str(args.get("audience") or ""),
+        evidence_refs=args.get("evidence_refs") or [],
+        constraints=args.get("constraints") or {},
+        account_context=context,
+    )
+    checkpoint = ContentAssetRepository().save_production_plan(
+        user_id=user_id,
+        account_id=account_id,
+        plan=result,
+    )
+    return json.dumps(checkpoint, ensure_ascii=False)
+
+
+def _read_content_assets(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = ContentAssetRepository().list(
+        user_id=user_id,
+        account_id=account_id,
+        status=str(args.get("status") or "") or None,
+        platform=str(args.get("platform") or "") or None,
+        limit=int(args.get("limit") or 20),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _create_content_draft(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = ContentAssetRepository().create_draft(
+        user_id=user_id,
+        account_id=account_id,
+        title=str(args.get("title") or ""),
+        plan_id=str(args.get("plan_id") or ""),
+        asset_type=str(args.get("type") or "script"),
+        platform=str(args.get("platform") or ""),
+        production_kind=str(args.get("production_kind") or ""),
+        content=args.get("content"),
+        topic=str(args.get("topic") or ""),
+        hook=str(args.get("hook") or ""),
+        evidence_refs=args.get("evidence_refs") or [],
+        memory_refs=args.get("memory_refs") or [],
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 registry.register(
     name="marketing_read_accounts",
     toolset="marketing",
@@ -175,4 +321,31 @@ registry.register(
     handler=_update_account_lifecycle,
     description="Create and confirm versioned account goals and audience hypotheses.",
     emoji="🧬",
+)
+
+registry.register(
+    name="marketing_plan_content_production",
+    toolset="marketing",
+    schema=PLAN_CONTENT_PRODUCTION_SCHEMA,
+    handler=_plan_content_production,
+    description="Plan one account-scoped content production job with explicit evidence and rights gates.",
+    emoji="🗺️",
+)
+
+registry.register(
+    name="marketing_read_content_assets",
+    toolset="marketing",
+    schema=READ_CONTENT_ASSETS_SCHEMA,
+    handler=_read_content_assets,
+    description="Resume durable content work for the current account scope.",
+    emoji="🗂️",
+)
+
+registry.register(
+    name="marketing_draft_content_create",
+    toolset="marketing",
+    schema=CREATE_CONTENT_DRAFT_SCHEMA,
+    handler=_create_content_draft,
+    description="Persist a reversible content draft in the current account scope.",
+    emoji="✍️",
 )

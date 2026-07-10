@@ -170,6 +170,9 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
         "marketing_read_accounts",
         "marketing_read_account_context",
         "marketing_update_account_lifecycle",
+        "marketing_plan_content_production",
+        "marketing_read_content_assets",
+        "marketing_draft_content_create",
     }
     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
     assert result["lifecycle"]["stage"] == "positioning_approved"

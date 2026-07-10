@@ -31,6 +31,9 @@ def test_runtime_guidance_keeps_hermes_primary_without_a_second_agent():
     assert "Marketing OS capabilities may both" in HERMES_AGENT_HELP_GUIDANCE
     assert any("never a second runtime" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
     assert any("not historical directories" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
+    assert "marketing_plan_content_production" in HERMES_AGENT_HELP_GUIDANCE
+    assert "marketing_draft_content_create" in HERMES_AGENT_HELP_GUIDANCE
+    assert "never put complete articles" in HERMES_AGENT_HELP_GUIDANCE
 
 
 def test_hermes_ecosystem_contracts_remain_product_capabilities():
