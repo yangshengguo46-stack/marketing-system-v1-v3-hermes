@@ -1,0 +1,359 @@
+From 40df58bd54d8f1a7fb7949ecaf42977516f6c613 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 20:10:26 +0800
+Subject: [PATCH] feat(marketing-os): preserve Hermes ecosystem update paths
+
+---
+ hermes_cli/main.py                            | 13 ++++
+ hermes_cli/web_server.py                      | 30 ++++++++
+ marketing_os/product.py                       | 68 +++++++++++++++++++
+ .../test_dashboard_admin_endpoints.py         | 24 +++++++
+ tests/test_marketing_os_product.py            | 55 +++++++++++++++
+ .../tui_gateway/test_marketing_os_product.py  | 21 ++++++
+ tui_gateway/server.py                         |  7 +-
+ 7 files changed, 217 insertions(+), 1 deletion(-)
+
+diff --git a/hermes_cli/main.py b/hermes_cli/main.py
+index 0420aef4f..ba51795b5 100644
+--- a/hermes_cli/main.py
++++ b/hermes_cli/main.py
+@@ -9066,6 +9066,19 @@ def cmd_update(args):
+         managed_error,
+     )
+ 
++    # The packaged product deliberately keeps Hermes' MCP/skills/plugins
++    # ecosystem, but a raw upstream pull can delete Marketing OS domain and UI
++    # behavior. Core integration is therefore release-gated; independent
++    # ecosystem updates keep using their native commands.
++    try:
++        from marketing_os.product import PRODUCT_CORE_UPDATE_MESSAGE, is_product_runtime
++
++        if is_product_runtime():
++            print(PRODUCT_CORE_UPDATE_MESSAGE)
++            return
++    except Exception:
++        pass
++
+     if is_managed():
+         managed_error("update Hermes Agent")
+         return
+diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
+index 70fcfa73d..3b3550404 100644
+--- a/hermes_cli/web_server.py
++++ b/hermes_cli/web_server.py
+@@ -1429,6 +1429,22 @@ def _dashboard_local_update_managed_externally() -> bool:
+     return True
+ 
+ 
++def _marketing_os_product_update_payload() -> Dict[str, Any] | None:
++    """Describe the safe core-update path when running inside Marketing OS."""
++
++    try:
++        from marketing_os.product import (
++            is_product_runtime,
++            product_core_update_status,
++        )
++
++        if not is_product_runtime():
++            return None
++        return product_core_update_status(__version__)
++    except Exception:
++        return None
++
++
+ def _managed_files_policy(request: Request, *, create_root: bool = True) -> ManagedFilesPolicy:
+     raw_forced_root = os.environ.get(_MANAGED_FILES_ROOT_ENV, "").strip()
+     if raw_forced_root:
+@@ -2882,6 +2898,17 @@ async def gateway_drain(request: Request):
+ @app.post("/api/hermes/update")
+ async def update_hermes():
+     """Kick off ``hermes update`` in the background."""
++    if product_update := _marketing_os_product_update_payload():
++        message = str(product_update["message"])
++        _record_completed_action("hermes-update", message, exit_code=1)
++        return {
++            "ok": False,
++            "pid": None,
++            "name": "hermes-update",
++            "error": "marketing_os_product_update_required",
++            "message": message,
++            "update_command": product_update["update_command"],
++        }
+     if _dashboard_local_update_managed_externally():
+         message = (
+             "Hermes updates are managed outside this dashboard in "
+@@ -2997,6 +3024,9 @@ async def check_hermes_update(force: bool = False):
+                  desktop's remote update overlay renders this as "what's
+                  changed". Additive: existing consumers ignore it.
+     """
++    if product_update := _marketing_os_product_update_payload():
++        return product_update
++
+     if _dashboard_local_update_managed_externally():
+         return {
+             "install_method": "managed-runtime",
+diff --git a/marketing_os/product.py b/marketing_os/product.py
+index b5cf55683..5dff15d9c 100644
+--- a/marketing_os/product.py
++++ b/marketing_os/product.py
+@@ -5,14 +5,49 @@ and messaging sessions must all construct the same product agent instead of
+ wrapping a generic Hermes process with a second personality layer.
+ """
+ 
++from __future__ import annotations
++
++import os
++from typing import Mapping
++
+ PRODUCT_ID = "marketing-os"
+ PRODUCT_NAME = "Marketing OS"
+ 
++PRODUCT_ECOSYSTEM_COMPATIBILITY = {
++    "mcp": {
++        "compatibility": "hermes-native",
++        "install_and_discovery": "preserved",
++        "update_channel": "mcp-server-or-product-release",
++    },
++    "skills": {
++        "compatibility": "hermes-native",
++        "hub_install_update": "preserved",
++        "user_skills": "preserved",
++    },
++    "plugins": {
++        "compatibility": "hermes-native",
++        "install_update": "preserved",
++    },
++    "core": {
++        "upstream": "NousResearch/hermes-agent",
++        "update_channel": "marketing-os-product-release",
++        "raw_upstream_apply": "blocked-in-product-runtime",
++    },
++}
++
++PRODUCT_CORE_UPDATE_MESSAGE = (
++    "Marketing OS is a product fork of Hermes Agent. Core Hermes updates must be "
++    "integrated and regression-tested in a Marketing OS release; applying raw "
++    "upstream in place could remove product behavior. MCP servers, Hub skills, "
++    "user skills and plugins keep their native independent install/update paths."
++)
++
+ PRODUCT_ARCHITECTURE_PRINCIPLES = (
+     "One native agent owns conversation, tasks, memory, skills and marketing workflows.",
+     "Both inherited Hermes code and earlier Marketing OS modules may be decomposed or rewritten.",
+     "Preserve product philosophy and verified user outcomes, not historical directories or adapters.",
+     "Account modeling, evidence, creation, publishing receipts, metrics and learning form one loop.",
++    "Preserve Hermes MCP, skill and plugin contracts so ecosystem capabilities remain independently maintainable.",
+ )
+ 
+ PRODUCT_AGENT_IDENTITY = (
+@@ -38,6 +73,10 @@ PRODUCT_RUNTIME_GUIDANCE = (
+     "Inherited Hermes code and earlier Marketing OS modules may both be split, "
+     "rewritten and recomposed around capability boundaries; preserve the product's "
+     "full-cycle operating philosophy rather than any historical directory layout. "
++    "Keep Hermes-native MCP servers, Hub and user skills, plugins, tool middleware "
++    "and their independent update paths compatible; core upstream changes are "
++    "integrated through tested Marketing OS product releases rather than applied "
++    "raw over the running fork. "
+     "Before giving account-specific positioning, content or growth advice, use the "
+     "native Marketing OS account tools to read the selected account's verified "
+     "context; treat every missing field as an evidence gap instead of inventing it. "
+@@ -50,3 +89,32 @@ PRODUCT_RUNTIME_GUIDANCE = (
+     "creative suggestions. External effects, paid providers, publication and "
+     "sensitive account actions require the product's approval and receipt rules."
+ )
++
++
++def is_product_runtime(env: Mapping[str, str] | None = None) -> bool:
++    """True when the fork is running as the packaged Marketing OS product."""
++
++    values = os.environ if env is None else env
++    return any(
++        str(values.get(key) or "").strip()
++        for key in (
++            "MARKETING_OS_USER_DATA",
++            "MARKETING_OS_CONFIG_DIR",
++            "MARKETING_OS_AGENT_DB",
++        )
++    )
++
++
++def product_core_update_status(current_version: str) -> dict[str, object]:
++    """Return the non-destructive core-update contract for product surfaces."""
++
++    return {
++        "install_method": "marketing-os-product-fork",
++        "current_version": current_version,
++        "behind": None,
++        "update_available": False,
++        "can_apply": False,
++        "update_command": "Update Marketing OS",
++        "message": PRODUCT_CORE_UPDATE_MESSAGE,
++        "ecosystem": PRODUCT_ECOSYSTEM_COMPATIBILITY,
++    }
+diff --git a/tests/hermes_cli/test_dashboard_admin_endpoints.py b/tests/hermes_cli/test_dashboard_admin_endpoints.py
+index 6650d055a..93b399402 100644
+--- a/tests/hermes_cli/test_dashboard_admin_endpoints.py
++++ b/tests/hermes_cli/test_dashboard_admin_endpoints.py
+@@ -813,6 +813,30 @@ class TestUpdateCheckEndpoint:
+         assert body["behind"] is None
+         assert "managed outside this dashboard" in body["message"]
+ 
++    def test_marketing_os_product_runtime_requires_a_vetted_product_release(
++        self, monkeypatch, tmp_path
++    ):
++        import hermes_cli.web_server as ws
++
++        monkeypatch.setenv("MARKETING_OS_USER_DATA", str(tmp_path / "marketing-os"))
++        monkeypatch.setattr(
++            ws,
++            "detect_install_method",
++            lambda *a, **k: pytest.fail(
++                "product runtime must not probe or apply raw Hermes updates"
++            ),
++        )
++
++        check = self.client.get("/api/hermes/update/check").json()
++        apply = self.client.post("/api/hermes/update").json()
++
++        assert check["install_method"] == "marketing-os-product-fork"
++        assert check["can_apply"] is False
++        assert check["ecosystem"]["mcp"]["install_and_discovery"] == "preserved"
++        assert check["ecosystem"]["skills"]["hub_install_update"] == "preserved"
++        assert apply["ok"] is False
++        assert apply["error"] == "marketing_os_product_update_required"
++
+     def test_check_failure_is_soft(self, monkeypatch):
+         import hermes_cli.web_server as ws
+         import hermes_cli.banner as banner
+diff --git a/tests/test_marketing_os_product.py b/tests/test_marketing_os_product.py
+index b4493e52e..8f80fb5b1 100644
+--- a/tests/test_marketing_os_product.py
++++ b/tests/test_marketing_os_product.py
+@@ -1,10 +1,17 @@
++from types import SimpleNamespace
++
+ from agent.prompt_builder import DEFAULT_AGENT_IDENTITY, HERMES_AGENT_HELP_GUIDANCE
+ from marketing_os.product import (
+     PRODUCT_AGENT_IDENTITY,
+     PRODUCT_ARCHITECTURE_PRINCIPLES,
++    PRODUCT_CORE_UPDATE_MESSAGE,
++    PRODUCT_ECOSYSTEM_COMPATIBILITY,
+     PRODUCT_NAME,
+     PRODUCT_RUNTIME_GUIDANCE,
++    is_product_runtime,
++    product_core_update_status,
+ )
++from toolsets import resolve_toolset
+ 
+ 
+ def test_marketing_os_is_the_native_agent_identity():
+@@ -21,3 +28,51 @@ def test_runtime_guidance_forbids_external_plugin_identity():
+     assert "same Marketing OS agent" in HERMES_AGENT_HELP_GUIDANCE
+     assert "earlier Marketing OS modules may both be split" in HERMES_AGENT_HELP_GUIDANCE
+     assert any("not historical directories" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
++
++
++def test_hermes_ecosystem_contracts_remain_product_capabilities():
++    from hermes_cli.mcp_picker import install_by_name
++    from hermes_cli.skills_hub import do_update
++
++    tools = set(resolve_toolset("hermes-cli"))
++
++    assert callable(install_by_name)
++    assert callable(do_update)
++    assert {"skills_list", "skill_view", "skill_manage"} <= tools
++    assert PRODUCT_ECOSYSTEM_COMPATIBILITY["mcp"]["install_and_discovery"] == "preserved"
++    assert PRODUCT_ECOSYSTEM_COMPATIBILITY["skills"]["hub_install_update"] == "preserved"
++    assert PRODUCT_ECOSYSTEM_COMPATIBILITY["core"]["raw_upstream_apply"] == "blocked-in-product-runtime"
++
++
++def test_product_runtime_is_explicit_and_not_inferred_from_import(monkeypatch):
++    monkeypatch.delenv("MARKETING_OS_USER_DATA", raising=False)
++    monkeypatch.delenv("MARKETING_OS_CONFIG_DIR", raising=False)
++    monkeypatch.delenv("MARKETING_OS_AGENT_DB", raising=False)
++    assert is_product_runtime() is False
++
++    monkeypatch.setenv("MARKETING_OS_USER_DATA", "/tmp/marketing-os")
++    assert is_product_runtime() is True
++
++
++def test_raw_core_update_is_blocked_but_ecosystem_updates_stay_available(
++    monkeypatch, capsys, tmp_path
++):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
++    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(tmp_path / "marketing-os"))
++
++    import hermes_cli.main as cli_main
++
++    monkeypatch.setattr(
++        cli_main,
++        "_cmd_update_impl",
++        lambda *_a, **_k: (_ for _ in ()).throw(
++            AssertionError("raw upstream apply must not run")
++        ),
++    )
++    cli_main.cmd_update(SimpleNamespace(check=False, gateway=False))
++    check = product_core_update_status("test-version")
++
++    assert PRODUCT_CORE_UPDATE_MESSAGE in capsys.readouterr().out
++    assert check["install_method"] == "marketing-os-product-fork"
++    assert check["can_apply"] is False
++    assert check["ecosystem"]["skills"]["hub_install_update"] == "preserved"
+diff --git a/tests/tui_gateway/test_marketing_os_product.py b/tests/tui_gateway/test_marketing_os_product.py
+index 0f7e8baaf..1f027584e 100644
+--- a/tests/tui_gateway/test_marketing_os_product.py
++++ b/tests/tui_gateway/test_marketing_os_product.py
+@@ -16,4 +16,25 @@ def test_product_status_comes_from_native_gateway():
+         "agent_owner": "native",
+         "desktop_owner": "apps/desktop",
+         "surfaces": ["desktop", "messaging", "cron"],
++        "ecosystem": {
++            "mcp": {
++                "compatibility": "hermes-native",
++                "install_and_discovery": "preserved",
++                "update_channel": "mcp-server-or-product-release",
++            },
++            "skills": {
++                "compatibility": "hermes-native",
++                "hub_install_update": "preserved",
++                "user_skills": "preserved",
++            },
++            "plugins": {
++                "compatibility": "hermes-native",
++                "install_update": "preserved",
++            },
++            "core": {
++                "upstream": "NousResearch/hermes-agent",
++                "update_channel": "marketing-os-product-release",
++                "raw_upstream_apply": "blocked-in-product-runtime",
++            },
++        },
+     }
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index 5c34bc52c..99993082b 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -12869,7 +12869,11 @@ def _(rid, params: dict) -> dict:
+ @method("marketing.product.status")
+ def _(rid, _params: dict) -> dict:
+     """Expose the product-fork identity through the native Hermes gateway."""
+-    from marketing_os.product import PRODUCT_ID, PRODUCT_NAME
++    from marketing_os.product import (
++        PRODUCT_ECOSYSTEM_COMPATIBILITY,
++        PRODUCT_ID,
++        PRODUCT_NAME,
++    )
+ 
+     return _ok(
+         rid,
+@@ -12880,6 +12884,7 @@ def _(rid, _params: dict) -> dict:
+             "agent_owner": "native",
+             "desktop_owner": "apps/desktop",
+             "surfaces": ["desktop", "messaging", "cron"],
++            "ecosystem": PRODUCT_ECOSYSTEM_COMPATIBILITY,
+         },
+     )
+ 
+-- 
+2.54.0
+
