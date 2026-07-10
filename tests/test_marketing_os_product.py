@@ -22,11 +22,14 @@ def test_marketing_os_is_the_native_agent_identity():
     assert "real publishing receipts" in DEFAULT_AGENT_IDENTITY
 
 
-def test_runtime_guidance_forbids_external_plugin_identity():
+def test_runtime_guidance_keeps_hermes_primary_without_a_second_agent():
     assert HERMES_AGENT_HELP_GUIDANCE.startswith(PRODUCT_RUNTIME_GUIDANCE)
-    assert "Never describe Hermes as an external plugin" in HERMES_AGENT_HELP_GUIDANCE
-    assert "same Marketing OS agent" in HERMES_AGENT_HELP_GUIDANCE
-    assert "earlier Marketing OS modules may both be split" in HERMES_AGENT_HELP_GUIDANCE
+    assert "single primary runtime" in HERMES_AGENT_HELP_GUIDANCE
+    assert "external plugin" in HERMES_AGENT_HELP_GUIDANCE
+    assert "HTTP-routed agent" in HERMES_AGENT_HELP_GUIDANCE
+    assert "enhanced Hermes agent" in HERMES_AGENT_HELP_GUIDANCE
+    assert "Marketing OS capabilities may both" in HERMES_AGENT_HELP_GUIDANCE
+    assert any("never a second runtime" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
     assert any("not historical directories" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
 
 
@@ -73,6 +76,6 @@ def test_raw_core_update_is_blocked_but_ecosystem_updates_stay_available(
     check = product_core_update_status("test-version")
 
     assert PRODUCT_CORE_UPDATE_MESSAGE in capsys.readouterr().out
-    assert check["install_method"] == "marketing-os-product-fork"
+    assert check["install_method"] == "marketing-os-managed-hermes"
     assert check["can_apply"] is False
     assert check["ecosystem"]["skills"]["hub_install_update"] == "preserved"

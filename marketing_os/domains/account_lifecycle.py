@@ -14,7 +14,7 @@ from marketing_os.data_paths import MarketingDataPaths
 
 
 class AccountLifecycleRepository:
-    """Own the first account-strategy state transitions in the product fork."""
+    """Own the first account-strategy transitions inside the Hermes runtime."""
 
     def __init__(self, paths: MarketingDataPaths | None = None):
         self.paths = paths or MarketingDataPaths.from_env()

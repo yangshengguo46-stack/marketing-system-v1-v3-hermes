@@ -830,7 +830,7 @@ class TestUpdateCheckEndpoint:
         check = self.client.get("/api/hermes/update/check").json()
         apply = self.client.post("/api/hermes/update").json()
 
-        assert check["install_method"] == "marketing-os-product-fork"
+        assert check["install_method"] == "marketing-os-managed-hermes"
         assert check["can_apply"] is False
         assert check["ecosystem"]["mcp"]["install_and_discovery"] == "preserved"
         assert check["ecosystem"]["skills"]["hub_install_update"] == "preserved"

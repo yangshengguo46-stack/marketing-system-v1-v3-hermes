@@ -12,10 +12,16 @@ def test_product_status_comes_from_native_gateway():
     assert response["result"] == {
         "product_id": "marketing-os",
         "product_name": "Marketing OS",
-        "runtime": "hermes-product-fork",
-        "agent_owner": "native",
-        "desktop_owner": "apps/desktop",
+        "runtime": "hermes-native-marketing",
+        "architecture": "single-runtime",
         "surfaces": ["desktop", "messaging", "cron"],
+        "enhancements": [
+            "account-modeling",
+            "evidence",
+            "content-production",
+            "publishing-receipts",
+            "metrics-learning",
+        ],
         "ecosystem": {
             "mcp": {
                 "compatibility": "hermes-native",

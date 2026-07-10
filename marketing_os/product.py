@@ -1,8 +1,8 @@
-"""Canonical product identity for every Marketing OS surface.
+"""Canonical identity for the Hermes-native Marketing OS product.
 
-This module lives in the Hermes fork on purpose. Desktop, TUI, gateway, cron
-and messaging sessions must all construct the same product agent instead of
-wrapping a generic Hermes process with a second personality layer.
+Hermes is the primary runtime. Marketing OS capabilities extend its source,
+conversation loop and ecosystem directly; they are not a second agent or an
+external service wrapped around Hermes.
 """
 
 from __future__ import annotations
@@ -36,15 +36,16 @@ PRODUCT_ECOSYSTEM_COMPATIBILITY = {
 }
 
 PRODUCT_CORE_UPDATE_MESSAGE = (
-    "Marketing OS is a product fork of Hermes Agent. Core Hermes updates must be "
-    "integrated and regression-tested in a Marketing OS release; applying raw "
-    "upstream in place could remove product behavior. MCP servers, Hub skills, "
-    "user skills and plugins keep their native independent install/update paths."
+    "Marketing OS directly extends the Hermes source tree. Core Hermes updates "
+    "must be integrated and regression-tested in a Marketing OS release; applying "
+    "raw upstream in place could remove the native marketing enhancements. MCP "
+    "servers, Hub skills, user skills and plugins keep their independent update paths."
 )
 
 PRODUCT_ARCHITECTURE_PRINCIPLES = (
-    "One native agent owns conversation, tasks, memory, skills and marketing workflows.",
-    "Both inherited Hermes code and earlier Marketing OS modules may be decomposed or rewritten.",
+    "One Hermes-native runtime owns conversation, tasks, memory, skills and marketing workflows.",
+    "Marketing domain packages are capability boundaries, never a second runtime or HTTP-routed agent.",
+    "Both Hermes core code and Marketing OS enhancements may be decomposed or rewritten.",
     "Preserve product philosophy and verified user outcomes, not historical directories or adapters.",
     "Account modeling, evidence, creation, publishing receipts, metrics and learning form one loop.",
     "Preserve Hermes MCP, skill and plugin contracts so ecosystem capabilities remain independently maintainable.",
@@ -64,14 +65,14 @@ PRODUCT_AGENT_IDENTITY = (
 )
 
 PRODUCT_RUNTIME_GUIDANCE = (
-    "You run as the Marketing OS product fork of Hermes Agent. Hermes supplies "
-    "the native conversation loop, sessions, long-running tasks, memory, skills, "
-    "cron and messaging runtime; Marketing OS directly modifies those source "
-    "paths for this product. Never describe Hermes as an external plugin, a "
-    "separate assistant, or a service that the user must operate. All desktop, "
-    "mobile and messaging surfaces are views of the same Marketing OS agent. "
-    "Inherited Hermes code and earlier Marketing OS modules may both be split, "
-    "rewritten and recomposed around capability boundaries; preserve the product's "
+    "You run as the Hermes-native Marketing OS agent. The Hermes conversation "
+    "loop, sessions, long-running tasks, memory, skills, cron and messaging gateway "
+    "are the single primary runtime; Marketing OS capabilities extend those source "
+    "paths directly. Never describe the marketing capabilities as an external plugin, "
+    "a separate assistant, an HTTP-routed agent, or a service that the user must "
+    "operate. All desktop, mobile and messaging surfaces are views of this same "
+    "enhanced Hermes agent. Hermes core code and Marketing OS capabilities may both "
+    "be split, rewritten and recomposed around capability boundaries; preserve the product's "
     "full-cycle operating philosophy rather than any historical directory layout. "
     "Keep Hermes-native MCP servers, Hub and user skills, plugins, tool middleware "
     "and their independent update paths compatible; core upstream changes are "
@@ -109,7 +110,7 @@ def product_core_update_status(current_version: str) -> dict[str, object]:
     """Return the non-destructive core-update contract for product surfaces."""
 
     return {
-        "install_method": "marketing-os-product-fork",
+        "install_method": "marketing-os-managed-hermes",
         "current_version": current_version,
         "behind": None,
         "update_available": False,

@@ -7933,17 +7933,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     break
 
             try:
-                from gateway.marketing_os_bridge import maybe_handle_marketing_os as _maybe_handle_marketing_os
+                from marketing_os.messaging import prepare_inbound_message
 
-                if await _maybe_handle_marketing_os(event, self):
-                    logger.info(
-                        "marketing_os_mobile_bridge handled platform=%s chat=%s",
-                        source.platform.value if source.platform else "unknown",
-                        source.chat_id or "unknown",
-                    )
-                    return None
-            except Exception as _bridge_exc:
-                logger.warning("marketing_os_mobile_bridge failed: %s", _bridge_exc)
+                event = prepare_inbound_message(event, self)
+                source = event.source
+            except Exception as _product_message_exc:
+                logger.warning(
+                    "Marketing OS inbound message preparation failed: %s",
+                    _product_message_exc,
+                )
 
         if is_internal:
             pass

@@ -15,9 +15,9 @@ interface MarketingProductStatus {
   product_id: string
   product_name: string
   runtime: string
-  agent_owner: string
-  desktop_owner: string
+  architecture: string
   surfaces: string[]
+  enhancements: string[]
 }
 
 interface MarketingAccountsSummary {
