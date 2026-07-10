@@ -84,7 +84,7 @@ class TestVerifyPackagedApp:
         os.chmod(chromium, stat.S_IRWXU)
 
         # MCP CLI
-        mcp_cli = mcp_runtime / "node_modules" / "@playwright" / "mcp" / "cli.js"
+        mcp_cli = mcp_runtime / "modules" / "@playwright" / "mcp" / "cli.js"
         mcp_cli.parent.mkdir(parents=True)
         mcp_cli.write_text("// cli")
 
@@ -92,6 +92,12 @@ class TestVerifyPackagedApp:
         engine = resources / "engine" / "marketing-os"
         engine.mkdir(parents=True)
         (engine / "server.py").write_text("# server")
+
+        # Hermes source runtime is a required product resource.
+        hermes = resources / "hermes-agent"
+        hermes.mkdir(parents=True)
+        (hermes / "run_agent.py").write_text("# runtime")
+        (hermes / "runtime-manifest.json").write_text(json.dumps({"productTree": "a" * 40}))
 
         errors = verify_packaged_app(tmp_path)
         assert errors == []
@@ -159,6 +165,7 @@ class TestBuildConfig:
         assert "backend" in resource_targets
         assert "mcp-runtime" in resource_targets
         assert "engine" in resource_targets
+        assert "hermes-agent" in resource_targets
 
     def test_build_mac_script_exists(self):
         import json
@@ -171,8 +178,14 @@ class TestBuildConfig:
     def test_prepare_mcp_runtime_script_exists(self):
         assert (Path(__file__).parent.parent / "scripts" / "prepare-mcp-runtime.mjs").exists()
 
+    def test_prepare_hermes_runtime_script_exists(self):
+        assert (Path(__file__).parent.parent / "scripts" / "prepare-hermes-runtime.mjs").exists()
+
     def test_build_electron_script_exists(self):
         assert (Path(__file__).parent.parent / "scripts" / "build-electron.mjs").exists()
 
     def test_verify_offline_launch_script_exists(self):
         assert (Path(__file__).parent.parent / "scripts" / "verify_offline_launch.py").exists()
+
+    def test_packaged_agent_smoke_script_exists(self):
+        assert (Path(__file__).parent.parent / "scripts" / "smoke-packaged-agent.py").exists()

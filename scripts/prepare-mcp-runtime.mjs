@@ -5,7 +5,10 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const project = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const output = path.join(project, 'build', 'mcp-runtime')
-const runtimeModules = path.join(output, 'node_modules')
+// electron-builder prunes directories named node_modules even inside an
+// extraResources FileSet.  Stage the same package tree under `modules` and
+// pass it through NODE_PATH at runtime so the packaged MCP CLI is not lost.
+const runtimeModules = path.join(output, 'modules')
 
 rmSync(output, { recursive: true, force: true })
 mkdirSync(runtimeModules, { recursive: true })
@@ -42,6 +45,8 @@ writeFileSync(path.join(output, 'runtime-manifest.json'), JSON.stringify({
   mcp: mcpPackage.version,
   playwright: playwrightPackage.version,
   browserRevision: path.basename(browserRoot),
+  moduleRootRelativePath: 'modules',
+  cliRelativePath: path.join('modules', '@playwright', 'mcp', 'cli.js'),
   executableRelativePath: path.join(
     'browsers', path.basename(browserRoot), path.relative(browserRoot, executable),
   ),

@@ -18,7 +18,10 @@ from typing import Any
 # ── Hermes commit pin ────────────────────────────────────────────────
 
 HERMES_AGENT_PATH = Path(__file__).parent.parent / "runtime" / "hermes-agent"
-PINNED_HERMES_COMMIT = "4488fe134b1de4359f3a4f1f8368576413e6e268"
+HERMES_LOCK_PATH = Path(__file__).parent.parent / "runtime" / "hermes-runtime.lock.json"
+_HERMES_LOCK = json.loads(HERMES_LOCK_PATH.read_text(encoding="utf-8"))
+PINNED_HERMES_COMMIT = str(_HERMES_LOCK["baseline_commit"])
+PINNED_HERMES_PRODUCT_TREE = str(_HERMES_LOCK["product_tree"])
 
 
 def get_hermes_commit() -> str:
@@ -43,12 +46,31 @@ def get_hermes_commit() -> str:
 
 
 def verify_hermes_pin() -> dict[str, Any]:
-    """Verify Hermes agent is at the pinned commit."""
-    current = get_hermes_commit()
+    """Verify the checkout matches the locked product tree and is clean.
+
+    The outer repository owns a baseline + patch series, so the locally
+    reconstructed commit hash may differ by committer metadata.  The Git tree
+    is the reproducible source identity.
+    """
+    current_commit = get_hermes_commit()
+    current_tree = subprocess.run(
+        ["git", "-C", str(HERMES_AGENT_PATH), "rev-parse", "HEAD^{tree}"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    dirty = bool(subprocess.run(
+        ["git", "-C", str(HERMES_AGENT_PATH), "status", "--porcelain"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip())
     return {
-        "pinned": PINNED_HERMES_COMMIT,
-        "current": current,
-        "matches": current == PINNED_HERMES_COMMIT,
+        "baseline_commit": PINNED_HERMES_COMMIT,
+        "product_tree": PINNED_HERMES_PRODUCT_TREE,
+        "current_commit": current_commit,
+        "current_tree": current_tree,
+        "dirty": dirty,
+        # Backward-compatible names now refer to the reproducible tree.
+        "pinned": PINNED_HERMES_PRODUCT_TREE,
+        "current": current_tree,
+        "matches": current_tree == PINNED_HERMES_PRODUCT_TREE and not dirty,
     }
 
 

@@ -13,6 +13,7 @@ const engine = path.join(root, 'engine')
 const marketing = process.env.MARKETING_OS_ENGINE_DIR || path.join(engine, 'marketing-os')
 const server = path.join(marketing, 'server.py')
 const output = path.join(root, 'backend', 'dist')
+const hermesRuntime = path.join(root, 'build', 'hermes-runtime')
 
 for (const [label, target] of [['Python environment', python], ['Marketing OS server', server]]) {
   if (!existsSync(target)) {
@@ -30,6 +31,16 @@ if (mcpCheck.status !== 0) {
   process.exit(1)
 }
 
+const hermesPrep = spawnSync(process.execPath, [path.join(root, 'scripts', 'prepare-hermes-runtime.mjs')], {
+  cwd: root,
+  env: { ...process.env, PYTHON_BIN: python },
+  stdio: 'inherit',
+})
+if (hermesPrep.status !== 0) {
+  console.error('Hermes runtime source verification/staging failed')
+  process.exit(hermesPrep.status ?? 1)
+}
+
 mkdirSync(output, { recursive: true })
 const result = spawnSync(python, [
   '-m', 'PyInstaller',
@@ -42,8 +53,17 @@ const result = spawnSync(python, [
   '--specpath', path.join(root, 'backend'),
   '--paths', engine,
   '--paths', marketing,
+  '--paths', hermesRuntime,
   '--collect-submodules', 'agent_core',
   '--collect-submodules', 'marketing_tools',
+  '--collect-submodules', 'agent',
+  '--hidden-import', 'run_agent',
+  '--hidden-import', 'hermes_state',
+  '--hidden-import', 'model_tools',
+  '--hidden-import', 'toolsets',
+  '--hidden-import', 'tools.registry',
+  '--hidden-import', 'hermes_cli.env_loader',
+  '--hidden-import', 'hermes_cli.timeouts',
   '--hidden-import', 'yaml',
   '--hidden-import', 'mcp',
   '--hidden-import', 'mcp.client.stdio',

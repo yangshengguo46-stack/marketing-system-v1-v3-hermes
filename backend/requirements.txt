@@ -3,3 +3,30 @@ uvicorn==0.49.0
 PyYAML==6.0.3
 pyinstaller==6.21.0
 mcp==1.26.0
+
+# Hermes source runtime core.  The product stages a checksummed source tree;
+# these pinned wheels are bundled into the backend executable so customers do
+# not need a global Python or a copied development .venv.
+openai==2.24.0
+certifi==2026.5.20
+python-dotenv==1.2.2
+fire==0.7.1
+httpx[socks]==0.28.1
+rich==14.3.3
+tenacity==9.1.4
+ruamel.yaml==0.18.17
+requests==2.33.0
+jinja2==3.1.6
+pydantic==2.13.4
+prompt_toolkit==3.0.52
+croniter==6.0.0
+packaging==26.0
+Markdown==3.10.2
+PyJWT[crypto]==2.13.0
+urllib3==2.7.0
+psutil==7.2.2
+websockets==15.0.1
+pathspec==1.1.1
+python-multipart==0.0.32
+ptyprocess==0.7.0
+Pillow==12.2.0

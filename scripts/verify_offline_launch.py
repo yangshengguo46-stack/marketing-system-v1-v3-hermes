@@ -94,7 +94,7 @@ def verify_packaged_app(release_dir: Path) -> list[str]:
             errors.append(f"invalid runtime manifest: {e}")
 
     # Check MCP CLI
-    mcp_cli = mcp_runtime / "node_modules" / "@playwright" / "mcp" / "cli.js"
+    mcp_cli = mcp_runtime / "modules" / "@playwright" / "mcp" / "cli.js"
     if not check_file(mcp_cli, "MCP CLI"):
         errors.append("MCP CLI missing")
 
@@ -103,12 +103,26 @@ def verify_packaged_app(release_dir: Path) -> list[str]:
     if not check_file(engine_dir / "marketing-os" / "server.py", "engine server.py"):
         errors.append("engine server.py missing")
 
-    # Check Hermes agent runtime
+    # Check Hermes agent runtime.  The desktop conversation is not an optional
+    # plugin: a package without this source boundary is only a UI/API shell.
     hermes_dir = resources / "hermes-agent"
     if not hermes_dir.exists():
-        print(f"  ⚠️ Hermes agent runtime not found at {hermes_dir.name} (may be optional for basic startup)")
+        print(f"  ❌ Hermes agent runtime not found at {hermes_dir.name}")
+        errors.append("Hermes agent runtime missing")
     else:
         print(f"  ✅ Hermes agent runtime present")
+        if not check_file(hermes_dir / "run_agent.py", "Hermes run_agent.py"):
+            errors.append("Hermes run_agent.py missing")
+        manifest_path = hermes_dir / "runtime-manifest.json"
+        if not check_file(manifest_path, "Hermes runtime manifest"):
+            errors.append("Hermes runtime manifest missing")
+        else:
+            try:
+                manifest = json.loads(manifest_path.read_text())
+                if not manifest.get("productTree"):
+                    errors.append("Hermes runtime manifest has no productTree")
+            except json.JSONDecodeError as exc:
+                errors.append(f"invalid Hermes runtime manifest: {exc}")
 
     return errors
 

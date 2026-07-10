@@ -1817,8 +1817,11 @@ async function startServer() {
     MARKETING_OS_NODE_EXECUTABLE: process.execPath,
     MARKETING_OS_MCP_CLI: isDev
       ? path.join(__dirname, '..', 'node_modules', '@playwright', 'mcp', 'cli.js')
-      : path.join(process.resourcesPath, 'mcp-runtime', 'node_modules', '@playwright', 'mcp', 'cli.js'),
+      : path.join(process.resourcesPath, 'mcp-runtime', 'modules', '@playwright', 'mcp', 'cli.js'),
     MARKETING_OS_BROWSER_EXECUTABLE: bundledBrowserExecutable,
+    NODE_PATH: isDev
+      ? (process.env.NODE_PATH || path.join(__dirname, '..', 'node_modules'))
+      : path.join(process.resourcesPath, 'mcp-runtime', 'modules'),
     ...(isDev ? {} : {
       PLAYWRIGHT_BROWSERS_PATH: path.join(process.resourcesPath, 'mcp-runtime', 'browsers'),
     }),

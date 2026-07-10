@@ -10,6 +10,7 @@
     "dev:web": "vite",
     "dev:electron": "electron .",
     "build:backend": "node scripts/build-backend.mjs",
+    "prepare:hermes-runtime": "node scripts/prepare-hermes-runtime.mjs",
     "prepare:mcp-runtime": "node scripts/prepare-mcp-runtime.mjs",
     "build": "npm run build:backend && vite build && npm run prepare:mcp-runtime && node scripts/build-electron.mjs",
     "build:mac": "npm run build:backend && vite build && npm run prepare:mcp-runtime && node scripts/build-electron.mjs --mac",
@@ -19,6 +20,7 @@
     "runtime:status": "./scripts/run-hermes-source.sh status",
     "clean:local": "bash scripts/clean-local-artifacts.sh",
     "test:core": ".venv/bin/python -m pytest -q tests/test_agent_core.py",
+    "verify:packaged-agent": "python3 scripts/smoke-packaged-agent.py",
     "test": ".venv/bin/python -m pytest -q && tsc --noEmit"
   },
   "dependencies": {
@@ -92,6 +94,10 @@
       {
         "from": "build/mcp-runtime",
         "to": "mcp-runtime"
+      },
+      {
+        "from": "build/hermes-runtime",
+        "to": "hermes-agent"
       }
     ]
   }

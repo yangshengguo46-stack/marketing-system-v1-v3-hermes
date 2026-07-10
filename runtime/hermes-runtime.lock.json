@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/NousResearch/hermes-agent.git",
+  "baseline_commit": "4488fe134b1de4359f3a4f1f8368576413e6e268",
+  "product_tree": "39acd04e2b7d84424ac381c0f77c647127744e24",
+  "patches": [
+    {
+      "file": "hermes-patches/0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch",
+      "sha256": "bc60009106c9fa0cded49e848c27fa53e32d54ebcebcd652a8b888db9972d370"
+    }
+  ]
+}

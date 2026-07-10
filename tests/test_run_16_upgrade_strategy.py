@@ -26,6 +26,7 @@ for root in (ENGINE_ROOT, SCRIPTS_ROOT):
 
 from upgrade_strategy import (
     PINNED_HERMES_COMMIT,
+    PINNED_HERMES_PRODUCT_TREE,
     get_hermes_commit,
     verify_hermes_pin,
     get_tool_contract,
@@ -42,6 +43,7 @@ class TestHermesCommitPin:
     def test_pinned_commit_is_set(self):
         assert PINNED_HERMES_COMMIT
         assert len(PINNED_HERMES_COMMIT) == 40  # SHA-1 hash length
+        assert len(PINNED_HERMES_PRODUCT_TREE) == 40
 
     def test_get_hermes_commit_returns_hash(self):
         commit = get_hermes_commit()
@@ -52,12 +54,19 @@ class TestHermesCommitPin:
         result = verify_hermes_pin()
         assert result["matches"] is True
         assert result["pinned"] == result["current"]
+        assert result["baseline_commit"] == PINNED_HERMES_COMMIT
+        assert result["product_tree"] == PINNED_HERMES_PRODUCT_TREE
+        assert result["dirty"] is False
 
     def test_verify_hermes_pin_detects_mismatch(self):
-        with patch("upgrade_strategy.get_hermes_commit", return_value="abc123"):
+        with patch("upgrade_strategy.subprocess.run") as run:
+            run.side_effect = [
+                MagicMock(stdout="0" * 40 + "\n"),
+                MagicMock(stdout=""),
+            ]
             result = verify_hermes_pin()
             assert result["matches"] is False
-            assert result["current"] == "abc123"
+            assert result["current"] == "0" * 40
 
 
 class TestAdapterContract:
@@ -210,12 +219,13 @@ class TestEvaluateUpgrade:
 
 
 class TestRollbackPath:
-    """Verify rollback path exists — can switch back to pinned commit."""
+    """Verify rollback identity includes baseline plus product patch tree."""
 
     def test_pinned_commit_is_documented(self):
         result = verify_hermes_pin()
         assert "pinned" in result
-        assert result["pinned"] == PINNED_HERMES_COMMIT
+        assert result["pinned"] == PINNED_HERMES_PRODUCT_TREE
+        assert result["baseline_commit"] == PINNED_HERMES_COMMIT
 
     def test_contract_snapshot_can_be_saved(self, tmp_path):
         """Contract snapshot can be saved for rollback comparison."""

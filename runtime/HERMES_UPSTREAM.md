@@ -5,12 +5,15 @@
 - Baseline date: 2026-06-28
 - Local checkout: `runtime/hermes-agent`
 - Adaptation branch: `codex/marketing-os-runtime`
+- Product tree: `39acd04e2b7d84424ac381c0f77c647127744e24`
+- Reproducible lock: `runtime/hermes-runtime.lock.json`
+- Patch series: `runtime/hermes-patches/*.patch`
 
 Product domain truth stays in `engine/agent_core`, but the Hermes fork is an actively maintained part of this product, not a frozen dependency. Patch it whenever the fork-level change materially improves continuity, initiative, context use, recovery or interaction quality and cannot be implemented more cleanly at the product boundary.
 
-## 2026-06-29 decision
+## 2026-06-29 decision（历史）
 
-No fork patch is currently required. The upstream `AIAgent` callbacks, `SessionDB`, `interrupt()` and tool registry/toolset extension points are sufficient for the current persistent-session and read-only P0 foundation. Product code uses those extension points directly; any future fork patch must name the missing invariant and include a regression test.
+当时不需要 fork patch；上游 `AIAgent` callbacks、`SessionDB`、`interrupt()` 和 tool registry 足够完成最初 P0。该判断只描述当时，不再代表当前 fork 状态。
 
 ## 2026-07-02 decision (user-authorized)
 
@@ -23,9 +26,19 @@ Direct modification of the Hermes fork is now permitted. Rules:
 
 ### Patch registry
 
-| # | Date | Files | Invariant | Regression test |
+这里仅登记 `runtime/hermes-agent` 内的真实 fork patch；`engine/agent_core` 的产品 adapter 变更不再混入本表。
+
+| # | Date | Patch | Invariant | Regression test |
 |---|---|---|---|---|
-| 1 | 2026-07-02 | `engine/agent_core/plan_protocol.py` (new), `engine/agent_core/tool_manifest.py`, `engine/agent_core/policy.py`, `engine/agent_core/hermes_adapter.py` | RUN-01: structured plan protocol — model declares plan via `marketing_plan_declare` tool; deterministic step↔tool binding replaces prose parsing | `tests/test_plan_protocol.py` (21 tests), `tests/test_agent_core.py` (tool count + policy updates) |
-| 2 | 2026-07-02 | `engine/agent_core/plan_protocol.py`, `engine/agent_core/hermes_adapter.py` | RUN-02: failure-aware checkpoint — `fail_step_on_tool_error` marks failed steps; `_build_checkpoint` includes `failed_steps` + `last_tool_ref`; `on_tool_complete` handles error/blocked/invalid statuses; resume treats failed as retryable | `tests/test_plan_protocol.py` (6 RUN-02 tests) |
-| 3 | 2026-07-02 | `tests/test_plan_checkpoint.py` | RUN-04: cross-process recovery — 4 tests for checkpoint survival across reopen, failed-step retryability, effect replay guard, and full crash recovery cycle | `tests/test_plan_checkpoint.py` (`TestCrossProcessRecoveryRUN04`, 4 tests) |
-| 4 | 2026-07-02 | `tests/test_run_12_13_14.py` (new) | RUN-12/13/14: scope isolation (5 tests), manifest snapshot (10 tests), observable timeline (4 tests) — frozen tool name set, dual-project/account/user isolation, full event correlation with secret redaction | `tests/test_run_12_13_14.py` (19 tests) |
+| 1 | 2026-07-10 | `0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch` | 飞书/微信只是同一个 Marketing OS Agent 的 communication surface；入站消息转入本机 Agent session/task，不再落回 Hermes 默认 persona；Feishu SOCKS 依赖随 extra 声明 | `tests/test_mobile_bridge.py`、`tests/test_channels.py` |
+
+## Reproduction contract
+
+`runtime/hermes-agent` 继续作为被外层 Git 忽略的嵌套 checkout，但不再是隐藏事实源：
+
+1. `runtime/hermes-runtime.lock.json` 锁定上游 URL、baseline commit、产品 tree 和每个 patch 的 SHA-256。
+2. `scripts/bootstrap-hermes-runtime.sh` 在 checkout 缺失时 clone baseline，再按顺序 `git am` 产品补丁；发现本地 dirty 或未知 revision 时 hard fail，不覆盖用户工作。
+3. `scripts/verify-hermes-runtime.py` 在测试和 release build 前验证 patch checksum、nested clean 和 product tree。
+4. `tests/test_hermes_runtime_reproducibility.py` 从 baseline 在临时目录重放 patch，证明可以重建相同 tree。
+
+2026-07-10 清理：移除了未接入执行链、无来源/许可证说明且写死平台发布时间和算法权重的泛化 content/screenwriting/video skill 草稿。领域知识必须进入可追溯资料库或受治理技能候选，不能因为文件存在就算已学会。
