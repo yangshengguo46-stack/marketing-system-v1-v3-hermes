@@ -743,7 +743,6 @@ function agentRuntimeEnvironment() {
     HERMES_AGENT_ROOT: agentRuntimeRoot(),
     MARKETING_OS_API_BASE: `http://127.0.0.1:${serverPort}`,
     MARKETING_OS_API_TOKEN: apiToken,
-    MARKETING_OS_MOBILE_BRIDGE_ENABLED: '1',
   }
 }
 

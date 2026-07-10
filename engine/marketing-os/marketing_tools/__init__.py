@@ -1,1 +1,1 @@
-"""Marketing domain tools; deliberately separate from Hermes' ``tools`` package."""
+"""Marketing capability modules used while their owners migrate into Hermes."""

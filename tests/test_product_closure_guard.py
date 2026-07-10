@@ -220,6 +220,22 @@ def test_mobile_assistant_qr_dependencies_are_bootstrapped_and_tolerant():
     assert "busy ? '取消' : '扫码连接'" in accounts
 
 
+def test_mobile_channels_use_single_native_hermes_agent_runtime():
+    gateway_run = read("runtime/hermes-agent/gateway/run.py")
+    messaging = read("runtime/hermes-agent/marketing_os/messaging.py")
+    main = read("electron/main.js")
+    channel_helper = read("electron/channel_bridge.py")
+
+    assert not (ROOT / "runtime/hermes-agent/gateway/marketing_os_bridge.py").exists()
+    assert "from marketing_os.messaging import prepare_inbound_message" in gateway_run
+    assert "MARKETING_OS_MOBILE_BRIDGE_ENABLED" not in main
+    assert "MARKETING_OS_MOBILE_BRIDGE_ENABLED" not in channel_helper
+    assert 'desired = {"MARKETING_OS_CONFIG_DIR": target}' in channel_helper
+    assert "/agent/sessions" not in messaging
+    assert "/agent/messages" not in messaging
+    assert "urllib" not in messaging
+
+
 def test_workspace_filters_legacy_weibo_cache_without_showing_as_target():
     overview = read("src/pages/Overview.tsx")
     trending = read("src/pages/Trending.tsx")

@@ -101,20 +101,12 @@ def status() -> None:
 
 
 def configure() -> None:
-    """Point the Hermes gateway at the desktop app's canonical data directory."""
+    """Point the native Hermes runtime at the product's canonical data directory."""
     target = str(os.environ.get("MARKETING_OS_CONFIG_DIR", "")).strip()
     if not target:
         raise RuntimeError("缺少桌面数据目录")
     values = env_values()
     desired = {"MARKETING_OS_CONFIG_DIR": target}
-    for key in (
-        "MARKETING_OS_API_BASE",
-        "MARKETING_OS_API_TOKEN",
-        "MARKETING_OS_MOBILE_BRIDGE_ENABLED",
-    ):
-        current = str(os.environ.get(key, "")).strip()
-        if current:
-            desired[key] = current
     changed = any(values.get(key, "") != value for key, value in desired.items())
     if changed:
         save_values(desired)

@@ -1,0 +1,705 @@
+From 2bbed64d424f665c8f73bc4bdc6c8f0744b30d1b Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 20:41:30 +0800
+Subject: [PATCH] refactor(marketing-os): make Hermes the single agent runtime
+
+---
+ apps/desktop/src/app/workbench/index.tsx      |   4 +-
+ gateway/marketing_os_bridge.py                | 242 ------------------
+ gateway/run.py                                |  18 +-
+ marketing_os/domains/account_lifecycle.py     |   2 +-
+ marketing_os/messaging.py                     | 102 ++++++++
+ marketing_os/product.py                       |  39 +--
+ .../test_dashboard_admin_endpoints.py         |   2 +-
+ tests/test_marketing_os_messaging.py          |  86 +++++++
+ tests/test_marketing_os_product.py            |  13 +-
+ .../tui_gateway/test_marketing_os_product.py  |  12 +-
+ tui_gateway/server.py                         |  14 +-
+ 11 files changed, 247 insertions(+), 287 deletions(-)
+ delete mode 100644 gateway/marketing_os_bridge.py
+ create mode 100644 marketing_os/messaging.py
+ create mode 100644 tests/test_marketing_os_messaging.py
+
+diff --git a/apps/desktop/src/app/workbench/index.tsx b/apps/desktop/src/app/workbench/index.tsx
+index b0b24602e..b0cf4a73f 100644
+--- a/apps/desktop/src/app/workbench/index.tsx
++++ b/apps/desktop/src/app/workbench/index.tsx
+@@ -15,9 +15,9 @@ interface MarketingProductStatus {
+   product_id: string
+   product_name: string
+   runtime: string
+-  agent_owner: string
+-  desktop_owner: string
++  architecture: string
+   surfaces: string[]
++  enhancements: string[]
+ }
+ 
+ interface MarketingAccountsSummary {
+diff --git a/gateway/marketing_os_bridge.py b/gateway/marketing_os_bridge.py
+deleted file mode 100644
+index d1a4eb4c5..000000000
+--- a/gateway/marketing_os_bridge.py
++++ /dev/null
+@@ -1,242 +0,0 @@
+-"""Bridge Hermes gateway messages into the Marketing OS desktop agent.
+-
+-The desktop product uses Hermes as a runtime substrate, but mobile channels
+-(Feishu/Weixin) are only communication surfaces.  Inbound mobile messages must
+-therefore be handled by the local Marketing OS Agent API instead of falling
+-through to Hermes' default gateway persona.
+-"""
+-
+-from __future__ import annotations
+-
+-import asyncio
+-import json
+-import os
+-import tempfile
+-import time
+-import urllib.error
+-import urllib.request
+-from pathlib import Path
+-from typing import Any
+-
+-
+-SUPPORTED_PLATFORMS = {"feishu", "weixin"}
+-SET_HOME_PHRASES = {"设为通知窗口", "设为我的通知窗口", "把这里设为通知窗口", "绑定通知", "绑定通知窗口"}
+-TRUTHY = {"1", "true", "yes", "on"}
+-
+-
+-def _platform_value(value: Any) -> str:
+-    return str(getattr(value, "value", value) or "").strip().lower()
+-
+-
+-def _env_key(platform: str, suffix: str) -> str:
+-    return f"{platform.upper()}_{suffix}"
+-
+-
+-def _is_enabled() -> bool:
+-    return str(os.getenv("MARKETING_OS_MOBILE_BRIDGE_ENABLED", "")).strip().lower() in TRUTHY
+-
+-
+-def _allowed_user(platform: str, user_id: str) -> bool:
+-    if not user_id:
+-        return False
+-    if str(os.getenv(_env_key(platform, "ALLOW_ALL_USERS"), "")).strip().lower() in TRUTHY:
+-        return True
+-    allowed = {
+-        item.strip()
+-        for item in os.getenv(_env_key(platform, "ALLOWED_USERS"), "").split(",")
+-        if item.strip()
+-    }
+-    return "*" in allowed or user_id in allowed
+-
+-
+-def _home_channel_key(platform: str) -> str:
+-    return _env_key(platform, "HOME_CHANNEL")
+-
+-
+-def _save_home_channel(platform: str, chat_id: str) -> None:
+-    key = _home_channel_key(platform)
+-    if not chat_id:
+-        return
+-    try:
+-        from hermes_cli.config import save_env_value
+-
+-        save_env_value(key, chat_id)
+-    except Exception:
+-        pass
+-    os.environ[key] = chat_id
+-
+-
+-def _mapping_path() -> Path:
+-    home = Path(os.getenv("HERMES_HOME", Path.home() / ".hermes"))
+-    return home / "marketing_os_mobile_sessions.json"
+-
+-
+-def _load_mapping() -> dict[str, str]:
+-    try:
+-        data = json.loads(_mapping_path().read_text(encoding="utf-8"))
+-        if isinstance(data, dict):
+-            return {str(k): str(v) for k, v in data.items() if k and v}
+-    except Exception:
+-        pass
+-    return {}
+-
+-
+-def _save_mapping(mapping: dict[str, str]) -> None:
+-    target = _mapping_path()
+-    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+-    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+-    try:
+-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+-            json.dump(mapping, handle, ensure_ascii=False, indent=2)
+-        os.replace(tmp_name, target)
+-    finally:
+-        try:
+-            Path(tmp_name).unlink(missing_ok=True)
+-        except Exception:
+-            pass
+-
+-
+-def _request_json(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float = 20) -> dict[str, Any]:
+-    base = os.getenv("MARKETING_OS_API_BASE", "http://127.0.0.1:19519").rstrip("/")
+-    token = os.getenv("MARKETING_OS_API_TOKEN", "")
+-    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+-    request = urllib.request.Request(
+-        f"{base}{path}",
+-        data=body,
+-        method=method,
+-        headers={
+-            "Content-Type": "application/json",
+-            **({"X-Marketing-OS-Token": token} if token else {}),
+-        },
+-    )
+-    try:
+-        with urllib.request.urlopen(request, timeout=timeout) as response:
+-            raw = response.read().decode("utf-8")
+-            return json.loads(raw) if raw else {}
+-    except urllib.error.HTTPError as exc:
+-        detail = exc.read().decode("utf-8", errors="replace")
+-        try:
+-            parsed = json.loads(detail)
+-            detail = str(parsed.get("detail") or parsed)
+-        except Exception:
+-            pass
+-        raise RuntimeError(detail or f"Marketing OS API HTTP {exc.code}") from exc
+-    except urllib.error.URLError as exc:
+-        raise RuntimeError(f"Marketing OS API 暂时不可用：{exc.reason}") from exc
+-
+-
+-def _session_key(platform: str, user_id: str, chat_id: str) -> str:
+-    identity = user_id or chat_id or "unknown"
+-    safe = "".join(ch if ch.isalnum() or ch in "@._:-" else "_" for ch in identity)
+-    return f"{platform}:{safe}"
+-
+-
+-def _create_session(platform: str, user_id: str, chat_id: str) -> str:
+-    result = _request_json(
+-        "POST",
+-        "/agent/sessions",
+-        {
+-            "user_id": f"mobile:{platform}:{user_id or chat_id or 'unknown'}",
+-            "workspace": f"mobile:{platform}:{chat_id or user_id or 'unknown'}",
+-        },
+-    )
+-    session_id = str(result.get("session_id") or "").strip()
+-    if not session_id:
+-        raise RuntimeError("Marketing OS 没有返回会话 ID")
+-    return session_id
+-
+-
+-def _ensure_session(platform: str, user_id: str, chat_id: str) -> str:
+-    key = _session_key(platform, user_id, chat_id)
+-    mapping = _load_mapping()
+-    session_id = mapping.get(key, "").strip()
+-    if session_id:
+-        return session_id
+-    session_id = _create_session(platform, user_id, chat_id)
+-    mapping[key] = session_id
+-    _save_mapping(mapping)
+-    return session_id
+-
+-
+-def _replace_session(platform: str, user_id: str, chat_id: str) -> str:
+-    key = _session_key(platform, user_id, chat_id)
+-    mapping = _load_mapping()
+-    session_id = _create_session(platform, user_id, chat_id)
+-    mapping[key] = session_id
+-    _save_mapping(mapping)
+-    return session_id
+-
+-
+-def _wait_for_reply(task_id: str, session_id: str, timeout_seconds: float = 120) -> str:
+-    deadline = time.monotonic() + timeout_seconds
+-    last_status = ""
+-    while time.monotonic() < deadline:
+-        status = _request_json("GET", f"/agent/runs/{task_id}", timeout=10)
+-        last_status = str(status.get("status") or "")
+-        if last_status == "completed":
+-            messages = _request_json("GET", f"/agent/sessions/{session_id}/messages", timeout=10).get("messages", [])
+-            for message in reversed(messages if isinstance(messages, list) else []):
+-                if message.get("task_id") == task_id and message.get("role") == "assistant":
+-                    return str(message.get("content") or "").strip()
+-            return "任务已完成，但没有拿到可发送的回复。请打开桌面端查看详情。"
+-        if last_status == "waiting_user":
+-            return "这一步需要你在桌面端确认授权。我已经把任务停在审批点了，打开 Marketing OS 就能继续。"
+-        if last_status in {"failed", "cancelled"}:
+-            error = str(status.get("last_error") or status.get("error") or "").strip()
+-            return f"任务{last_status}：{error or '请打开桌面端查看详情'}"
+-        time.sleep(0.8)
+-    return f"我已经收到并开始处理，但这次耗时较长（当前状态：{last_status or '运行中'}）。请稍后在桌面端查看结果。"
+-
+-
+-def _send_to_marketing_agent(platform: str, user_id: str, chat_id: str, text: str) -> str:
+-    session_id = _ensure_session(platform, user_id, chat_id)
+-    try:
+-        result = _request_json("POST", "/agent/messages", {"session_id": session_id, "message": text})
+-    except RuntimeError as exc:
+-        if "session not found" not in str(exc).lower() and "会话不存在" not in str(exc):
+-            raise
+-        session_id = _replace_session(platform, user_id, chat_id)
+-        result = _request_json("POST", "/agent/messages", {"session_id": session_id, "message": text})
+-    task_id = str(result.get("task_id") or "").strip()
+-    if not task_id:
+-        raise RuntimeError("Marketing OS 没有返回任务 ID")
+-    return _wait_for_reply(task_id, session_id)
+-
+-
+-async def maybe_handle_marketing_os(event: Any, gateway: Any) -> bool:
+-    """Return True when the message was handled by Marketing OS."""
+-    if not _is_enabled():
+-        return False
+-
+-    source = getattr(event, "source", None)
+-    platform_obj = getattr(source, "platform", None)
+-    platform = _platform_value(platform_obj)
+-    if platform not in SUPPORTED_PLATFORMS:
+-        return False
+-
+-    text = str(getattr(event, "text", "") or "").strip()
+-    if not text or text.startswith("/"):
+-        return False
+-
+-    user_id = str(getattr(source, "user_id", "") or "")
+-    chat_id = str(getattr(source, "chat_id", "") or "")
+-    if not chat_id or not _allowed_user(platform, user_id):
+-        return False
+-
+-    adapter = getattr(gateway, "adapters", {}).get(platform_obj)
+-    if adapter is None:
+-        return False
+-
+-    if text in SET_HOME_PHRASES:
+-        _save_home_channel(platform, chat_id)
+-        await adapter.send(chat_id, "已把这个会话设为 Marketing OS 的通知窗口。")
+-        return True
+-
+-    try:
+-        reply = await asyncio.to_thread(_send_to_marketing_agent, platform, user_id, chat_id, text)
+-    except Exception as exc:
+-        reply = f"Marketing OS Agent 暂时没有接住这条消息：{exc}"
+-
+-    reply = str(reply or "").strip() or "Marketing OS Agent 没有返回内容。"
+-    await adapter.send(chat_id, reply)
+-    return True
+diff --git a/gateway/run.py b/gateway/run.py
+index b00374d9f..a47810ddf 100644
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -7933,17 +7933,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
+                     break
+ 
+             try:
+-                from gateway.marketing_os_bridge import maybe_handle_marketing_os as _maybe_handle_marketing_os
++                from marketing_os.messaging import prepare_inbound_message
+ 
+-                if await _maybe_handle_marketing_os(event, self):
+-                    logger.info(
+-                        "marketing_os_mobile_bridge handled platform=%s chat=%s",
+-                        source.platform.value if source.platform else "unknown",
+-                        source.chat_id or "unknown",
+-                    )
+-                    return None
+-            except Exception as _bridge_exc:
+-                logger.warning("marketing_os_mobile_bridge failed: %s", _bridge_exc)
++                event = prepare_inbound_message(event, self)
++                source = event.source
++            except Exception as _product_message_exc:
++                logger.warning(
++                    "Marketing OS inbound message preparation failed: %s",
++                    _product_message_exc,
++                )
+ 
+         if is_internal:
+             pass
+diff --git a/marketing_os/domains/account_lifecycle.py b/marketing_os/domains/account_lifecycle.py
+index f13d4494d..9658335e3 100644
+--- a/marketing_os/domains/account_lifecycle.py
++++ b/marketing_os/domains/account_lifecycle.py
+@@ -14,7 +14,7 @@ from marketing_os.data_paths import MarketingDataPaths
+ 
+ 
+ class AccountLifecycleRepository:
+-    """Own the first account-strategy state transitions in the product fork."""
++    """Own the first account-strategy transitions inside the Hermes runtime."""
+ 
+     def __init__(self, paths: MarketingDataPaths | None = None):
+         self.paths = paths or MarketingDataPaths.from_env()
+diff --git a/marketing_os/messaging.py b/marketing_os/messaging.py
+new file mode 100644
+index 000000000..24747f2e9
+--- /dev/null
++++ b/marketing_os/messaging.py
+@@ -0,0 +1,102 @@
++"""Marketing-aware message preparation inside the native Hermes gateway.
++
++This module deliberately does not call another Agent API. It only adds product
++conveniences to the normal Hermes inbound pipeline, then returns the message to
++the same gateway session, memory and task loop used by every other surface.
++"""
++
++from __future__ import annotations
++
++import dataclasses
++import os
++from typing import Any
++
++from marketing_os.product import is_product_runtime
++
++
++SUPPORTED_PLATFORMS = {"feishu", "weixin"}
++SET_HOME_PHRASES = {
++    "设为通知窗口",
++    "设为我的通知窗口",
++    "把这里设为通知窗口",
++    "绑定通知",
++    "绑定通知窗口",
++}
++TRUTHY = {"1", "true", "yes", "on"}
++
++
++def _platform_value(value: Any) -> str:
++    return str(getattr(value, "value", value) or "").strip().lower()
++
++
++def _allowed_user(platform: str, user_id: str) -> bool:
++    if not user_id:
++        return False
++    prefix = platform.upper()
++    if str(os.getenv(f"{prefix}_ALLOW_ALL_USERS", "")).strip().lower() in TRUTHY:
++        return True
++    allowed = {
++        item.strip()
++        for item in os.getenv(f"{prefix}_ALLOWED_USERS", "").split(",")
++        if item.strip()
++    }
++    return "*" in allowed or user_id in allowed
++
++
++def _save_home_channel(platform: str, platform_obj: Any, source: Any, gateway: Any) -> None:
++    chat_id = str(getattr(source, "chat_id", "") or "").strip()
++    if not chat_id:
++        return
++
++    env_key = f"{platform.upper()}_HOME_CHANNEL"
++    from hermes_cli.config import save_env_value
++
++    save_env_value(env_key, chat_id)
++    os.environ[env_key] = chat_id
++
++    if gateway is None or platform_obj is None:
++        return
++
++    from gateway.config import HomeChannel, PlatformConfig
++
++    platform_config = gateway.config.platforms.setdefault(
++        platform_obj,
++        PlatformConfig(enabled=True),
++    )
++    platform_config.home_channel = HomeChannel(
++        platform=platform_obj,
++        chat_id=chat_id,
++        name=str(getattr(source, "chat_name", "") or chat_id),
++        thread_id=None,
++    )
++
++
++def prepare_inbound_message(event: Any, gateway: Any = None) -> Any:
++    """Add native Marketing OS channel behavior and return the same event flow.
++
++    Trusted first-party DMs become notification destinations automatically.
++    Natural Chinese notification-window phrases are normalized to Hermes'
++    built-in ``/sethome`` command. Every other message continues through the
++    regular authorization, session, prompt, memory and Agent execution path.
++    """
++
++    if not is_product_runtime():
++        return event
++
++    source = getattr(event, "source", None)
++    platform_obj = getattr(source, "platform", None)
++    platform = _platform_value(platform_obj)
++    if platform not in SUPPORTED_PLATFORMS or getattr(source, "chat_type", None) != "dm":
++        return event
++
++    user_id = str(getattr(source, "user_id", "") or "")
++    chat_id = str(getattr(source, "chat_id", "") or "")
++    trusted = bool(chat_id and _allowed_user(platform, user_id))
++    home_key = f"{platform.upper()}_HOME_CHANNEL"
++    if trusted and not str(os.getenv(home_key, "")).strip():
++        _save_home_channel(platform, platform_obj, source, gateway)
++
++    text = str(getattr(event, "text", "") or "").strip()
++    if trusted and text in SET_HOME_PHRASES:
++        return dataclasses.replace(event, text="/sethome")
++    return event
+diff --git a/marketing_os/product.py b/marketing_os/product.py
+index 5dff15d9c..173fd83f4 100644
+--- a/marketing_os/product.py
++++ b/marketing_os/product.py
+@@ -1,8 +1,8 @@
+-"""Canonical product identity for every Marketing OS surface.
++"""Canonical identity for the Hermes-native Marketing OS product.
+ 
+-This module lives in the Hermes fork on purpose. Desktop, TUI, gateway, cron
+-and messaging sessions must all construct the same product agent instead of
+-wrapping a generic Hermes process with a second personality layer.
++Hermes is the primary runtime. Marketing OS capabilities extend its source,
++conversation loop and ecosystem directly; they are not a second agent or an
++external service wrapped around Hermes.
+ """
+ 
+ from __future__ import annotations
+@@ -36,15 +36,16 @@ PRODUCT_ECOSYSTEM_COMPATIBILITY = {
+ }
+ 
+ PRODUCT_CORE_UPDATE_MESSAGE = (
+-    "Marketing OS is a product fork of Hermes Agent. Core Hermes updates must be "
+-    "integrated and regression-tested in a Marketing OS release; applying raw "
+-    "upstream in place could remove product behavior. MCP servers, Hub skills, "
+-    "user skills and plugins keep their native independent install/update paths."
++    "Marketing OS directly extends the Hermes source tree. Core Hermes updates "
++    "must be integrated and regression-tested in a Marketing OS release; applying "
++    "raw upstream in place could remove the native marketing enhancements. MCP "
++    "servers, Hub skills, user skills and plugins keep their independent update paths."
+ )
+ 
+ PRODUCT_ARCHITECTURE_PRINCIPLES = (
+-    "One native agent owns conversation, tasks, memory, skills and marketing workflows.",
+-    "Both inherited Hermes code and earlier Marketing OS modules may be decomposed or rewritten.",
++    "One Hermes-native runtime owns conversation, tasks, memory, skills and marketing workflows.",
++    "Marketing domain packages are capability boundaries, never a second runtime or HTTP-routed agent.",
++    "Both Hermes core code and Marketing OS enhancements may be decomposed or rewritten.",
+     "Preserve product philosophy and verified user outcomes, not historical directories or adapters.",
+     "Account modeling, evidence, creation, publishing receipts, metrics and learning form one loop.",
+     "Preserve Hermes MCP, skill and plugin contracts so ecosystem capabilities remain independently maintainable.",
+@@ -64,14 +65,14 @@ PRODUCT_AGENT_IDENTITY = (
+ )
+ 
+ PRODUCT_RUNTIME_GUIDANCE = (
+-    "You run as the Marketing OS product fork of Hermes Agent. Hermes supplies "
+-    "the native conversation loop, sessions, long-running tasks, memory, skills, "
+-    "cron and messaging runtime; Marketing OS directly modifies those source "
+-    "paths for this product. Never describe Hermes as an external plugin, a "
+-    "separate assistant, or a service that the user must operate. All desktop, "
+-    "mobile and messaging surfaces are views of the same Marketing OS agent. "
+-    "Inherited Hermes code and earlier Marketing OS modules may both be split, "
+-    "rewritten and recomposed around capability boundaries; preserve the product's "
++    "You run as the Hermes-native Marketing OS agent. The Hermes conversation "
++    "loop, sessions, long-running tasks, memory, skills, cron and messaging gateway "
++    "are the single primary runtime; Marketing OS capabilities extend those source "
++    "paths directly. Never describe the marketing capabilities as an external plugin, "
++    "a separate assistant, an HTTP-routed agent, or a service that the user must "
++    "operate. All desktop, mobile and messaging surfaces are views of this same "
++    "enhanced Hermes agent. Hermes core code and Marketing OS capabilities may both "
++    "be split, rewritten and recomposed around capability boundaries; preserve the product's "
+     "full-cycle operating philosophy rather than any historical directory layout. "
+     "Keep Hermes-native MCP servers, Hub and user skills, plugins, tool middleware "
+     "and their independent update paths compatible; core upstream changes are "
+@@ -109,7 +110,7 @@ def product_core_update_status(current_version: str) -> dict[str, object]:
+     """Return the non-destructive core-update contract for product surfaces."""
+ 
+     return {
+-        "install_method": "marketing-os-product-fork",
++        "install_method": "marketing-os-managed-hermes",
+         "current_version": current_version,
+         "behind": None,
+         "update_available": False,
+diff --git a/tests/hermes_cli/test_dashboard_admin_endpoints.py b/tests/hermes_cli/test_dashboard_admin_endpoints.py
+index 93b399402..289f28947 100644
+--- a/tests/hermes_cli/test_dashboard_admin_endpoints.py
++++ b/tests/hermes_cli/test_dashboard_admin_endpoints.py
+@@ -830,7 +830,7 @@ class TestUpdateCheckEndpoint:
+         check = self.client.get("/api/hermes/update/check").json()
+         apply = self.client.post("/api/hermes/update").json()
+ 
+-        assert check["install_method"] == "marketing-os-product-fork"
++        assert check["install_method"] == "marketing-os-managed-hermes"
+         assert check["can_apply"] is False
+         assert check["ecosystem"]["mcp"]["install_and_discovery"] == "preserved"
+         assert check["ecosystem"]["skills"]["hub_install_update"] == "preserved"
+diff --git a/tests/test_marketing_os_messaging.py b/tests/test_marketing_os_messaging.py
+new file mode 100644
+index 000000000..a2766b764
+--- /dev/null
++++ b/tests/test_marketing_os_messaging.py
+@@ -0,0 +1,86 @@
++from types import SimpleNamespace
++from unittest.mock import MagicMock
++
++from gateway.config import Platform, PlatformConfig
++from gateway.platforms.base import MessageEvent
++from gateway.session import SessionSource
++from marketing_os.messaging import prepare_inbound_message
++
++
++def _event(text="帮我分析今天热点", user_id="owner", chat_id="chat-1"):
++    return MessageEvent(
++        text=text,
++        source=SessionSource(
++            platform=Platform.FEISHU,
++            user_id=user_id,
++            chat_id=chat_id,
++            chat_name="我的飞书",
++            chat_type="dm",
++        ),
++    )
++
++
++def _gateway():
++    return SimpleNamespace(
++        config=SimpleNamespace(
++            platforms={Platform.FEISHU: PlatformConfig(enabled=True)},
++        ),
++    )
++
++
++def _enable_product(monkeypatch, tmp_path):
++    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(tmp_path / "marketing-os"))
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
++
++
++def test_trusted_first_dm_becomes_home_and_stays_in_native_message_flow(
++    monkeypatch, tmp_path
++):
++    _enable_product(monkeypatch, tmp_path)
++    monkeypatch.setenv("FEISHU_ALLOWED_USERS", "owner")
++    monkeypatch.delenv("FEISHU_HOME_CHANNEL", raising=False)
++    save = MagicMock()
++    monkeypatch.setattr("hermes_cli.config.save_env_value", save)
++    event = _event()
++    gateway = _gateway()
++
++    prepared = prepare_inbound_message(event, gateway)
++
++    assert prepared is event
++    assert __import__("os").environ["FEISHU_HOME_CHANNEL"] == "chat-1"
++    save.assert_called_once_with("FEISHU_HOME_CHANNEL", "chat-1")
++    assert gateway.config.platforms[Platform.FEISHU].home_channel.chat_id == "chat-1"
++
++
++def test_natural_set_home_phrase_uses_native_hermes_command(monkeypatch, tmp_path):
++    _enable_product(monkeypatch, tmp_path)
++    monkeypatch.setenv("FEISHU_ALLOWED_USERS", "owner")
++    monkeypatch.setenv("FEISHU_HOME_CHANNEL", "chat-1")
++
++    prepared = prepare_inbound_message(_event(text="设为我的通知窗口"), _gateway())
++
++    assert prepared.text == "/sethome"
++
++
++def test_unknown_sender_cannot_claim_home_or_rewrite_command(monkeypatch, tmp_path):
++    _enable_product(monkeypatch, tmp_path)
++    monkeypatch.setenv("FEISHU_ALLOWED_USERS", "owner")
++    monkeypatch.delenv("FEISHU_HOME_CHANNEL", raising=False)
++    save = MagicMock()
++    monkeypatch.setattr("hermes_cli.config.save_env_value", save)
++    event = _event(text="设为我的通知窗口", user_id="stranger")
++
++    prepared = prepare_inbound_message(event, _gateway())
++
++    assert prepared is event
++    save.assert_not_called()
++    assert "FEISHU_HOME_CHANNEL" not in __import__("os").environ
++
++
++def test_regular_hermes_runtime_is_unchanged(monkeypatch):
++    monkeypatch.delenv("MARKETING_OS_USER_DATA", raising=False)
++    monkeypatch.delenv("MARKETING_OS_CONFIG_DIR", raising=False)
++    monkeypatch.delenv("MARKETING_OS_AGENT_DB", raising=False)
++    event = _event(text="设为我的通知窗口")
++
++    assert prepare_inbound_message(event, _gateway()) is event
+diff --git a/tests/test_marketing_os_product.py b/tests/test_marketing_os_product.py
+index 8f80fb5b1..2a70622fa 100644
+--- a/tests/test_marketing_os_product.py
++++ b/tests/test_marketing_os_product.py
+@@ -22,11 +22,14 @@ def test_marketing_os_is_the_native_agent_identity():
+     assert "real publishing receipts" in DEFAULT_AGENT_IDENTITY
+ 
+ 
+-def test_runtime_guidance_forbids_external_plugin_identity():
++def test_runtime_guidance_keeps_hermes_primary_without_a_second_agent():
+     assert HERMES_AGENT_HELP_GUIDANCE.startswith(PRODUCT_RUNTIME_GUIDANCE)
+-    assert "Never describe Hermes as an external plugin" in HERMES_AGENT_HELP_GUIDANCE
+-    assert "same Marketing OS agent" in HERMES_AGENT_HELP_GUIDANCE
+-    assert "earlier Marketing OS modules may both be split" in HERMES_AGENT_HELP_GUIDANCE
++    assert "single primary runtime" in HERMES_AGENT_HELP_GUIDANCE
++    assert "external plugin" in HERMES_AGENT_HELP_GUIDANCE
++    assert "HTTP-routed agent" in HERMES_AGENT_HELP_GUIDANCE
++    assert "enhanced Hermes agent" in HERMES_AGENT_HELP_GUIDANCE
++    assert "Marketing OS capabilities may both" in HERMES_AGENT_HELP_GUIDANCE
++    assert any("never a second runtime" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
+     assert any("not historical directories" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
+ 
+ 
+@@ -73,6 +76,6 @@ def test_raw_core_update_is_blocked_but_ecosystem_updates_stay_available(
+     check = product_core_update_status("test-version")
+ 
+     assert PRODUCT_CORE_UPDATE_MESSAGE in capsys.readouterr().out
+-    assert check["install_method"] == "marketing-os-product-fork"
++    assert check["install_method"] == "marketing-os-managed-hermes"
+     assert check["can_apply"] is False
+     assert check["ecosystem"]["skills"]["hub_install_update"] == "preserved"
+diff --git a/tests/tui_gateway/test_marketing_os_product.py b/tests/tui_gateway/test_marketing_os_product.py
+index 1f027584e..d792f7c11 100644
+--- a/tests/tui_gateway/test_marketing_os_product.py
++++ b/tests/tui_gateway/test_marketing_os_product.py
+@@ -12,10 +12,16 @@ def test_product_status_comes_from_native_gateway():
+     assert response["result"] == {
+         "product_id": "marketing-os",
+         "product_name": "Marketing OS",
+-        "runtime": "hermes-product-fork",
+-        "agent_owner": "native",
+-        "desktop_owner": "apps/desktop",
++        "runtime": "hermes-native-marketing",
++        "architecture": "single-runtime",
+         "surfaces": ["desktop", "messaging", "cron"],
++        "enhancements": [
++            "account-modeling",
++            "evidence",
++            "content-production",
++            "publishing-receipts",
++            "metrics-learning",
++        ],
+         "ecosystem": {
+             "mcp": {
+                 "compatibility": "hermes-native",
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index 99993082b..c483a4f53 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -12868,7 +12868,7 @@ def _(rid, params: dict) -> dict:
+ 
+ @method("marketing.product.status")
+ def _(rid, _params: dict) -> dict:
+-    """Expose the product-fork identity through the native Hermes gateway."""
++    """Expose Marketing OS as native capabilities of the Hermes runtime."""
+     from marketing_os.product import (
+         PRODUCT_ECOSYSTEM_COMPATIBILITY,
+         PRODUCT_ID,
+@@ -12880,10 +12880,16 @@ def _(rid, _params: dict) -> dict:
+         {
+             "product_id": PRODUCT_ID,
+             "product_name": PRODUCT_NAME,
+-            "runtime": "hermes-product-fork",
+-            "agent_owner": "native",
+-            "desktop_owner": "apps/desktop",
++            "runtime": "hermes-native-marketing",
++            "architecture": "single-runtime",
+             "surfaces": ["desktop", "messaging", "cron"],
++            "enhancements": [
++                "account-modeling",
++                "evidence",
++                "content-production",
++                "publishing-receipts",
++                "metrics-learning",
++            ],
+             "ecosystem": PRODUCT_ECOSYSTEM_COMPATIBILITY,
+         },
+     )
+-- 
+2.54.0
+
