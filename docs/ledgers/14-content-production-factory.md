@@ -217,10 +217,14 @@ Claude 写的 `engine/video_core` / `engine/video_agents` 不是废物，但它�
 | CPF-NATIVE-09 | ArticleBundle | 父稿、知乎/公众号变体、EvidencePack、视觉需求、stylebook、验证与未校准声明作为同一可恢复内容资产持久化 | automated |
 | CPF-NATIVE-10 | 平台差异质量门 | 父稿长度/章节/引用与平台变体缺失、短稿、复制父稿、版本近似均进入确定性 validation；不达标保存为 `needs_revision`，不冒充可审稿 | automated |
 | CPF-NATIVE-11 | 关闭通用绕过 | `marketing_draft_content_create` 拒绝 `article_soft`；文章必须经 `marketing_draft_article_create`，模型不能用任意 JSON 绕过父稿/证据/平台门 | automated |
+| CPF-NATIVE-12 | 主张级证据守门 | `marketing.article_validation.v2` 对父稿和平台稿逐段检查高风险归因、泛化和数量主张；要求同段 `evidence_id`，并要求数量词能在被引证据摘要中找到。通过只代表引用邻近性与数字 token 支持，明确保持 `claim_truth_verified=false` | automated + real provider E2E |
+| CPF-NATIVE-13 | 不可变修订链 | `marketing_draft_article_create(revision_of=...)` 在同账号、同工单范围生成下一版本；父版本转为 `superseded`，默认列表只返回当前版本，历史仍可追溯 | automated + real provider E2E |
 
 边界：当前完成的是“工单 → 真实来源捕获 → 草稿资产”的原生状态所有权，不等于真实软文质量、主张级多源核验、素材下载、视频渲染、发布或指标回收已完成。EvidencePack 的 `verified/source_integrity` 只证明真实 collector、来源、时间与内容哈希完整，不把页面中的每句话宣布为客观事实。
 
-验证：Hermes 产品/SessionDB/Gateway/账号/内容组合回归 624 项通过；原生 EvidencePack + ArticleBundle 定向 14 项通过；ModelTools/Web/异步桥/浏览器组合 124 项通过；Web 抽取、站点策略、秘密阻断与证据哈希组合 57 项通过；Ruff 与 py_compile 通过。以上测试存在集合重叠，不以相加数字冒充独立用例数。
+真实验收：Hermes 原生 Agent 在真实账号作用域内读取 1 条 UNESCO EvidencePack 后生成 v2 初稿。旧结构门曾把包含虚构比例和时间区间的稿件误判为可审稿；v2 质量门上线后自动降级，并由同一 Agent 生成 v3、v4 修订链。当前 v4 为 `ready_for_human_review`，`uncited_findings=0`、`numeric_mismatch_findings=0`；语义真值、账号调性、视觉版权与敏感政策检查仍列为人工项。
+
+验证：Hermes 产品/SessionDB/Gateway/账号/内容组合回归 624 项通过；原生 EvidencePack + ArticleBundle 定向用例已扩展到主张守门、旧资产迁移和不可变修订；ModelTools/Web/异步桥/浏览器组合 124 项通过；Web 抽取、站点策略、秘密阻断与证据哈希组合 57 项通过；Ruff 与 py_compile 通过。以上测试存在集合重叠，不以相加数字冒充独立用例数。
 
 ## 六、下一步执行清单
 
