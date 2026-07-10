@@ -190,8 +190,8 @@ Project
 | VIDEO-01 | 架构定版 | ADR v2（剧组制 + 三倒置 + 可解耦 + 技术栈） | 本台账 ADR v2 | ✅ 2026-07-03 用户确认 |
 | VIDEO-02 | 画布 schema（产品协议） | Pydantic：Project/style_lock/assets/scenes.shots/tracks/timeline（骨架+EDL）/budget + 依赖图 + 版本化（v0 样片）；项目目录布局 | `tests/test_video_core_schema.py` 23 测试通过（依赖级联/崩溃恢复查询/骨架校验/存储往返） | ✅ 2026-07-06 |
 | VIDEO-03 | video_model_adapter + 火山实现 | 基类 + VolcengineAdapter（鉴权、Seedream 同步、Seedance 异步提交+轮询、fast/lite 替身档、错误/超时重试）；动手前真实 Key 校准字段 | 单测 + mock 调用 + 真实字段校准记录 | ⏳ |
-| VIDEO-04 | TaskPoller + 崩溃恢复 | asyncio 批量轮询；task_id 落 effect intent，重启扫 pending 续轮询 | 并行轮询测试 + 崩溃恢复测试 | ⏳ |
-| VIDEO-05 | 确定性渲染器 | EDL → mp4 纯函数（FFmpeg）：拼接/转场/字幕/配音/音效/BGM；同路径支持样片粗合成（Ken Burns + TTS） | 确定性渲染测试 + 样片路径测试 | ⏳ |
+| VIDEO-04 | TaskPoller + 崩溃恢复 | asyncio 批量轮询 + 指数退避（10s×1.5→120s 封顶）；下载器可注入；终态整读整写画布；recover() 扫 pending 续轮询；Provider 终态异常不会无限退避，下载失败回调不冒充成功 | `tests/test_video_core_poller.py` 9 测试（成功/远端失败/终态异常/下载失败/去重/恢复/退避/回调/启停） | ✅ automated 2026-07-10；真实 Provider 未验收 |
+| VIDEO-05 | 确定性渲染器 | EDL → mp4 纯函数（FFmpeg）：拼接/转场/字幕/配音/音效/BGM；同路径支持样片粗合成（Ken Burns + TTS） | 命令生成纯函数测试在 `tests/test_video_core_schema.py`（build_final/animatic_command）；真实 ffmpeg 出片待集成测试 | 🟡 实现已填（2026-07-10 验证命令生成测试通过），真实渲染验收待做 |
 | VIDEO-06 | 子 Agent 调度机制 | 轻量 Hermes 实例孵化；验收三件事：多实例并行 + 上下文隔离 + 质检角色独立 | 并行/隔离/盲评独立测试 | ⏳ |
 | VIDEO-07 | 剪辑师 Agent | SKILL.md（剪辑决策知识）：时间线骨架先行（槽位规格/BGM 卡点）+ 最终 EDL + VLM 自检重渲染循环 | 骨架生成 + EDL + 自检测试 | ⏳ |
 | VIDEO-08 | 编剧 + 美术 Agent | 编剧复用 screenwriting skills；美术 SKILL.md（Seedream 提示词 + 风格锁定 + best-of-k）写 assets[] | mock 生成 + 评估测试 | ⏳ |
@@ -218,8 +218,8 @@ Project
 | `engine/video_core/hooks.py` | ✅ 写实（CostGate 接口 + BudgetCostGate） |
 | `engine/video_core/testing.py` | ✅ 写实（离线 harness，见下） |
 | `engine/video_core/adapter.py` | 🟡 stub（VIDEO-03，需真实 Key 校准后填） |
-| `engine/video_core/poller.py` | 🟡 stub（VIDEO-04） |
-| `engine/video_core/renderer.py` | 🟡 stub（VIDEO-05，命令生成纯函数化可测） |
+| `engine/video_core/poller.py` | ✅ automated（2026-07-10，9 测试；真实 Provider 未验收） |
+| `engine/video_core/renderer.py` | ✅ 实现已填（命令生成测试通过；真实 ffmpeg 出片待集成验收） |
 | `engine/video_core/editing_engine.py` | ✅ 写实（共享剪辑引擎：faceless/premium 共用 EDL 骨架、素材填坑、审片摘要） |
 | `engine/video_agents/`（8 角色 SKILL.md + tools.json） | 🟡 骨架（领域知识待填） |
 | `tests/test_video_core_boundary.py` | ✅ 解耦边界回归（禁 import 业务模块 + video_agents 纯资产包） |
