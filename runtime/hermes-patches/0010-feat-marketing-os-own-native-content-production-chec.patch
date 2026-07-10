@@ -1,0 +1,1124 @@
+From 77e92e9f8700e30a959c3391059a31626dbb2d80 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 21:09:40 +0800
+Subject: [PATCH] feat(marketing-os): own native content production checkpoints
+
+---
+ marketing_os/domains/__init__.py              |   9 +-
+ marketing_os/domains/content_assets.py        | 319 ++++++++++++++++++
+ marketing_os/domains/content_production.py    | 287 ++++++++++++++++
+ marketing_os/product.py                       |   4 +
+ tests/test_marketing_os_account_context.py    |   3 +
+ tests/test_marketing_os_content_production.py | 184 ++++++++++
+ tests/test_marketing_os_product.py            |   3 +
+ tools/marketing_os_tools.py                   | 175 +++++++++-
+ toolsets.py                                   |   6 +-
+ 9 files changed, 987 insertions(+), 3 deletions(-)
+ create mode 100644 marketing_os/domains/content_assets.py
+ create mode 100644 marketing_os/domains/content_production.py
+ create mode 100644 tests/test_marketing_os_content_production.py
+
+diff --git a/marketing_os/domains/__init__.py b/marketing_os/domains/__init__.py
+index 7123b2aa1..2c08a01f6 100644
+--- a/marketing_os/domains/__init__.py
++++ b/marketing_os/domains/__init__.py
+@@ -2,5 +2,12 @@
+ 
+ from .account_context import AccountContextRepository
+ from .account_lifecycle import AccountLifecycleRepository
++from .content_assets import ContentAssetRepository
++from .content_production import ContentProductionPlanner
+ 
+-__all__ = ["AccountContextRepository", "AccountLifecycleRepository"]
++__all__ = [
++    "AccountContextRepository",
++    "AccountLifecycleRepository",
++    "ContentAssetRepository",
++    "ContentProductionPlanner",
++]
+diff --git a/marketing_os/domains/content_assets.py b/marketing_os/domains/content_assets.py
+new file mode 100644
+index 000000000..0d63e8140
+--- /dev/null
++++ b/marketing_os/domains/content_assets.py
+@@ -0,0 +1,319 @@
++"""Account-scoped content assets owned by the native Hermes runtime."""
++
++from __future__ import annotations
++
++import json
++import hashlib
++import sqlite3
++import uuid
++from contextlib import contextmanager
++from datetime import datetime, timezone
++from typing import Any, Iterator
++
++from marketing_os.data_paths import MarketingDataPaths
++from marketing_os.domains.content_production import CONTENT_KINDS, VALID_PLATFORMS
++
++
++ASSET_TYPES = {"script", "video", "image", "caption"}
++
++
++class ContentAssetRepository:
++    def __init__(self, paths: MarketingDataPaths | None = None):
++        self.paths = paths or MarketingDataPaths.from_env()
++        self._ensure_schema()
++
++    def save_production_plan(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        plan: dict[str, Any],
++    ) -> dict[str, Any]:
++        if not isinstance(plan, dict) or plan.get("status") != "planned":
++            raise ValueError("a valid production plan is required")
++        kind = str(plan.get("kind") or "")
++        if kind not in CONTENT_KINDS:
++            raise ValueError("production plan kind is invalid")
++        objective = _bounded_text(plan.get("objective"), "objective", 2_000)
++        platforms = plan.get("target_platforms")
++        if not isinstance(platforms, list) or not platforms:
++            raise ValueError("production plan requires target platforms")
++        if any(platform not in VALID_PLATFORMS for platform in platforms):
++            raise ValueError("production plan contains unsupported platform")
++        fingerprint = json.dumps(
++            {
++                "user_id": user_id,
++                "account_id": account_id,
++                "kind": kind,
++                "objective": objective,
++                "platforms": platforms,
++                "constraints": plan.get("constraints") or {},
++            },
++            ensure_ascii=False,
++            sort_keys=True,
++            separators=(",", ":"),
++        )
++        digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:24]
++        plan_id = f"production_plan_{digest}"
++        payload = dict(plan)
++        payload["plan_id"] = plan_id
++        encoded = _bounded_json(payload, "production_plan", 500_000)
++        now = _now()
++        with self._transaction() as db:
++            db.execute(
++                """INSERT INTO content_production_plans
++                (id,user_id,account_id,kind,objective,platforms_json,plan_json,status,created_at,updated_at)
++                VALUES (?,?,?,?,?,?,?,'planned',?,?)
++                ON CONFLICT(id) DO UPDATE SET
++                    plan_json=excluded.plan_json,
++                    updated_at=excluded.updated_at""",
++                (
++                    plan_id,
++                    user_id,
++                    account_id,
++                    kind,
++                    objective,
++                    json.dumps(platforms, ensure_ascii=False),
++                    encoded,
++                    now,
++                    now,
++                ),
++            )
++            row = db.execute(
++                "SELECT * FROM content_production_plans WHERE id=?",
++                (plan_id,),
++            ).fetchone()
++        return _plan_record(row)
++
++    def create_draft(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        title: str,
++        plan_id: str,
++        asset_type: str,
++        platform: str,
++        production_kind: str,
++        content: dict[str, Any],
++        topic: str = "",
++        hook: str = "",
++        evidence_refs: list[str] | None = None,
++        memory_refs: list[str] | None = None,
++    ) -> dict[str, Any]:
++        title_value = _bounded_text(title, "title", 300)
++        plan_id_value = _bounded_text(plan_id, "plan_id", 120)
++        if asset_type not in ASSET_TYPES:
++            raise ValueError(f"unsupported asset type: {asset_type}")
++        if platform not in VALID_PLATFORMS:
++            raise ValueError(f"unsupported content platform: {platform}")
++        if production_kind not in CONTENT_KINDS:
++            raise ValueError(f"unsupported production kind: {production_kind}")
++        if not isinstance(content, dict) or not content:
++            raise ValueError("content must be a non-empty object")
++        if any(str(key).startswith("_") for key in content):
++            raise ValueError("content keys beginning with '_' are reserved")
++        payload = dict(content)
++        payload["_production_kind"] = production_kind
++        payload["_provenance_evidence_refs"] = _bounded_refs(evidence_refs or [], "evidence_refs")
++        payload["_provenance_memory_refs"] = _bounded_refs(memory_refs or [], "memory_refs")
++        payload["_created_by"] = "hermes-native-marketing"
++        encoded = _bounded_json(payload, "content", 500_000)
++        now = _now()
++        asset_id = f"asset_{uuid.uuid4().hex}"
++        with self._transaction() as db:
++            plan_row = db.execute(
++                """SELECT * FROM content_production_plans
++                WHERE id=? AND user_id=? AND account_id=?""",
++                (plan_id_value, user_id, account_id),
++            ).fetchone()
++            if plan_row is None:
++                raise KeyError("production plan not found in account scope")
++            plan_platforms = json.loads(plan_row["platforms_json"])
++            if plan_row["kind"] != production_kind:
++                raise ValueError("draft production kind does not match its plan")
++            if platform not in plan_platforms:
++                raise ValueError("draft platform is outside its production plan")
++            payload["_production_plan_id"] = plan_id_value
++            encoded = _bounded_json(payload, "content", 500_000)
++            db.execute(
++                """INSERT INTO content_assets
++                (id,user_id,account_id,platform,title,type,status,parent_id,experiment_id,
++                 topic,hook,version,content_json,metrics_json,created_at,updated_at)
++                VALUES (?,?,?,?,?,?,'draft',NULL,NULL,?,?,1,?,'{}',?,?)""",
++                (
++                    asset_id,
++                    user_id,
++                    account_id,
++                    platform,
++                    title_value,
++                    asset_type,
++                    _optional_text(topic, 200),
++                    _optional_text(hook, 200),
++                    encoded,
++                    now,
++                    now,
++                ),
++            )
++            db.execute(
++                """UPDATE content_production_plans
++                SET status='draft_created', updated_at=? WHERE id=?""",
++                (now, plan_id_value),
++            )
++        return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
++
++    def get(self, *, asset_id: str, user_id: str, account_id: str) -> dict[str, Any]:
++        with self._connect() as db:
++            row = db.execute(
++                "SELECT * FROM content_assets WHERE id=? AND user_id=? AND account_id=?",
++                (asset_id, user_id, account_id),
++            ).fetchone()
++        if row is None:
++            raise KeyError("content asset not found in account scope")
++        return _record(row)
++
++    def list(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        status: str | None = None,
++        platform: str | None = None,
++        limit: int = 20,
++    ) -> dict[str, Any]:
++        safe_limit = max(1, min(int(limit), 50))
++        query = "SELECT * FROM content_assets WHERE user_id=? AND account_id=?"
++        params: list[Any] = [user_id, account_id]
++        if status:
++            query += " AND status=?"
++            params.append(status)
++        if platform:
++            if platform not in VALID_PLATFORMS:
++                raise ValueError(f"unsupported content platform: {platform}")
++            query += " AND platform=?"
++            params.append(platform)
++        query += " ORDER BY updated_at DESC LIMIT ?"
++        params.append(safe_limit)
++        with self._connect() as db:
++            rows = db.execute(query, params).fetchall()
++        return {
++            "user_id": user_id,
++            "account_id": account_id,
++            "assets": [_record(row) for row in rows],
++            "total": len(rows),
++        }
++
++    def _ensure_schema(self) -> None:
++        self.paths.agent_db.parent.mkdir(parents=True, exist_ok=True)
++        with self._connect() as db:
++            db.executescript(
++                """
++                CREATE TABLE IF NOT EXISTS content_assets (
++                    id TEXT PRIMARY KEY,
++                    user_id TEXT NOT NULL DEFAULT 'default',
++                    account_id TEXT,
++                    platform TEXT,
++                    title TEXT NOT NULL,
++                    type TEXT NOT NULL DEFAULT 'script',
++                    status TEXT NOT NULL DEFAULT 'draft',
++                    parent_id TEXT,
++                    experiment_id TEXT,
++                    topic TEXT,
++                    hook TEXT,
++                    version INTEGER NOT NULL DEFAULT 1,
++                    content_json TEXT NOT NULL DEFAULT '{}',
++                    metrics_json TEXT NOT NULL DEFAULT '{}',
++                    created_at TEXT NOT NULL,
++                    updated_at TEXT NOT NULL
++                );
++                CREATE INDEX IF NOT EXISTS idx_content_assets_status ON content_assets(status);
++                CREATE INDEX IF NOT EXISTS idx_content_assets_account ON content_assets(account_id);
++                CREATE INDEX IF NOT EXISTS idx_content_assets_scope
++                    ON content_assets(user_id, account_id, updated_at);
++                CREATE TABLE IF NOT EXISTS content_production_plans (
++                    id TEXT PRIMARY KEY,
++                    user_id TEXT NOT NULL,
++                    account_id TEXT NOT NULL,
++                    kind TEXT NOT NULL,
++                    objective TEXT NOT NULL,
++                    platforms_json TEXT NOT NULL,
++                    plan_json TEXT NOT NULL,
++                    status TEXT NOT NULL DEFAULT 'planned',
++                    created_at TEXT NOT NULL,
++                    updated_at TEXT NOT NULL
++                );
++                CREATE INDEX IF NOT EXISTS idx_content_production_plan_scope
++                    ON content_production_plans(user_id, account_id, updated_at);
++                """
++            )
++
++    def _connect(self) -> sqlite3.Connection:
++        db = sqlite3.connect(self.paths.agent_db, timeout=10)
++        db.row_factory = sqlite3.Row
++        db.execute("PRAGMA foreign_keys=ON")
++        return db
++
++    @contextmanager
++    def _transaction(self) -> Iterator[sqlite3.Connection]:
++        db = self._connect()
++        try:
++            db.execute("BEGIN IMMEDIATE")
++            yield db
++            db.commit()
++        except Exception:
++            db.rollback()
++            raise
++        finally:
++            db.close()
++
++
++def _record(row: sqlite3.Row) -> dict[str, Any]:
++    value = dict(row)
++    value["content"] = json.loads(value.pop("content_json"))
++    value["metrics"] = json.loads(value.pop("metrics_json"))
++    return value
++
++
++def _plan_record(row: sqlite3.Row) -> dict[str, Any]:
++    value = json.loads(row["plan_json"])
++    value["plan_id"] = row["id"]
++    value["checkpoint_status"] = row["status"]
++    value["created_at"] = row["created_at"]
++    value["updated_at"] = row["updated_at"]
++    return value
++
++
++def _bounded_text(value: Any, field: str, limit: int) -> str:
++    text = str(value or "").strip()
++    if not text:
++        raise ValueError(f"{field} is required")
++    if len(text) > limit:
++        raise ValueError(f"{field} exceeds {limit} characters")
++    return text
++
++
++def _optional_text(value: Any, limit: int) -> str:
++    return str(value or "").strip()[:limit]
++
++
++def _bounded_refs(value: Any, field: str) -> list[str]:
++    if not isinstance(value, list):
++        raise ValueError(f"{field} must be a list")
++    result = [str(item).strip() for item in value if str(item).strip()]
++    if len(result) > 100 or any(len(item) > 500 for item in result):
++        raise ValueError(f"{field} exceeds limits")
++    return result
++
++
++def _bounded_json(value: Any, field: str, limit: int) -> str:
++    try:
++        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
++    except (TypeError, ValueError) as exc:
++        raise ValueError(f"{field} must be JSON serializable") from exc
++    if len(encoded.encode("utf-8")) > limit:
++        raise ValueError(f"{field} exceeds {limit} bytes")
++    return encoded
++
++
++def _now() -> str:
++    return datetime.now(timezone.utc).isoformat()
+diff --git a/marketing_os/domains/content_production.py b/marketing_os/domains/content_production.py
+new file mode 100644
+index 000000000..453824120
+--- /dev/null
++++ b/marketing_os/domains/content_production.py
+@@ -0,0 +1,287 @@
++"""Hermes-native content production planning for Marketing OS.
++
++The planner is deterministic and side-effect free. It selects one delivery
++lane while keeping research, writing, media, audio and rendering as a shared
++capability pool so article and video production can borrow from each other.
++"""
++
++from __future__ import annotations
++
++import re
++from typing import Any
++
++
++CONTENT_KINDS = {"article_soft", "faceless_video", "premium_human_video"}
++ARTICLE_PLATFORMS = {"zhihu", "wechat_official"}
++VIDEO_PLATFORMS = {
++    "douyin",
++    "bilibili",
++    "xiaohongshu",
++    "kuaishou",
++    "wechat_channels",
++    "tiktok",
++    "youtube",
++}
++VALID_PLATFORMS = ARTICLE_PLATFORMS | VIDEO_PLATFORMS
++
++PLATFORM_ALIASES = {
++    "知乎": "zhihu",
++    "公众号": "wechat_official",
++    "微信公众号": "wechat_official",
++    "抖音": "douyin",
++    "b站": "bilibili",
++    "哔哩哔哩": "bilibili",
++    "小红书": "xiaohongshu",
++    "快手": "kuaishou",
++    "视频号": "wechat_channels",
++}
++
++SHARED_CAPABILITIES = {
++    "account_context": {
++        "purpose": "读取会话绑定账号的受众、定位、禁区和历史反馈。",
++        "native_tools": ["marketing_read_account_context"],
++        "maturity": "ready",
++    },
++    "evidence_research": {
++        "purpose": "使用可回链来源核对事实、热点和案例，禁止模型补造数据。",
++        "native_tools": ["web_search", "web_extract"],
++        "maturity": "ready",
++    },
++    "copywriting": {
++        "purpose": "生产父稿、平台变体、旁白、标题和 CTA。",
++        "native_tools": ["marketing_draft_content_create"],
++        "maturity": "ready",
++    },
++    "stock_material": {
++        "purpose": "检索有来源、有授权信息的图片、视频、音频和引用素材。",
++        "native_tools": ["web_search", "web_extract"],
++        "maturity": "partial",
++    },
++    "generated_visual": {
++        "purpose": "授权素材不足时补充封面、信息图、代码视觉或缺口镜头。",
++        "native_tools": ["image_generate", "execute_code"],
++        "maturity": "partial",
++    },
++    "audio": {
++        "purpose": "为视频生成或组织配音、音乐和音效。",
++        "native_tools": ["text_to_speech"],
++        "maturity": "partial",
++    },
++    "editing_render": {
++        "purpose": "把镜头、素材、字幕和音轨组织为可恢复时间线并渲染。",
++        "native_tools": ["terminal", "process"],
++        "maturity": "partial",
++    },
++}
++
++LANE_CONFIG = {
++    "article_soft": {
++        "label": "知乎/公众号软文",
++        "default_platforms": ["zhihu", "wechat_official"],
++        "asset_type": "script",
++        "capabilities": [
++            "account_context",
++            "evidence_research",
++            "copywriting",
++            "stock_material",
++            "generated_visual",
++        ],
++        "skills": ["humanizer", "baoyu-infographic"],
++        "deliverables": ["parent_draft", "platform_variants", "cover_brief", "inline_visual_plan"],
++    },
++    "faceless_video": {
++        "label": "授权素材不露脸视频",
++        "default_platforms": ["douyin", "wechat_channels", "bilibili"],
++        "asset_type": "video",
++        "capabilities": [
++            "account_context",
++            "evidence_research",
++            "copywriting",
++            "stock_material",
++            "generated_visual",
++            "audio",
++            "editing_render",
++        ],
++        "skills": ["humanizer", "baoyu-infographic", "manim-video", "p5js", "ascii-video"],
++        "deliverables": ["voiceover_script", "shot_list", "material_manifest", "timeline", "final_video"],
++    },
++    "premium_human_video": {
++        "label": "真人/数字人高质量视频",
++        "default_platforms": ["douyin", "wechat_channels", "bilibili"],
++        "asset_type": "video",
++        "capabilities": [
++            "account_context",
++            "evidence_research",
++            "copywriting",
++            "stock_material",
++            "generated_visual",
++            "audio",
++            "editing_render",
++        ],
++        "skills": ["humanizer", "baoyu-infographic", "manim-video", "p5js"],
++        "deliverables": ["film_brief", "screenplay", "storyboard", "animatic", "rights_pack", "final_video"],
++    },
++}
++
++
++class ContentProductionPlanner:
++    def plan(
++        self,
++        *,
++        objective: str,
++        kind: str = "auto",
++        platforms: Any = None,
++        audience: str = "",
++        evidence_refs: list[str] | None = None,
++        constraints: dict[str, Any] | None = None,
++        account_context: dict[str, Any] | None = None,
++    ) -> dict[str, Any]:
++        objective_value = _bounded_text(objective, "objective", 2_000)
++        kind_value = infer_content_kind(objective_value, kind=kind, platforms=platforms)
++        config = LANE_CONFIG[kind_value]
++        platform_values = normalize_platforms(platforms) or list(config["default_platforms"])
++        evidence = _bounded_refs(evidence_refs or [], "evidence_refs")
++        constraints_value = constraints or {}
++        if not isinstance(constraints_value, dict):
++            raise ValueError("constraints must be an object")
++
++        context = account_context or {}
++        lifecycle = context.get("lifecycle") if isinstance(context.get("lifecycle"), dict) else {}
++        account_ready = bool(
++            str(audience or "").strip()
++            or lifecycle.get("audience_hypothesis")
++            or (context.get("account_dna") or {}).get("audience_summary")
++        )
++        gates = [
++            {
++                "id": "audience",
++                "status": "ready" if account_ready else "needs_input",
++                "rule": "有明确目标受众、真实受众证据或用户确认的受众假设。",
++            },
++            {
++                "id": "evidence",
++                "status": "references_supplied_needs_verification" if evidence else "needs_research",
++                "rule": "事实性主张必须绑定来源；创意表达不能冒充事实。",
++            },
++            {
++                "id": "rights",
++                "status": "required" if kind_value != "article_soft" else "conditional",
++                "rule": "外部图片、视频、音乐、声音和肖像必须记录来源与授权。",
++            },
++            {
++                "id": "cost",
++                "status": "approval_required" if kind_value == "premium_human_video" else "local_first",
++                "rule": "优先本地和免费能力；付费生成必须在调用前展示成本并获批。",
++            },
++        ]
++        if not account_ready:
++            next_action = "通过自然对话补齐目标用户、内容承诺和明确禁区"
++        elif not evidence:
++            next_action = "检索并核对支撑本选题的证据，再开始写父稿"
++        else:
++            next_action = "核对证据引用后生成父稿，再保存为可恢复草稿"
++
++        return {
++            "status": "planned",
++            "architecture": "hermes-native-shared-capability-pool",
++            "kind": kind_value,
++            "kind_label": config["label"],
++            "objective": objective_value,
++            "target_platforms": platform_values,
++            "asset_type": config["asset_type"],
++            "account_scope": {
++                "account_id": context.get("account_id"),
++                "connected": context.get("connected", False),
++                "lifecycle_stage": lifecycle.get("stage", "not_started"),
++            },
++            "capabilities": {
++                name: SHARED_CAPABILITIES[name] for name in config["capabilities"]
++            },
++            "recommended_skills": list(config["skills"]),
++            "gates": gates,
++            "deliverables": list(config["deliverables"]),
++            "constraints": constraints_value,
++            "recommended_next_action": next_action,
++            "execution_order": [
++                "read_account_context",
++                "fill_audience_gap",
++                "research_evidence",
++                "draft_parent_content",
++                "adapt_platform_variants",
++                "source_or_generate_media",
++                "preflight_review",
++                "save_content_asset",
++            ],
++            "fallback": _fallback(kind_value),
++        }
++
++
++def infer_content_kind(objective: str, *, kind: str = "auto", platforms: Any = None) -> str:
++    requested = str(kind or "auto").strip().lower()
++    aliases = {
++        "article": "article_soft",
++        "soft_article": "article_soft",
++        "faceless": "faceless_video",
++        "premium": "premium_human_video",
++        "human_video": "premium_human_video",
++        "digital_human": "premium_human_video",
++    }
++    requested = aliases.get(requested, requested)
++    if requested in CONTENT_KINDS:
++        return requested
++    normalized_platforms = normalize_platforms(platforms)
++    if normalized_platforms and set(normalized_platforms) <= ARTICLE_PLATFORMS:
++        return "article_soft"
++    text = str(objective or "").lower()
++    if any(word in text for word in ("知乎", "公众号", "软文", "长文", "文章")):
++        return "article_soft"
++    if any(word in text for word in ("数字人", "真人", "ai人", "ai 人", "口播", "高质量视频")):
++        return "premium_human_video"
++    if any(word in text for word in ("不露脸", "素材拼接", "混剪", "空镜", "素材视频")):
++        return "faceless_video"
++    if normalized_platforms and any(item in VIDEO_PLATFORMS for item in normalized_platforms):
++        return "faceless_video"
++    return "article_soft"
++
++
++def normalize_platforms(value: Any) -> list[str]:
++    if isinstance(value, str):
++        raw = re.split(r"[,，、/\s]+", value)
++    elif isinstance(value, (list, tuple, set)):
++        raw = [str(item) for item in value]
++    else:
++        raw = []
++    result: list[str] = []
++    for item in raw:
++        normalized = PLATFORM_ALIASES.get(item.strip(), item.strip().lower())
++        if normalized in VALID_PLATFORMS and normalized not in result:
++            result.append(normalized)
++    return result
++
++
++def _fallback(kind: str) -> dict[str, str]:
++    if kind == "premium_human_video":
++        return {"if_provider_unavailable": "保留脚本和分镜，降级为授权素材不露脸视频。"}
++    if kind == "faceless_video":
++        return {
++            "if_materials_insufficient": "交付旁白脚本、分镜和素材缺口清单，不伪造最终视频。"
++        }
++    return {"if_visuals_unavailable": "先交付有证据的纯文本草稿和明确配图位。"}
++
++
++def _bounded_text(value: Any, field: str, limit: int) -> str:
++    text = re.sub(r"\s+", " ", str(value or "")).strip()
++    if not text:
++        raise ValueError(f"{field} is required")
++    if len(text) > limit:
++        raise ValueError(f"{field} exceeds {limit} characters")
++    return text
++
++
++def _bounded_refs(value: Any, field: str) -> list[str]:
++    if not isinstance(value, list):
++        raise ValueError(f"{field} must be a list")
++    result = [str(item).strip() for item in value if str(item).strip()]
++    if len(result) > 50 or any(len(item) > 500 for item in result):
++        raise ValueError(f"{field} exceeds limits")
++    return result
+diff --git a/marketing_os/product.py b/marketing_os/product.py
+index 173fd83f4..59533d041 100644
+--- a/marketing_os/product.py
++++ b/marketing_os/product.py
+@@ -86,6 +86,10 @@ PRODUCT_RUNTIME_GUIDANCE = (
+     "lifecycle tool. Ask only the few questions that materially change the draft, "
+     "and never confirm an audience hypothesis until the user explicitly accepts that "
+     "exact version. "
++    "For content production, call marketing_plan_content_production before substantial "
++    "drafting, resolve its audience and evidence gaps, then pass its returned plan_id when "
++    "saving the actual output with marketing_draft_content_create. Resume drafts with marketing_read_content_assets; "
++    "never put complete articles, scripts or transient drafts into long-term memory. "
+     "Marketing decisions must distinguish verified facts, strategy inference and "
+     "creative suggestions. External effects, paid providers, publication and "
+     "sensitive account actions require the product's approval and receipt rules."
+diff --git a/tests/test_marketing_os_account_context.py b/tests/test_marketing_os_account_context.py
+index fc4ffb854..db3c366e0 100644
+--- a/tests/test_marketing_os_account_context.py
++++ b/tests/test_marketing_os_account_context.py
+@@ -170,6 +170,9 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
+         "marketing_read_accounts",
+         "marketing_read_account_context",
+         "marketing_update_account_lifecycle",
++        "marketing_plan_content_production",
++        "marketing_read_content_assets",
++        "marketing_draft_content_create",
+     }
+     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
+     assert result["lifecycle"]["stage"] == "positioning_approved"
+diff --git a/tests/test_marketing_os_content_production.py b/tests/test_marketing_os_content_production.py
+new file mode 100644
+index 000000000..ed884797d
+--- /dev/null
++++ b/tests/test_marketing_os_content_production.py
+@@ -0,0 +1,184 @@
++import json
++
++import hermes_state
++import pytest
++from hermes_state import SessionDB
++from marketing_os.data_paths import MarketingDataPaths
++from marketing_os.domains import ContentAssetRepository, ContentProductionPlanner
++from model_tools import get_tool_definitions, handle_function_call
++
++
++def _paths(tmp_path):
++    config_dir = tmp_path / "config"
++    config_dir.mkdir()
++    (config_dir / "accounts.json").write_text(
++        json.dumps(
++            {
++                "accounts": [
++                    {"id": "acct-1", "platform": "douyin", "label": "主账号", "status": "active"},
++                    {"id": "acct-2", "platform": "xiaohongshu", "label": "副账号", "status": "active"},
++                ]
++            },
++            ensure_ascii=False,
++        ),
++        encoding="utf-8",
++    )
++    return MarketingDataPaths(
++        user_data=tmp_path,
++        config_dir=config_dir,
++        agent_db=tmp_path / "agent-runtime" / "agent_core.db",
++    )
++
++
++def _bind_session(tmp_path, monkeypatch, account_id="acct-1"):
++    paths = _paths(tmp_path)
++    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
++    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
++    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
++    state_path = tmp_path / "state.db"
++    monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", state_path)
++    db = SessionDB(db_path=state_path)
++    db.create_session(
++        "session-1",
++        "tui",
++        marketing_user_id="default",
++        marketing_account_id=account_id,
++    )
++    db.close()
++    return paths
++
++
++@pytest.mark.parametrize(
++    ("objective", "kind"),
++    [
++        ("写一篇公众号软文", "article_soft"),
++        ("做一条授权素材拼接的不露脸视频", "faceless_video"),
++        ("做一条真人数字人高质量视频", "premium_human_video"),
++    ],
++)
++def test_native_planner_selects_three_connected_lanes(objective, kind):
++    result = ContentProductionPlanner().plan(objective=objective)
++
++    assert result["kind"] == kind
++    assert result["architecture"] == "hermes-native-shared-capability-pool"
++    assert "account_context" in result["capabilities"]
++    assert "evidence_research" in result["capabilities"]
++    assert "copywriting" in result["capabilities"]
++    if kind != "article_soft":
++        assert "editing_render" in result["capabilities"]
++
++
++def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, monkeypatch):
++    paths = _bind_session(tmp_path, monkeypatch)
++    plan_args = {
++        "objective": "写一篇面向 AI 入门职场人的公众号软文",
++        "platforms": ["wechat_official"],
++        "audience": "想提高效率的职场人",
++        "evidence_refs": ["source:https://example.com/report"],
++    }
++    planned = json.loads(
++        handle_function_call(
++            "marketing_plan_content_production",
++            plan_args,
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    created = json.loads(
++        handle_function_call(
++            "marketing_draft_content_create",
++            {
++                "title": "普通人如何把 AI 变成工作搭档",
++                "plan_id": planned["plan_id"],
++                "type": "script",
++                "platform": "wechat_official",
++                "production_kind": "article_soft",
++                "topic": "AI 工作流",
++                "hook": "不是多学一个工具，而是重做工作方式",
++                "content": {
++                    "markdown": "# 普通人如何把 AI 变成工作搭档\n\n这是一份可审阅草稿。"
++                },
++                "evidence_refs": ["source:https://example.com/report"],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    listed = json.loads(
++        handle_function_call(
++            "marketing_read_content_assets",
++            {"status": "draft"},
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    replanned = json.loads(
++        handle_function_call(
++            "marketing_plan_content_production",
++            plan_args,
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++
++    assert planned["account_scope"]["account_id"] == "acct-1"
++    assert planned["checkpoint_status"] == "planned"
++    assert planned["recommended_next_action"].startswith("核对证据引用")
++    assert created["account_id"] == "acct-1"
++    assert created["content"]["_created_by"] == "hermes-native-marketing"
++    assert created["content"]["_production_plan_id"] == planned["plan_id"]
++    assert listed["total"] == 1
++    assert listed["assets"][0]["id"] == created["id"]
++    assert replanned["plan_id"] == planned["plan_id"]
++    assert replanned["checkpoint_status"] == "draft_created"
++    assert ContentAssetRepository(paths).list(user_id="default", account_id="acct-2")["total"] == 0
++
++
++def test_content_write_schema_cannot_override_account_scope():
++    definitions = get_tool_definitions(enabled_toolsets=["marketing"], quiet_mode=True)
++    by_name = {item["function"]["name"]: item["function"] for item in definitions}
++
++    create_properties = by_name["marketing_draft_content_create"]["parameters"]["properties"]
++    plan_properties = by_name["marketing_plan_content_production"]["parameters"]["properties"]
++
++    assert "account_id" not in create_properties
++    assert "account_id" not in plan_properties
++    assert "marketing_read_content_assets" in by_name
++
++
++def test_content_repository_rejects_reserved_provenance_keys(tmp_path):
++    paths = _paths(tmp_path)
++    repository = ContentAssetRepository(paths)
++
++    with pytest.raises(ValueError, match="reserved"):
++        repository.create_draft(
++            user_id="default",
++            account_id="acct-1",
++            title="bad",
++            plan_id="production_plan_missing",
++            asset_type="script",
++            platform="zhihu",
++            production_kind="article_soft",
++            content={"_created_by": "model-forged"},
++        )
++
++
++def test_draft_requires_real_plan_in_same_account_scope(tmp_path):
++    paths = _paths(tmp_path)
++    repository = ContentAssetRepository(paths)
++
++    with pytest.raises(KeyError, match="plan not found"):
++        repository.create_draft(
++            user_id="default",
++            account_id="acct-1",
++            title="不能绕过工单",
++            plan_id="production_plan_invented",
++            asset_type="script",
++            platform="zhihu",
++            production_kind="article_soft",
++            content={"markdown": "正文"},
++        )
+diff --git a/tests/test_marketing_os_product.py b/tests/test_marketing_os_product.py
+index 2a70622fa..7967a2e82 100644
+--- a/tests/test_marketing_os_product.py
++++ b/tests/test_marketing_os_product.py
+@@ -31,6 +31,9 @@ def test_runtime_guidance_keeps_hermes_primary_without_a_second_agent():
+     assert "Marketing OS capabilities may both" in HERMES_AGENT_HELP_GUIDANCE
+     assert any("never a second runtime" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
+     assert any("not historical directories" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
++    assert "marketing_plan_content_production" in HERMES_AGENT_HELP_GUIDANCE
++    assert "marketing_draft_content_create" in HERMES_AGENT_HELP_GUIDANCE
++    assert "never put complete articles" in HERMES_AGENT_HELP_GUIDANCE
+ 
+ 
+ def test_hermes_ecosystem_contracts_remain_product_capabilities():
+diff --git a/tools/marketing_os_tools.py b/tools/marketing_os_tools.py
+index 1268cbe41..6a64b4d68 100644
+--- a/tools/marketing_os_tools.py
++++ b/tools/marketing_os_tools.py
+@@ -4,7 +4,12 @@ from __future__ import annotations
+ 
+ import json
+ 
+-from marketing_os.domains import AccountContextRepository, AccountLifecycleRepository
++from marketing_os.domains import (
++    AccountContextRepository,
++    AccountLifecycleRepository,
++    ContentAssetRepository,
++    ContentProductionPlanner,
++)
+ from marketing_os.session_scope import enforce_tool_account_scope
+ from tools.registry import registry
+ 
+@@ -83,6 +88,81 @@ UPDATE_ACCOUNT_LIFECYCLE_SCHEMA = {
+     },
+ }
+ 
++PLAN_CONTENT_PRODUCTION_SCHEMA = {
++    "name": "marketing_plan_content_production",
++    "description": (
++        "Build a Hermes-native production work order for a soft article, faceless material video, "
++        "or premium human/digital-human video. It reads the current conversation's account context, "
++        "selects a lane and shared capabilities, and exposes audience/evidence/rights/cost gates. "
++        "The work order is persisted as a checkpoint and returns a plan_id required for drafting."
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "objective": {"type": "string"},
++            "kind": {
++                "type": "string",
++                "enum": ["auto", "article_soft", "faceless_video", "premium_human_video"],
++                "default": "auto",
++            },
++            "platforms": {"type": "array", "items": {"type": "string"}},
++            "audience": {"type": "string"},
++            "evidence_refs": {"type": "array", "items": {"type": "string"}},
++            "constraints": {"type": "object"},
++        },
++        "required": ["objective"],
++    },
++}
++
++READ_CONTENT_ASSETS_SCHEMA = {
++    "name": "marketing_read_content_assets",
++    "description": (
++        "List durable content drafts and assets for the account bound to this conversation. "
++        "Use it to resume prior work instead of recreating or storing drafts in long-term memory."
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "status": {"type": "string"},
++            "platform": {"type": "string"},
++            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
++        },
++        "required": [],
++    },
++}
++
++CREATE_CONTENT_DRAFT_SCHEMA = {
++    "name": "marketing_draft_content_create",
++    "description": (
++        "Save a substantive, reversible content draft for the account bound to this conversation. "
++        "Use after planning and evidence collection. The account id is taken from the Hermes session "
++        "and cannot be supplied or overridden by the model."
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "title": {"type": "string"},
++            "plan_id": {"type": "string"},
++            "type": {
++                "type": "string",
++                "enum": ["script", "video", "image", "caption"],
++                "default": "script",
++            },
++            "platform": {"type": "string"},
++            "production_kind": {
++                "type": "string",
++                "enum": ["article_soft", "faceless_video", "premium_human_video"],
++            },
++            "topic": {"type": "string"},
++            "hook": {"type": "string"},
++            "content": {"type": "object"},
++            "evidence_refs": {"type": "array", "items": {"type": "string"}},
++            "memory_refs": {"type": "array", "items": {"type": "string"}},
++        },
++        "required": ["title", "plan_id", "platform", "production_kind", "content"],
++    },
++}
++
+ 
+ def _list_accounts(_args: dict, **_kwargs) -> str:
+     return json.dumps(AccountContextRepository().list_accounts(), ensure_ascii=False)
+@@ -150,6 +230,72 @@ def _update_account_lifecycle(args: dict, **kwargs) -> str:
+     )
+ 
+ 
++def _plan_content_production(args: dict, **kwargs) -> str:
++    user_id, account_id = enforce_tool_account_scope(
++        {},
++        task_id=kwargs.get("task_id"),
++        session_id=kwargs.get("session_id"),
++        require_bound=True,
++    )
++    context = AccountContextRepository().read(user_id=user_id, account_id=account_id)
++    result = ContentProductionPlanner().plan(
++        objective=str(args.get("objective") or ""),
++        kind=str(args.get("kind") or "auto"),
++        platforms=args.get("platforms"),
++        audience=str(args.get("audience") or ""),
++        evidence_refs=args.get("evidence_refs") or [],
++        constraints=args.get("constraints") or {},
++        account_context=context,
++    )
++    checkpoint = ContentAssetRepository().save_production_plan(
++        user_id=user_id,
++        account_id=account_id,
++        plan=result,
++    )
++    return json.dumps(checkpoint, ensure_ascii=False)
++
++
++def _read_content_assets(args: dict, **kwargs) -> str:
++    user_id, account_id = enforce_tool_account_scope(
++        {},
++        task_id=kwargs.get("task_id"),
++        session_id=kwargs.get("session_id"),
++        require_bound=True,
++    )
++    result = ContentAssetRepository().list(
++        user_id=user_id,
++        account_id=account_id,
++        status=str(args.get("status") or "") or None,
++        platform=str(args.get("platform") or "") or None,
++        limit=int(args.get("limit") or 20),
++    )
++    return json.dumps(result, ensure_ascii=False)
++
++
++def _create_content_draft(args: dict, **kwargs) -> str:
++    user_id, account_id = enforce_tool_account_scope(
++        {},
++        task_id=kwargs.get("task_id"),
++        session_id=kwargs.get("session_id"),
++        require_bound=True,
++    )
++    result = ContentAssetRepository().create_draft(
++        user_id=user_id,
++        account_id=account_id,
++        title=str(args.get("title") or ""),
++        plan_id=str(args.get("plan_id") or ""),
++        asset_type=str(args.get("type") or "script"),
++        platform=str(args.get("platform") or ""),
++        production_kind=str(args.get("production_kind") or ""),
++        content=args.get("content"),
++        topic=str(args.get("topic") or ""),
++        hook=str(args.get("hook") or ""),
++        evidence_refs=args.get("evidence_refs") or [],
++        memory_refs=args.get("memory_refs") or [],
++    )
++    return json.dumps(result, ensure_ascii=False)
++
++
+ registry.register(
+     name="marketing_read_accounts",
+     toolset="marketing",
+@@ -176,3 +322,30 @@ registry.register(
+     description="Create and confirm versioned account goals and audience hypotheses.",
+     emoji="🧬",
+ )
++
++registry.register(
++    name="marketing_plan_content_production",
++    toolset="marketing",
++    schema=PLAN_CONTENT_PRODUCTION_SCHEMA,
++    handler=_plan_content_production,
++    description="Plan one account-scoped content production job with explicit evidence and rights gates.",
++    emoji="🗺️",
++)
++
++registry.register(
++    name="marketing_read_content_assets",
++    toolset="marketing",
++    schema=READ_CONTENT_ASSETS_SCHEMA,
++    handler=_read_content_assets,
++    description="Resume durable content work for the current account scope.",
++    emoji="🗂️",
++)
++
++registry.register(
++    name="marketing_draft_content_create",
++    toolset="marketing",
++    schema=CREATE_CONTENT_DRAFT_SCHEMA,
++    handler=_create_content_draft,
++    description="Persist a reversible content draft in the current account scope.",
++    emoji="✍️",
++)
+diff --git a/toolsets.py b/toolsets.py
+index bed24e423..f8ec7efca 100644
+--- a/toolsets.py
++++ b/toolsets.py
+@@ -32,6 +32,7 @@ _HERMES_CORE_TOOLS = [
+     # Marketing OS product context. These bounded read tools are always present
+     # so desktop, messaging and cron sessions operate on the same accounts.
+     "marketing_read_accounts", "marketing_read_account_context", "marketing_update_account_lifecycle",
++    "marketing_plan_content_production", "marketing_read_content_assets", "marketing_draft_content_create",
+     # Web
+     "web_search", "web_extract",
+     # Terminal + process management
+@@ -98,11 +99,14 @@ _HERMES_WEBHOOK_SAFE_TOOLS = [
+ TOOLSETS = {
+     # Basic toolsets - individual tool categories
+     "marketing": {
+-        "description": "Marketing OS account, audience, positioning and operating-context tools",
++        "description": "Marketing OS account, audience, content planning and durable asset tools",
+         "tools": [
+             "marketing_read_accounts",
+             "marketing_read_account_context",
+             "marketing_update_account_lifecycle",
++            "marketing_plan_content_production",
++            "marketing_read_content_assets",
++            "marketing_draft_content_create",
+         ],
+         "includes": [],
+     },
+-- 
+2.54.0
+

@@ -1,4 +1,9 @@
-"""Content production planning for the Marketing OS factory.
+"""Legacy compatibility planner for the old FastAPI desktop path.
+
+New product behavior belongs to the Hermes-native implementation under
+``runtime/hermes-agent/marketing_os/domains``. Keep this module stable only
+until the old ``/agent/*`` desktop path is retired; do not add new production
+policy, tools or state ownership here.
 
 This module is deliberately deterministic and side-effect free.  It does not
 call models, scrape the web, download assets, render media, or write the store.

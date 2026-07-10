@@ -236,6 +236,24 @@ def test_mobile_channels_use_single_native_hermes_agent_runtime():
     assert "urllib" not in messaging
 
 
+def test_content_production_is_owned_by_native_hermes_runtime():
+    native_tools = read("runtime/hermes-agent/tools/marketing_os_tools.py")
+    native_planner = read("runtime/hermes-agent/marketing_os/domains/content_production.py")
+    native_assets = read("runtime/hermes-agent/marketing_os/domains/content_assets.py")
+    legacy_planner = read("engine/agent_core/content_production.py")
+
+    assert "marketing_plan_content_production" in native_tools
+    assert "marketing_read_content_assets" in native_tools
+    assert "marketing_draft_content_create" in native_tools
+    assert "require_bound=True" in native_tools
+    assert "content_production_plans" in native_assets
+    assert "production plan not found in account scope" in native_assets
+    assert "hermes-native-shared-capability-pool" in native_planner
+    assert "engine.agent_core" not in native_tools
+    assert "server_action" not in native_tools
+    assert "Legacy compatibility planner" in legacy_planner
+
+
 def test_workspace_filters_legacy_weibo_cache_without_showing_as_target():
     overview = read("src/pages/Overview.tsx")
     trending = read("src/pages/Trending.tsx")

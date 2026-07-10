@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/NousResearch/hermes-agent.git",
   "baseline_commit": "4488fe134b1de4359f3a4f1f8368576413e6e268",
-  "product_tree": "6cb2aea8e61315b8efe1c621432e0ac8b14a21bf",
+  "product_tree": "5ef8d1441386faf8c16ef57e114136d694d6fd74",
   "patches": [
     {
       "file": "hermes-patches/0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch",
@@ -38,6 +38,10 @@
     {
       "file": "hermes-patches/0009-refactor-marketing-os-make-Hermes-the-single-agent-r.patch",
       "sha256": "f49ea2837442ed9468e71244aa705b9477072da3936426f9101596ae06016eae"
+    },
+    {
+      "file": "hermes-patches/0010-feat-marketing-os-own-native-content-production-chec.patch",
+      "sha256": "75f5ff50d8eded81654ffe78146a59a139f7b9c29a6b30c4a1857074d244ccf7"
     }
   ]
 }
