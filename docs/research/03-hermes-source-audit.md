@@ -1,5 +1,7 @@
 # Hermes 源码基线审计与适配决策
 
+> **历史研究，适配边界已于 2026-07-10 废止。** 基线能力盘点仍可参考；第五节“adapter/插件优先、限制 fork 改动”的决策不得继续执行。当前唯一口径见 `docs/ledgers/00-current-product-status.md`：Marketing OS 直接从 Hermes 源码和 `apps/desktop` 演化，底层与 UI 均可深度重构。
+
 ## 一、基线
 
 | 项 | 值 |
@@ -64,7 +66,7 @@
 
 Hermes 的危险命令审批不能直接暴露给普通用户。桌面端需要业务审批卡：账号、动作、目标平台、费用、可见预览、后果和撤销能力。
 
-## 五、源码适配边界
+## 五、源码适配边界（已废止，仅保留事故溯源）
 
 上游仓库保持可 pull/rebase；业务差异优先放在项目 adapter 和插件层。只有下面三类变化进入 Hermes fork：
 
@@ -73,4 +75,3 @@ Hermes 的危险命令审批不能直接暴露给普通用户。桌面端需要�
 3. session/task streaming 或取消/恢复无法通过外层 adapter 正确实现。
 
 每个 fork patch 必须有：上游 commit、原因、影响面、测试和未来是否可 upstream。
-

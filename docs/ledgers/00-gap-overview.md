@@ -1,5 +1,7 @@
 # 差距总览与补齐路线（2026-07-02 定版）
 
+> **历史快照。** 2026-07-10 用户进一步明确：不再执行本文“adapter 无法实现才改 fork”“改动最小化”“业务逻辑必须留在外层”的限制。Hermes 全栈源码与 `apps/desktop` 均是 Marketing OS 产品源码，可按体验深度重构；实时口径见 `00-current-product-status.md`。
+
 > 依据：冻结总台账（完整产品 61% / 桌面第一版 72%）+ 7 个子台账逐项盘点。
 > 本文只回答"距离目标还差什么、按什么顺序补"；逐项执行状态仍在各子台账更新。
 >
@@ -68,9 +70,8 @@
 5. **G3**：G2 出真实数据后接 MEM-13~15；MEM-12 PoC 可穿插。
 6. **G4 交付**：DESK-08 干净机 → DESK-12 签名公证 → 更新/卸载。
 
-## 四、Hermes 源码修改纪律（2026-07-02 用户授权）
+## 四、Hermes 源码修改纪律（2026-07-10 已废止的旧纪律）
 
-- 允许直接修改 `runtime/hermes-agent`（分支 `codex/marketing-os-runtime`，基线 `4488fe1`）。
-- 每个 patch 必须：说明 adapter 无法实现的缺失不变量；改动最小化；附回归测试；记录进 `runtime/HERMES_UPSTREAM.md` patch 清单。
-- 产品业务逻辑仍留在 `engine/agent_core`；Hermes patch 只承载 runtime 不变量（如确定性 checkpoint hook、结构化 plan 事件）。
-- 升级上游时按 RUN-16：patch 可重放、契约测试先行、失败可回滚。
+- 历史做法是只允许少量 runtime patch，并把产品主链放在 `engine/agent_core` adapter；该做法已经造成套壳架构，禁止继续。
+- 新口径：Marketing OS 是 Hermes 产品 fork，UI 与底层均可直接重构；领域服务可以模块化存在，但 Agent 生命周期必须归 fork 原生执行链所有。
+- 仍保留回归测试、数据迁移、安全边界和提交可审计性；这些用于保证质量，不用于阻止必要的源码改造。

@@ -1,6 +1,8 @@
 # 智能营销桌面 Agent — 项目总台账
 
 > 2026-07-10 说明：本文件保留 2026-07-01 冻结时的产品宪法与历史快照，其中工具数、进度百分比和“下一步”不再代表当前代码。实时状态与唯一执行入口见 `docs/ledgers/00-current-product-status.md`。
+>
+> 2026-07-10 内核纠偏：本文件后文“固定上游 + 少量 fork patch”“当前无需 fork patch”等旧判断已经废止。Marketing OS 必须从 Hermes 全栈源码（包括 `apps/desktop` 和底层 runtime）直接改造，不得再以外层 adapter 套壳。
 
 > 冻结基线：2026-07-01（抖音登录与自动公共热点已真人验收；MCP 浏览器重构进入实施；后续执行状态只更新 `docs/ledgers/` 子台账）
 >
@@ -23,7 +25,7 @@
 | MCP 浏览器层 | 每账号独立 Playwright 进程/profile、首次可见登录、后台页面观察与受控操作 | `engine/agent_core/mcp_broker.py` + account-scoped manager（待实现） |
 | Agent Core | Hermes adapter、稳定 session、AgentTask、事件、策略、审批/effect 数据模型 | `engine/agent_core/` |
 | 营销引擎 | 只提供结构化营销领域能力，不拥有浏览器和秘密 | `engine/marketing-os/marketing_tools/` |
-| Hermes Runtime | 固定上游源码与确有必要的 fork patch，不存业务数据 | `runtime/hermes-agent/` |
+| Hermes Product Fork | **新口径：UI 与底层均可深度改造；本行原“只做必要 patch”约束已废止** | `runtime/hermes-agent/` |
 | Web 视频工作台 | 通过既定契约共享同一任务、上下文与事件流，不建立第二个 Agent | `VIDEO_WEB_CONTRACT.md` |
 
 数据边界：Cookie 只留在账号专属 Playwright profile，Token/Key 留在 Electron/系统 Keychain；Agent 只能看登录状态、脱敏指标和业务结果。Agent 不拥有任意 Shell、安装程序、任意文件或系统设置能力。
@@ -148,7 +150,7 @@
 | 前端生产构建 | TypeScript + Vite build 通过 |
 | 完整桌面构建 | PyInstaller + Electron builder 通过，生成 macOS ZIP/DMG；未签名/公证 |
 | 旧路径静态反查 | 生产代码无外部 Chrome/CDP、Bitwarden、Agent-Reach、MediaCrawler、单轮 Hermes CLI |
-| Hermes 上游工作树 | 基线 `4488fe1`，当前无需 fork patch；已存在的 session/callback/interrupt/tool registry 扩展点足够 P0 地基 |
+| Hermes 上游工作树 | **历史判断已废止**：仅靠扩展点和外层 adapter 已证明会形成套壳；当前改为 Marketing OS 产品 fork 全栈改造 |
 
 ## 七、统一进度与资料库对照（2026-06-30）
 
