@@ -8,7 +8,7 @@
 |---|---|
 | `runtime/hermes-agent/` | Hermes 主运行时、原生桌面与 Marketing OS 增强源码；不存放业务数据 |
 | `engine/marketing-os/` | 迁移期领域服务与旧 FastAPI，逐段并入 Hermes 原生能力边界 |
-| `src/`、`electron/` | 迁移期旧桌面交互来源；功能对等后退出默认产品路径 |
+| `src/`、`electron/` | 冻结的旧桌面交互来源；根目录已无 Electron `main` 和打包配置，不再是可启动产品 |
 | `backend/` | Python 后端打包配置与构建产物目录 |
 | `docs/research/` | Agent memory、harness 与长期学习资料库 |
 | `tests/` | 营销引擎和桌面契约测试 |
@@ -23,13 +23,14 @@ npm run runtime:status
 npm run dev
 ```
 
-源码 runtime 使用 `runtime/hermes-agent/.venv`。运行数据位于 `~/Library/Application Support/marketing-os-desktop/agent-runtime`，模型凭据位于同级 `secrets/providers.env`，二者都不进入 Git。
+根目录 `npm run dev / build / build:mac / build:win / preview` 全部转发到 `runtime/hermes-agent/apps/desktop`，不会再启动旧 React/FastAPI Agent 壳。源码 runtime 使用 `runtime/hermes-agent/.venv`。运行数据位于 `~/Library/Application Support/marketing-os-desktop/agent-runtime`，Hermes 原生模型凭据位于该目录的 `.env`，二者都不进入 Git。
 
 ## 验证
 
 ```bash
 npm test
-npx vite build
+npm run runtime:verify
+npm run build
 ```
 
 研究结论和重建顺序从 `docs/research/README.md` 开始阅读。
