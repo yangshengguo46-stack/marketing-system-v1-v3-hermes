@@ -1,0 +1,242 @@
+"""Bridge Hermes gateway messages into the Marketing OS desktop agent.
+
+The desktop product uses Hermes as a runtime substrate, but mobile channels
+(Feishu/Weixin) are only communication surfaces.  Inbound mobile messages must
+therefore be handled by the local Marketing OS Agent API instead of falling
+through to Hermes' default gateway persona.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+SUPPORTED_PLATFORMS = {"feishu", "weixin"}
+SET_HOME_PHRASES = {"设为通知窗口", "设为我的通知窗口", "把这里设为通知窗口", "绑定通知", "绑定通知窗口"}
+TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _platform_value(value: Any) -> str:
+    return str(getattr(value, "value", value) or "").strip().lower()
+
+
+def _env_key(platform: str, suffix: str) -> str:
+    return f"{platform.upper()}_{suffix}"
+
+
+def _is_enabled() -> bool:
+    return str(os.getenv("MARKETING_OS_MOBILE_BRIDGE_ENABLED", "")).strip().lower() in TRUTHY
+
+
+def _allowed_user(platform: str, user_id: str) -> bool:
+    if not user_id:
+        return False
+    if str(os.getenv(_env_key(platform, "ALLOW_ALL_USERS"), "")).strip().lower() in TRUTHY:
+        return True
+    allowed = {
+        item.strip()
+        for item in os.getenv(_env_key(platform, "ALLOWED_USERS"), "").split(",")
+        if item.strip()
+    }
+    return "*" in allowed or user_id in allowed
+
+
+def _home_channel_key(platform: str) -> str:
+    return _env_key(platform, "HOME_CHANNEL")
+
+
+def _save_home_channel(platform: str, chat_id: str) -> None:
+    key = _home_channel_key(platform)
+    if not chat_id:
+        return
+    try:
+        from hermes_cli.config import save_env_value
+
+        save_env_value(key, chat_id)
+    except Exception:
+        pass
+    os.environ[key] = chat_id
+
+
+def _mapping_path() -> Path:
+    home = Path(os.getenv("HERMES_HOME", Path.home() / ".hermes"))
+    return home / "marketing_os_mobile_sessions.json"
+
+
+def _load_mapping() -> dict[str, str]:
+    try:
+        data = json.loads(_mapping_path().read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items() if k and v}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_mapping(mapping: dict[str, str]) -> None:
+    target = _mapping_path()
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(mapping, handle, ensure_ascii=False, indent=2)
+        os.replace(tmp_name, target)
+    finally:
+        try:
+            Path(tmp_name).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _request_json(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float = 20) -> dict[str, Any]:
+    base = os.getenv("MARKETING_OS_API_BASE", "http://127.0.0.1:19519").rstrip("/")
+    token = os.getenv("MARKETING_OS_API_TOKEN", "")
+    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base}{path}",
+        data=body,
+        method=method,
+        headers={
+            "Content-Type": "application/json",
+            **({"X-Marketing-OS-Token": token} if token else {}),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(detail)
+            detail = str(parsed.get("detail") or parsed)
+        except Exception:
+            pass
+        raise RuntimeError(detail or f"Marketing OS API HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Marketing OS API 暂时不可用：{exc.reason}") from exc
+
+
+def _session_key(platform: str, user_id: str, chat_id: str) -> str:
+    identity = user_id or chat_id or "unknown"
+    safe = "".join(ch if ch.isalnum() or ch in "@._:-" else "_" for ch in identity)
+    return f"{platform}:{safe}"
+
+
+def _create_session(platform: str, user_id: str, chat_id: str) -> str:
+    result = _request_json(
+        "POST",
+        "/agent/sessions",
+        {
+            "user_id": f"mobile:{platform}:{user_id or chat_id or 'unknown'}",
+            "workspace": f"mobile:{platform}:{chat_id or user_id or 'unknown'}",
+        },
+    )
+    session_id = str(result.get("session_id") or "").strip()
+    if not session_id:
+        raise RuntimeError("Marketing OS 没有返回会话 ID")
+    return session_id
+
+
+def _ensure_session(platform: str, user_id: str, chat_id: str) -> str:
+    key = _session_key(platform, user_id, chat_id)
+    mapping = _load_mapping()
+    session_id = mapping.get(key, "").strip()
+    if session_id:
+        return session_id
+    session_id = _create_session(platform, user_id, chat_id)
+    mapping[key] = session_id
+    _save_mapping(mapping)
+    return session_id
+
+
+def _replace_session(platform: str, user_id: str, chat_id: str) -> str:
+    key = _session_key(platform, user_id, chat_id)
+    mapping = _load_mapping()
+    session_id = _create_session(platform, user_id, chat_id)
+    mapping[key] = session_id
+    _save_mapping(mapping)
+    return session_id
+
+
+def _wait_for_reply(task_id: str, session_id: str, timeout_seconds: float = 120) -> str:
+    deadline = time.monotonic() + timeout_seconds
+    last_status = ""
+    while time.monotonic() < deadline:
+        status = _request_json("GET", f"/agent/runs/{task_id}", timeout=10)
+        last_status = str(status.get("status") or "")
+        if last_status == "completed":
+            messages = _request_json("GET", f"/agent/sessions/{session_id}/messages", timeout=10).get("messages", [])
+            for message in reversed(messages if isinstance(messages, list) else []):
+                if message.get("task_id") == task_id and message.get("role") == "assistant":
+                    return str(message.get("content") or "").strip()
+            return "任务已完成，但没有拿到可发送的回复。请打开桌面端查看详情。"
+        if last_status == "waiting_user":
+            return "这一步需要你在桌面端确认授权。我已经把任务停在审批点了，打开 Marketing OS 就能继续。"
+        if last_status in {"failed", "cancelled"}:
+            error = str(status.get("last_error") or status.get("error") or "").strip()
+            return f"任务{last_status}：{error or '请打开桌面端查看详情'}"
+        time.sleep(0.8)
+    return f"我已经收到并开始处理，但这次耗时较长（当前状态：{last_status or '运行中'}）。请稍后在桌面端查看结果。"
+
+
+def _send_to_marketing_agent(platform: str, user_id: str, chat_id: str, text: str) -> str:
+    session_id = _ensure_session(platform, user_id, chat_id)
+    try:
+        result = _request_json("POST", "/agent/messages", {"session_id": session_id, "message": text})
+    except RuntimeError as exc:
+        if "session not found" not in str(exc).lower() and "会话不存在" not in str(exc):
+            raise
+        session_id = _replace_session(platform, user_id, chat_id)
+        result = _request_json("POST", "/agent/messages", {"session_id": session_id, "message": text})
+    task_id = str(result.get("task_id") or "").strip()
+    if not task_id:
+        raise RuntimeError("Marketing OS 没有返回任务 ID")
+    return _wait_for_reply(task_id, session_id)
+
+
+async def maybe_handle_marketing_os(event: Any, gateway: Any) -> bool:
+    """Return True when the message was handled by Marketing OS."""
+    if not _is_enabled():
+        return False
+
+    source = getattr(event, "source", None)
+    platform_obj = getattr(source, "platform", None)
+    platform = _platform_value(platform_obj)
+    if platform not in SUPPORTED_PLATFORMS:
+        return False
+
+    text = str(getattr(event, "text", "") or "").strip()
+    if not text or text.startswith("/"):
+        return False
+
+    user_id = str(getattr(source, "user_id", "") or "")
+    chat_id = str(getattr(source, "chat_id", "") or "")
+    if not chat_id or not _allowed_user(platform, user_id):
+        return False
+
+    adapter = getattr(gateway, "adapters", {}).get(platform_obj)
+    if adapter is None:
+        return False
+
+    if text in SET_HOME_PHRASES:
+        _save_home_channel(platform, chat_id)
+        await adapter.send(chat_id, "已把这个会话设为 Marketing OS 的通知窗口。")
+        return True
+
+    try:
+        reply = await asyncio.to_thread(_send_to_marketing_agent, platform, user_id, chat_id, text)
+    except Exception as exc:
+        reply = f"Marketing OS Agent 暂时没有接住这条消息：{exc}"
+
+    reply = str(reply or "").strip() or "Marketing OS Agent 没有返回内容。"
+    await adapter.send(chat_id, reply)
+    return True

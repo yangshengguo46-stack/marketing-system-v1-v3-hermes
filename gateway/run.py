@@ -7932,6 +7932,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if _action == "allow":
                     break
 
+            try:
+                from gateway.marketing_os_bridge import maybe_handle_marketing_os as _maybe_handle_marketing_os
+
+                if await _maybe_handle_marketing_os(event, self):
+                    logger.info(
+                        "marketing_os_mobile_bridge handled platform=%s chat=%s",
+                        source.platform.value if source.platform else "unknown",
+                        source.chat_id or "unknown",
+                    )
+                    return None
+            except Exception as _bridge_exc:
+                logger.warning("marketing_os_mobile_bridge failed: %s", _bridge_exc)
+
         if is_internal:
             pass
         elif source.user_id is None:
