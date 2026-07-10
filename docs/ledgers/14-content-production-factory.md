@@ -3,6 +3,7 @@
 > 建立日期：2026-07-08
 > 关联资料库：`docs/research/08-data-flywheel-strategy.md`、`docs/research/09-video-ecosystem-research.md`、`docs/ledgers/05-content-publishing-feedback.md`、`docs/ledgers/08-video-generation-volcano.md`
 > 当前判断：内容生产端是产品闭环缺口。没有可审稿、可配图/可渲染、可发布、可回收指标的内容资产，账号定位、热点、发布、复盘都只能停在“看起来智能”的半闭环。
+> **2026-07-10 所有权更新：Hermes 是唯一 Agent 主运行时；本台账早期写在 `engine/agent_core` 的工单、Skill 白名单和资产写入属于旧桌面兼容实现。新默认所有权已进入 `runtime/hermes-agent/marketing_os/domains` 与 Hermes 原生 tool registry，旧模块冻结，不再扩功能。**
 
 ## 一、产品分层
 
@@ -10,9 +11,9 @@
 
 | Lane | 产品形态 | 第一目标 | 采用地基 | 当前状态 |
 |---|---|---|---|---|
-| `article_soft` | 知乎 / 微信公众号软文 | 最快形成可审稿、可发布的长文资产 | Firecrawl 公开证据、平台矩阵、content_assets、评分/盲预测；必要时调用授权图库/生图补封面和插图 | 🟡 工单层已接入，真实写作链待增强 |
-| `faceless_video` | 网上找授权素材，拼接合成的不露脸视频 | 用低成本素材视频闭合“脚本→素材→EDL→渲染→发布” | Pexels/图库、Firecrawl、MoneyPrinterTurbo/ShortGPT/OpenMontage 思路、content_assets；缺关键镜头时调用生图/生视频补齐 | 🟡 工单层已接入，素材视频源和 renderer 待写实 |
-| `premium_human_video` | 真人数字人 / AI 人高质量视频 | 高质量视频项目，先样片和预算，再正片 | `engine/video_core`、`engine/video_agents`、Seedream/Seedance、剧组制多 Agent；可复用证据研究/授权素材做参考或 B-roll | 🟡 画布/预算/harness 已有，provider/poller/renderer 仍 TODO |
+| `article_soft` | 知乎 / 微信公众号软文 | 最快形成可审稿、可发布的长文资产 | Firecrawl 公开证据、平台矩阵、content_assets；必要时调用授权图库/生图补封面和插图 | 🟡 Hermes 原生工单 checkpoint + 草稿资产已接入；真实父稿质量待验 |
+| `faceless_video` | 网上找授权素材，拼接合成的不露脸视频 | 用低成本素材视频闭合“脚本→素材→EDL→渲染→发布” | 授权图库/搜索、Hermes Web/Skill/代码工具、content_assets；缺关键镜头时调用生图/生视频补齐 | 🟡 Hermes 原生工单 checkpoint + 视频草稿资产已接入；素材/剪辑执行待迁移 |
+| `premium_human_video` | 真人数字人 / AI 人高质量视频 | 高质量视频项目，先样片和预算，再正片 | 独立影像预演 Agent、Seedream/Seedance、共享剪辑引擎；复用证据研究/授权素材做参考或 B-roll | 🟡 Hermes 原生工单 checkpoint 已接入；影像 provider/poller/renderer 仍独立待做 |
 
 ## 二、共享能力池，而不是三条烟囱
 
@@ -42,7 +43,7 @@
 6. 高级视频可复用证据研究和授权素材做参考/B-roll，但正片生成必须走成本和权利审批。
 7. 完整草稿不进入长期记忆；长期记忆只沉淀偏好、账号 DNA、成功流程和失败恢复方式。
 
-代码落点：`engine/agent_core/content_production.py` 的 `SHARED_CAPABILITIES`、`LANE_CAPABILITY_MAP`、`capability_pool`、`lane_contract`。
+当前代码所有权：`runtime/hermes-agent/marketing_os/domains/content_production.py` 负责共享能力池和三条 lane；`content_assets.py` 负责账号级生产 checkpoint 与草稿真相。`engine/agent_core/content_production.py` 仅保留旧桌面兼容，不再接新能力。
 
 ## 三、纯素材合成视频管线收口（2026-07-09）
 
@@ -200,6 +201,20 @@ Claude 写的 `engine/video_core` / `engine/video_agents` 不是废物，但它�
 - `node --check electron/main.js && node --check electron/preload.js && .venv/bin/python -m py_compile engine/agent_core/volcengine_tts_provider.py engine/agent_core/faceless_video_production.py engine/marketing-os/server.py` → passed
 - `.venv/bin/python -m pytest tests/test_content_production.py tests/test_production_preflight.py tests/test_preflight_decision.py -q` → 27 passed（内容生产入口统一预演门）
 - `.venv/bin/python -m pytest -q` → 1272 passed, 1 warning（全量回归）
+
+## 五-A、2026-07-10 Hermes 原生内容纵切
+
+| ID | 落地 | 代码事实 | 证据等级 |
+|---|---|---|---|
+| CPF-NATIVE-01 | 原生共享能力池 | `ContentProductionPlanner` 直接运行在 Hermes 源码内，三条 lane 共享账号、证据、文案、授权素材、生成视觉、音频和剪辑能力；只引用当前实际存在的 Hermes 工具/Skill，不再宣称不存在的 Skill 已安装 | automated |
+| CPF-NATIVE-02 | 持久生产 checkpoint | `content_production_plans` 绑定 `user_id + account_id + kind + platforms`；相同目标得到稳定 `plan_id`，跨重启可恢复 | automated |
+| CPF-NATIVE-03 | 草稿强制走工单 | `marketing_draft_content_create` 不接受 `account_id`；必须携带当前账号真实 `plan_id`，管线或平台不匹配直接拒绝 | automated |
+| CPF-NATIVE-04 | 内容资产可恢复 | `marketing_read_content_assets` 只读取当前 Hermes session 绑定账号；完整草稿进入 `content_assets`，不进入长期记忆 | automated |
+| CPF-NATIVE-05 | 原生工具链 | `marketing_plan_content_production / marketing_read_content_assets / marketing_draft_content_create` 进入 Hermes `marketing` toolset，并默认覆盖桌面、消息渠道与 cron surface | automated |
+
+边界：本轮完成的是“工单 → 草稿资产”的原生状态所有权，不等于真实软文质量、素材下载、视频渲染、发布或指标回收已完成。证据引用当前只保存 provenance reference，不把模型传入的 URL 自动升级为“已验证事实”；仍需后续原生 EvidencePack 服务完成来源校验。
+
+验证：Hermes SessionDB、Gateway protocol、账号工具、内容工具和 updater 组合回归 443 项通过；新内容纵切定向 20 项通过。
 
 ## 六、下一步执行清单
 

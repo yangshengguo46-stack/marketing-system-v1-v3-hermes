@@ -62,7 +62,7 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 | 两套桌面 UI | 当前产品壳为根目录 `src/` + `electron/`；Hermes fork 自身已有 `apps/desktop/`（Electron + React、原生 chat/session/skills/messaging/cron/approval/settings，约 437 个 src 文件）。继续维护前者会形成第二套壳 |
 | 自动化 | 2026-07-10 当前工作树全量 Python：1325 passed，TypeScript `tsc --noEmit` 通过，秘密扫描通过；1 个已知 Starlette/httpx 弃用警告 |
 | 构建 | backend 43MB、Hermes 发行源树 39MB、MCP+Chromium 407MB；Electron x64 DMG 约 352MB（未签名） |
-| Hermes 主运行时 | 嵌套产品分支 `codex/marketing-os-runtime` 已提交至 `2bbed64d4`；上游 SHA + 产品 tree `6cb2aea8e613` + 九个 checksummed patch 已锁定，nested repo clean，bootstrap/verifier 可得到同一 tree |
+| Hermes 主运行时 | 嵌套产品分支 `codex/marketing-os-runtime` 已提交至 `77e92e9f8`；上游 SHA + 产品 tree `5ef8d1441386` + 十个 checksummed patch 已锁定，nested repo clean，bootstrap/verifier 可得到同一 tree |
 | 打包验收 | 包内 Hermes manifest/source、MCP CLI/Chromium 均通过结构 hard gate；冻结 backend 真实创建 Agent session 并调用 L0，未调用外部模型 |
 
 ### 自动化不能证明的事情
@@ -100,6 +100,8 @@ Hermes 生态兼容被明确保留：原生 MCP catalog/自定义 MCP、MCP 动�
 
 消息渠道的双运行时旁路已经删除：原 `gateway/marketing_os_bridge.py` 会把飞书/微信消息通过 HTTP 送回外层 FastAPI 并创建第二类会话，现已改为 `marketing_os/messaging.py` 只做可信通知窗口准备，随后继续进入 Hermes 原生 Gateway 的授权、session、memory、task 与工具循环。产品状态明确为 `hermes-native-marketing / single-runtime`。这是“以 Hermes 为主、营销模块做增强”的首个反向拆壳样板；真实飞书/微信连续对话仍待人工复验。
 
+内容生产的第一段所有权也已进入 Hermes：原生 `ContentProductionPlanner` 负责三条互通 lane 和共享能力池，`content_production_plans` 把工单变成账号级持久 checkpoint；`marketing_draft_content_create` 必须引用当前账号真实 `plan_id`，模型不能传 `account_id`，跨账号、跨管线或跨平台草稿会被拒绝；`marketing_read_content_assets` 可恢复当前账号草稿。完整内容仍写入现有 `content_assets` 真相源，不复制数据库、不塞入长期记忆。组合回归 443 项通过；EvidencePack 校验、真实父稿生成、素材/渲染和发布仍待迁移，不能宣称内容闭环完成。
+
 ### P0-00 迁移映射（当前 → 唯一目标）
 
 | 当前旁路 | 目标归属 | 收口条件 |
@@ -116,7 +118,7 @@ Hermes 生态兼容被明确保留：原生 MCP catalog/自定义 MCP、MCP 动�
 
 ### P0-01 Hermes 源码与包内运行时已形成 packaged smoke，干净机仍待验
 
-此前开发机依赖一个被主仓库忽略且自身 dirty 的 `runtime/hermes-agent`。2026-07-10 已将增强后的 Hermes 改为“固定上游 commit + 产品 tree + checksummed patch series”，bootstrap 遇 dirty/未知 revision hard fail，自动化可从 baseline 重建相同 tree；未接入且无来源的泛化 skill 草稿已清除。当前第九个补丁删除移动端 Agent HTTP 旁路。构建现会生成 39MB 受校验发行源树，并把 Hermes 核心依赖编入冻结 backend；包内 backend 已真实创建 session 和调用 L0。剩余阻断是干净机、代码签名、真实 Provider 对话和 Electron UI 验收。
+此前开发机依赖一个被主仓库忽略且自身 dirty 的 `runtime/hermes-agent`。2026-07-10 已将增强后的 Hermes 改为“固定上游 commit + 产品 tree + checksummed patch series”，bootstrap 遇 dirty/未知 revision hard fail，自动化可从 baseline 重建相同 tree；未接入且无来源的泛化 skill 草稿已清除。第九个补丁删除移动端 Agent HTTP 旁路，第十个补丁接管内容工单 checkpoint 与草稿资产。构建现会生成受校验发行源树，并把 Hermes 核心依赖编入冻结 backend；包内 backend 已真实创建 session 和调用 L0。剩余阻断是干净机、代码签名、真实 Provider 对话和 Electron UI 验收。
 
 ### P0-02 工具结果与审批状态契约（已完成 automated 修复）
 
@@ -223,13 +225,13 @@ UserGoal
 | 顺序 | ID | 工作 | 完成证据 | 状态 |
 |---:|---|---|---|---|
 | 1 | R0-00 | Hermes 主运行时原生增强 | `apps/desktop` 成为唯一 UI；Hermes 保持唯一 Agent 主干；Marketing OS 领域能力直接进入其工具和状态链；最终删除根目录旧 UI/IPC/adapter 主路径 | code + automated partial：原生身份/gateway/workbench/chat route/branding、账号读写首段、移动消息 HTTP 旁路删除已完成；其余领域迁移与旧主路径删除 pending |
-| 2 | R0-01 | Hermes 增强分支可复现基线 | 当前 lock/patch 可复现；保持可直接开发、提交、构建的 Hermes 主源码边界 | automated complete：nested commit + tree lock + 9-patch replay；verifier/bootstrap 及 reproducibility tests passed；upstream integration CI pending |
+| 2 | R0-01 | Hermes 增强分支可复现基线 | 当前 lock/patch 可复现；保持可直接开发、提交、构建的 Hermes 主源码边界 | automated complete：nested commit + tree lock + 10-patch replay；verifier/bootstrap 及 reproducibility tests passed；upstream integration CI pending |
 | 3 | R0-02 | 打包 runtime 闭环 | Hermes/MCP 缺失 hard fail；冻结 backend 真实创建 session + L0；真实 Provider 对话和干净机待验 | packaged partial（结构、session、L0、MCP CLI 已通过） |
 | 4 | R1-01 | 统一 ToolOutcome | blocked/error 不再被标 completed；审批等待/回执按 approval_id 投影；未知外部结果不自动重试 | automated complete（迁入 fork 后必须重验） |
-| 5 | R1-02 | 图文真实生产纵切 | Agent 正文/双平台变体进入 ContentAsset；缺正文、缺引用、复制/重复变体均阻断；不自动评分 | automated partial（迁入 fork 后必须重验） |
+| 5 | R1-02 | 图文真实生产纵切 | 原生工单 checkpoint 和账号级 ContentAsset 写入已接管；下一步让 Hermes 生成真实父稿/双平台变体，并由 EvidencePack 阻断缺来源内容 | automated partial（plan→draft state complete；quality/evidence pending） |
 | 6 | R2-01 | 发布单真相源 | 已确认 JSON/UI/SQL 双路径；暂不继续改，待 R0-00 迁移骨架确定后在新边界完成 | audit complete，implementation paused |
 | 7 | R2-02 | 未校准预测降级 | 软文已只给 uncalibrated readiness；不露脸视频及其他生产路线仍需清除固定区间 | automated partial（soft article only） |
-| 8 | R3-01 | 领域服务接入 fork | 取消 Tool Manifest → FastAPI server 反向依赖；Account/Content/Publishing 作为 fork 内建领域端口 | code + automated + dev-runtime partial：Account 只读投影、Gateway、原生 toolset、SessionDB 会话作用域、工作台选账号，以及经营目标/受众草案/确认写入已接入；真实账号读取已验。其余 Account 写入、Content、Publishing pending |
+| 8 | R3-01 | 领域服务接入 Hermes | 取消 Tool Manifest → FastAPI server 反向依赖；Account/Content/Publishing 成为 Hermes 内建领域端口 | code + automated + dev-runtime partial：Account 读写首段、SessionDB 账号作用域、移动消息原生路由、Content 工单 checkpoint/草稿资产已接入；Evidence/Content 质量、Publishing pending |
 | 9 | R3-02 | 单一账号浏览器 profile | 登录与后台托管复用同一身份，跨重启不重复扫码 | pending |
 | 10 | R4-01 | 真人/打包验收门 | Electron UI E2E + 干净机 + 真实内容审稿 + 回执/指标闭环 | pending |
 
