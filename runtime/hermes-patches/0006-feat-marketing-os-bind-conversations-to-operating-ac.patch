@@ -1,0 +1,1079 @@
+From b87fabfb76ea37cc0ddf0f6b5d9f1fac1cb077f9 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 19:28:48 +0800
+Subject: [PATCH 2/2] feat(marketing-os): bind conversations to operating
+ accounts
+
+---
+ .../hooks/use-session-actions.test.tsx        |  13 ++
+ .../app/session/hooks/use-session-actions.ts  |   6 +-
+ apps/desktop/src/app/workbench/index.tsx      |  85 ++++++--
+ apps/desktop/src/store/marketing.test.ts      |  33 +++
+ apps/desktop/src/store/marketing.ts           |  28 +++
+ apps/desktop/src/types/hermes.ts              |   8 +
+ hermes_state.py                               |  56 ++++-
+ marketing_os/session_scope.py                 | 116 ++++++++++
+ tests/test_hermes_state.py                    |  30 +++
+ tests/test_marketing_os_account_context.py    |  67 ++++++
+ tests/tui_gateway/test_protocol.py            |   4 +
+ tui_gateway/server.py                         | 198 +++++++++++++++++-
+ 12 files changed, 618 insertions(+), 26 deletions(-)
+ create mode 100644 apps/desktop/src/store/marketing.test.ts
+ create mode 100644 apps/desktop/src/store/marketing.ts
+ create mode 100644 marketing_os/session_scope.py
+
+diff --git a/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx b/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx
+index dc4dcd417..139523a0d 100644
+--- a/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx
++++ b/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx
+@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
+ 
+ import { getSessionMessages, type SessionInfo } from '@/hermes'
+ import { createClientSessionState } from '@/lib/chat-runtime'
++import { $selectedMarketingAccountId } from '@/store/marketing'
+ import { $activeGatewayProfile, $newChatProfile } from '@/store/profile'
+ import {
+   $activeSessionId,
+@@ -114,6 +115,7 @@ describe('createBackendSessionForSend profile routing', () => {
+     $newChatProfile.set(null)
+     $activeGatewayProfile.set('default')
+     $currentCwd.set('')
++    $selectedMarketingAccountId.set('')
+     vi.restoreAllMocks()
+   })
+ 
+@@ -155,6 +157,17 @@ describe('createBackendSessionForSend profile routing', () => {
+ 
+     expect(params).toMatchObject({ cwd: '/remote/worktree' })
+   })
++
++  it('binds a new conversation to the selected Marketing OS account', async () => {
++    const params = await createWith(() => {
++      $selectedMarketingAccountId.set('acct-creator-1')
++    })
++
++    expect(params).toMatchObject({
++      marketing_user_id: 'default',
++      marketing_account_id: 'acct-creator-1'
++    })
++  })
+ })
+ 
+ // ── Resume failure recovery (the "stuck loading session window" bug) ──────────
+diff --git a/apps/desktop/src/app/session/hooks/use-session-actions.ts b/apps/desktop/src/app/session/hooks/use-session-actions.ts
+index 0e3af87bd..113204f2e 100644
+--- a/apps/desktop/src/app/session/hooks/use-session-actions.ts
++++ b/apps/desktop/src/app/session/hooks/use-session-actions.ts
+@@ -10,6 +10,7 @@ import { embeddedImageUrls, textWithoutEmbeddedImages } from '@/lib/embedded-ima
+ import { setSessionYolo } from '@/lib/yolo-session'
+ import { clearQueuedPrompts } from '@/store/composer-queue'
+ import { $pinnedSessionIds } from '@/store/layout'
++import { $selectedMarketingAccountId } from '@/store/marketing'
+ import { clearNotifications, notify, notifyError } from '@/store/notifications'
+ import { requestDesktopOnboarding } from '@/store/onboarding'
+ import {
+@@ -498,6 +499,7 @@ export function useSessionActions({
+         const uiProvider = $currentProvider.get().trim()
+         const uiEffort = $currentReasoningEffort.get().trim()
+         const uiFast = $currentFastMode.get()
++        const marketingAccountId = $selectedMarketingAccountId.get().trim() || 'prospect_default'
+ 
+         const created = await requestGateway<SessionCreateResponse>('session.create', {
+           cols: 96,
+@@ -505,7 +507,9 @@ export function useSessionActions({
+           ...(newChatProfile ? { profile: newChatProfile } : {}),
+           ...(uiModel ? { model: uiModel, ...(uiProvider ? { provider: uiProvider } : {}) } : {}),
+           ...(uiEffort ? { reasoning_effort: uiEffort } : {}),
+-          ...(uiFast ? { fast: true } : {})
++          ...(uiFast ? { fast: true } : {}),
++          marketing_user_id: 'default',
++          marketing_account_id: marketingAccountId
+         })
+ 
+         const stored = created.stored_session_id ?? null
+diff --git a/apps/desktop/src/app/workbench/index.tsx b/apps/desktop/src/app/workbench/index.tsx
+index c370d33e0..b0b24602e 100644
+--- a/apps/desktop/src/app/workbench/index.tsx
++++ b/apps/desktop/src/app/workbench/index.tsx
+@@ -1,8 +1,15 @@
++import { useStore } from '@nanostores/react'
+ import { useEffect, useState } from 'react'
+ 
+ import { BrandMark } from '@/components/brand-mark'
+ import { Button } from '@/components/ui/button'
+ import { PRODUCT_NAME, PRODUCT_TAGLINE } from '@/product'
++import {
++  $selectedMarketingAccountId,
++  type MarketingAccountSummary,
++  selectMarketingAccount,
++  setMarketingAccounts
++} from '@/store/marketing'
+ 
+ interface MarketingProductStatus {
+   product_id: string
+@@ -14,7 +21,7 @@ interface MarketingProductStatus {
+ }
+ 
+ interface MarketingAccountsSummary {
+-  accounts: Array<{ id: string; label?: string; platform?: string; username?: string }>
++  accounts: MarketingAccountSummary[]
+   total: number
+   source: string
+ }
+@@ -28,24 +35,39 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
+   const [status, setStatus] = useState<MarketingProductStatus | null>(null)
+   const [accounts, setAccounts] = useState<MarketingAccountsSummary | null>(null)
+   const [error, setError] = useState('')
++  const selectedAccountId = useStore($selectedMarketingAccountId)
++
++  const startForAccount = (accountId: string) => {
++    selectMarketingAccount(accountId)
++    onNewChat()
++  }
+ 
+   useEffect(() => {
+     let active = true
+ 
+     void requestGateway<MarketingProductStatus>('marketing.product.status')
+       .then(result => {
+-        if (active) setStatus(result)
++        if (active) {
++          setStatus(result)
++        }
+       })
+       .catch(reason => {
+-        if (active) setError(reason instanceof Error ? reason.message : String(reason))
++        if (active) {
++          setError(reason instanceof Error ? reason.message : String(reason))
++        }
+       })
+ 
+     void requestGateway<MarketingAccountsSummary>('marketing.accounts.list')
+       .then(result => {
+-        if (active) setAccounts(result)
++        if (active) {
++          setAccounts(result)
++          setMarketingAccounts(result.accounts)
++        }
+       })
+       .catch(reason => {
+-        if (active) setError(reason instanceof Error ? reason.message : String(reason))
++        if (active) {
++          setError(reason instanceof Error ? reason.message : String(reason))
++        }
+       })
+ 
+     return () => {
+@@ -67,30 +89,59 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
+               <p className="mt-1 text-sm text-(--ui-text-secondary)">{PRODUCT_TAGLINE}</p>
+             </div>
+           </div>
+-          <Button onClick={onNewChat}>开始新对话</Button>
++          <Button onClick={() => startForAccount(selectedAccountId || accounts?.accounts[0]?.id || 'prospect_default')}>
++            开始新对话
++          </Button>
+         </header>
+ 
+         <section className="grid gap-4 md:grid-cols-3">
+-          <WorkbenchSignal label="智能体" value={status ? '原生运行' : '正在连接'} detail="会话、长任务、记忆和技能由同一个内核运行" />
+           <WorkbenchSignal
+-            label="经营对象"
+-            value={accounts ? `${accounts.total} 个账号` : '正在读取'}
+-            detail={
+-              accounts?.accounts[0]
+-                ? `${accounts.accounts[0].platform || '平台'} · ${accounts.accounts[0].label || accounts.accounts[0].username || accounts.accounts[0].id}`
+-                : '未登录也可以先从自然对话建立目标受众和账号方向'
+-            }
++            detail="会话、长任务、记忆和技能由同一个内核运行"
++            label="智能体"
++            value={status ? '原生运行' : '正在连接'}
+           />
+-          <WorkbenchSignal label="产品界面" value="原生桌面" detail="工作台、对话和后台任务共享同一会话与运行时" />
++          <article className="min-h-40 rounded-2xl border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-6">
++            <p className="text-xs text-(--ui-text-tertiary)">经营对象</p>
++            <strong className="mt-5 block text-xl font-semibold tracking-[-0.03em]">
++              {accounts ? `${accounts.total} 个账号` : '正在读取'}
++            </strong>
++            <div className="mt-3 flex flex-wrap gap-2">
++              {accounts?.accounts.map(account => (
++                <button
++                  className={`rounded-full border px-3 py-1.5 text-left text-xs transition-colors ${
++                    selectedAccountId === account.id
++                      ? 'border-(--ui-accent) bg-(--ui-accent)/10 text-foreground'
++                      : 'border-(--ui-stroke-tertiary) text-(--ui-text-secondary) hover:text-foreground'
++                  }`}
++                  key={account.id}
++                  onClick={() => startForAccount(account.id)}
++                  type="button"
++                >
++                  {account.platform || '平台'} · {account.label || account.username || account.id}
++                </button>
++              ))}
++              {accounts?.total === 0 ? (
++                <button
++                  className="rounded-full border border-(--ui-stroke-tertiary) px-3 py-1.5 text-xs text-(--ui-text-secondary) hover:text-foreground"
++                  onClick={() => startForAccount('prospect_default')}
++                  type="button"
++                >
++                  先聊方向，不登录账号
++                </button>
++              ) : null}
++            </div>
++          </article>
++          <WorkbenchSignal detail="工作台、对话和后台任务共享同一会话与运行时" label="产品界面" value="原生桌面" />
+         </section>
+ 
+         <section className="rounded-2xl border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-7">
+           <p className="text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-(--ui-text-tertiary)">Today</p>
+           <h2 className="mt-3 text-xl font-semibold">告诉 Agent 你想经营什么</h2>
+           <p className="mt-2 max-w-2xl text-sm leading-6 text-(--ui-text-secondary)">
+-            不知道账号定位也可以直接开始。Marketing OS 会先了解你的能力、兴趣、可投入时间和目标受众，再形成第一轮可验证方向。
++            不知道账号定位也可以直接开始。Marketing OS
++            会先了解你的能力、兴趣、可投入时间和目标受众，再形成第一轮可验证方向。
+           </p>
+-          <Button className="mt-6" onClick={onNewChat} variant="outline">
++          <Button className="mt-6" onClick={() => startForAccount('prospect_default')} variant="outline">
+             从自然对话开始
+           </Button>
+           {error ? <p className="mt-4 text-xs text-red-400">原生 Gateway 尚未就绪：{error}</p> : null}
+diff --git a/apps/desktop/src/store/marketing.test.ts b/apps/desktop/src/store/marketing.test.ts
+new file mode 100644
+index 000000000..329789b11
+--- /dev/null
++++ b/apps/desktop/src/store/marketing.test.ts
+@@ -0,0 +1,33 @@
++import { beforeEach, describe, expect, it } from 'vitest'
++
++import {
++  $marketingAccounts,
++  $selectedMarketingAccountId,
++  selectMarketingAccount,
++  setMarketingAccounts
++} from './marketing'
++
++describe('Marketing OS account selection', () => {
++  beforeEach(() => {
++    $marketingAccounts.set([])
++    $selectedMarketingAccountId.set('')
++  })
++
++  it('selects the first connected account when the previous selection is unavailable', () => {
++    setMarketingAccounts([
++      { id: 'acct-1', platform: 'douyin' },
++      { id: 'acct-2', platform: 'xiaohongshu' }
++    ])
++
++    expect($selectedMarketingAccountId.get()).toBe('acct-1')
++  })
++
++  it('preserves an onboarding prospect and normalizes an empty selection', () => {
++    selectMarketingAccount('prospect_creator')
++    setMarketingAccounts([{ id: 'acct-1' }])
++    expect($selectedMarketingAccountId.get()).toBe('prospect_creator')
++
++    selectMarketingAccount('  ')
++    expect($selectedMarketingAccountId.get()).toBe('prospect_default')
++  })
++})
+diff --git a/apps/desktop/src/store/marketing.ts b/apps/desktop/src/store/marketing.ts
+new file mode 100644
+index 000000000..514371460
+--- /dev/null
++++ b/apps/desktop/src/store/marketing.ts
+@@ -0,0 +1,28 @@
++import { atom } from 'nanostores'
++
++import { Codecs, persistentAtom } from '@/lib/persisted'
++
++export interface MarketingAccountSummary {
++  id: string
++  label?: string
++  platform?: string
++  username?: string
++}
++
++export const $marketingAccounts = atom<MarketingAccountSummary[]>([])
++export const $selectedMarketingAccountId = persistentAtom('marketing-os.desktop.selected-account', '', Codecs.text)
++
++export function setMarketingAccounts(accounts: MarketingAccountSummary[]) {
++  $marketingAccounts.set(accounts)
++  const selected = $selectedMarketingAccountId.get()
++
++  if (selected.startsWith('prospect_') || accounts.some(account => account.id === selected)) {
++    return
++  }
++
++  $selectedMarketingAccountId.set(accounts[0]?.id ?? 'prospect_default')
++}
++
++export function selectMarketingAccount(accountId: string) {
++  $selectedMarketingAccountId.set(accountId.trim() || 'prospect_default')
++}
+diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
+index 08e29ce4b..3191a2a83 100644
+--- a/apps/desktop/src/types/hermes.ts
++++ b/apps/desktop/src/types/hermes.ts
+@@ -343,6 +343,8 @@ export interface SessionInfo {
+   is_active: boolean
+   last_active: number
+   message_count: number
++  marketing_account_id?: null | string
++  marketing_user_id?: null | string
+   model: null | string
+   output_tokens: number
+   /** Parent conversation when this row is a /branch fork. */
+@@ -415,6 +417,12 @@ export interface SessionRuntimeInfo {
+   usage?: Partial<UsageStats>
+   version?: string
+   yolo?: boolean
++  marketing_scope?: {
++    account_id: string
++    connected: boolean
++    platform: string
++    user_id: string
++  } | null
+ }
+ 
+ export interface UsageStats {
+diff --git a/hermes_state.py b/hermes_state.py
+index d8e4c8961..0f8d8d1b0 100644
+--- a/hermes_state.py
++++ b/hermes_state.py
+@@ -121,7 +121,7 @@ T = TypeVar("T")
+ 
+ DEFAULT_DB_PATH = get_hermes_home() / "state.db"
+ 
+-SCHEMA_VERSION = 17
++SCHEMA_VERSION = 18
+ 
+ # ---------------------------------------------------------------------------
+ # WAL-compatibility fallback
+@@ -676,6 +676,8 @@ CREATE TABLE IF NOT EXISTS sessions (
+     handoff_error TEXT,
+     rewind_count INTEGER NOT NULL DEFAULT 0,
+     archived INTEGER NOT NULL DEFAULT 0,
++    marketing_user_id TEXT,
++    marketing_account_id TEXT,
+     FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
+ );
+ 
+@@ -1483,17 +1485,31 @@ class SessionDB:
+         chat_id: str = None,
+         chat_type: str = None,
+         thread_id: str = None,
++        marketing_user_id: str = None,
++        marketing_account_id: str = None,
+         parent_session_id: str = None,
+         cwd: str = None,
+     ) -> None:
+         """Shared INSERT OR IGNORE for session rows."""
+         def _do(conn):
++            scope_user_id = marketing_user_id
++            scope_account_id = marketing_account_id
++            if parent_session_id and not scope_account_id:
++                parent_scope = conn.execute(
++                    "SELECT marketing_user_id, marketing_account_id "
++                    "FROM sessions WHERE id = ?",
++                    (parent_session_id,),
++                ).fetchone()
++                if parent_scope is not None:
++                    scope_user_id = parent_scope["marketing_user_id"]
++                    scope_account_id = parent_scope["marketing_account_id"]
+             conn.execute(
+                 """INSERT OR IGNORE INTO sessions (
+                    id, source, user_id, session_key, chat_id, chat_type, thread_id,
+-                   model, model_config, system_prompt, parent_session_id, cwd, started_at
++                   model, model_config, system_prompt, marketing_user_id,
++                   marketing_account_id, parent_session_id, cwd, started_at
+                 )
+-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
++                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 (
+                     session_id,
+                     source,
+@@ -1505,6 +1521,8 @@ class SessionDB:
+                     model,
+                     json.dumps(model_config) if model_config else None,
+                     system_prompt,
++                    scope_user_id,
++                    scope_account_id,
+                     parent_session_id,
+                     cwd,
+                     time.time(),
+@@ -1845,6 +1863,38 @@ class SessionDB:
+             )
+         self._execute_write(_do)
+ 
++    def update_session_marketing_scope(
++        self,
++        session_id: str,
++        *,
++        marketing_user_id: Optional[str],
++        marketing_account_id: Optional[str],
++        require_pristine: bool = True,
++    ) -> bool:
++        """Bind a conversation to one Marketing OS account.
++
++        The scope participates in the stable per-conversation prompt prefix.
++        By default it can therefore only change before the first model call.
++        The guarded UPDATE makes that invariant atomic with respect to turn
++        persistence instead of relying on a caller-side check.
++        """
++
++        def _do(conn):
++            sql = (
++                "UPDATE sessions SET marketing_user_id = ?, "
++                "marketing_account_id = ? WHERE id = ?"
++            )
++            params: tuple[Any, ...] = (
++                marketing_user_id,
++                marketing_account_id,
++                session_id,
++            )
++            if require_pristine:
++                sql += " AND COALESCE(api_call_count, 0) = 0"
++            return conn.execute(sql, params).rowcount > 0
++
++        return bool(self._execute_write(_do))
++
+     def update_system_prompt(self, session_id: str, system_prompt: str) -> None:
+         """Store the full assembled system prompt snapshot."""
+         def _do(conn):
+diff --git a/marketing_os/session_scope.py b/marketing_os/session_scope.py
+new file mode 100644
+index 000000000..f1a4372b5
+--- /dev/null
++++ b/marketing_os/session_scope.py
+@@ -0,0 +1,116 @@
++"""Stable per-conversation Marketing OS account routing.
++
++Account scope belongs to the native session, not to a UI card or an adapter.
++Only immutable routing identifiers enter the cached prompt. Mutable account
++facts remain in :class:`AccountContextRepository` and must be read through the
++native account tool when the agent needs a current answer.
++"""
++
++from __future__ import annotations
++
++import re
++from typing import Any
++
++from marketing_os.domains import AccountContextRepository
++
++
++_SCOPE_ID = re.compile(r"^[A-Za-z0-9_.:@-]{1,160}$")
++
++
++def resolve_account_scope(
++    *,
++    user_id: str = "default",
++    account_id: str,
++    repository: AccountContextRepository | None = None,
++) -> dict[str, Any]:
++    """Validate and resolve a connected account or onboarding prospect."""
++
++    normalized_user = _normalize_id(user_id or "default", field="user_id")
++    normalized_account = _normalize_id(account_id, field="account_id")
++    repo = repository or AccountContextRepository()
++    account = next(
++        (
++            item
++            for item in repo.list_accounts().get("accounts", [])
++            if item.get("id") == normalized_account
++        ),
++        None,
++    )
++    if account is None and not normalized_account.startswith("prospect_"):
++        raise ValueError(f"unknown Marketing OS account: {normalized_account}")
++
++    platform = str((account or {}).get("platform") or "unassigned").strip().lower()
++    if not re.fullmatch(r"[a-z0-9_-]{1,48}", platform):
++        platform = "unknown"
++    return {
++        "user_id": normalized_user,
++        "account_id": normalized_account,
++        "platform": platform,
++        "connected": account is not None,
++    }
++
++
++def scope_from_session_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
++    """Return the stored identifiers without reinterpreting other session data."""
++
++    if not row:
++        return None
++    account_id = str(row.get("marketing_account_id") or "").strip()
++    if not account_id:
++        return None
++    try:
++        user_id = _normalize_id(
++            str(row.get("marketing_user_id") or "default"), field="user_id"
++        )
++        account_id = _normalize_id(account_id, field="account_id")
++    except ValueError:
++        return None
++    try:
++        return resolve_account_scope(
++            user_id=user_id,
++            account_id=account_id,
++        )
++    except ValueError:
++        # A platform account may have been disconnected after the conversation
++        # was created. Preserve routing identity for historical continuity,
++        # while making its disconnected state explicit.
++        return {
++            "user_id": user_id,
++            "account_id": account_id,
++            "platform": "unavailable",
++            "connected": False,
++        }
++
++
++def read_session_scope(session_db: Any, session_id: str) -> dict[str, Any] | None:
++    if session_db is None or not session_id:
++        return None
++    return scope_from_session_row(session_db.get_session(session_id))
++
++
++def build_account_scope_prompt(scope: dict[str, Any] | None) -> str:
++    """Build the compact, byte-stable account routing prompt for one session."""
++
++    if not scope:
++        return ""
++    user_id = _normalize_id(str(scope.get("user_id") or "default"), field="user_id")
++    account_id = _normalize_id(str(scope.get("account_id") or ""), field="account_id")
++    platform = str(scope.get("platform") or "unassigned")
++    if not re.fullmatch(r"[a-z0-9_-]{1,48}", platform):
++        platform = "unknown"
++    return (
++        "MARKETING OS SESSION SCOPE (stable routing identity)\n"
++        f"user_id={user_id}\naccount_id={account_id}\nplatform={platform}\n"
++        "Never silently switch to another account. Before account-specific "
++        "positioning, content, publishing, metrics, or growth advice, call "
++        "marketing_read_account_context with exactly these user_id/account_id "
++        "values. The tool result is the current source of truth; missing fields "
++        "are evidence gaps, never permission to invent data."
++    )
++
++
++def _normalize_id(value: str, *, field: str) -> str:
++    normalized = str(value or "").strip()
++    if not _SCOPE_ID.fullmatch(normalized):
++        raise ValueError(f"{field} must be 1-160 safe identifier characters")
++    return normalized
+diff --git a/tests/test_hermes_state.py b/tests/test_hermes_state.py
+index 6b623b2ba..a89d87f44 100644
+--- a/tests/test_hermes_state.py
++++ b/tests/test_hermes_state.py
+@@ -96,6 +96,36 @@ class TestSessionLifecycle:
+     def test_get_nonexistent_session(self, db):
+         assert db.get_session("nonexistent") is None
+ 
++    def test_marketing_scope_is_native_pristine_and_inherited(self, db):
++        db.create_session(
++            session_id="s1",
++            source="tui",
++            marketing_user_id="user-1",
++            marketing_account_id="acct-1",
++        )
++        db.create_session(
++            session_id="s2",
++            source="tui",
++            parent_session_id="s1",
++        )
++
++        assert db.get_session("s2")["marketing_user_id"] == "user-1"
++        assert db.get_session("s2")["marketing_account_id"] == "acct-1"
++        assert db.update_session_marketing_scope(
++            "s2",
++            marketing_user_id="user-1",
++            marketing_account_id="acct-2",
++        )
++        assert db.get_session("s2")["marketing_account_id"] == "acct-2"
++
++        db.update_token_counts("s2", api_call_count=1)
++        assert not db.update_session_marketing_scope(
++            "s2",
++            marketing_user_id="user-1",
++            marketing_account_id="acct-3",
++        )
++        assert db.get_session("s2")["marketing_account_id"] == "acct-2"
++
+     def test_update_session_cwd_persists_git_branch(self, db):
+         db.create_session(session_id="s1", source="cli")
+         db.update_session_cwd("s1", "/work/repo", git_branch="pets-feature")
+diff --git a/tests/test_marketing_os_account_context.py b/tests/test_marketing_os_account_context.py
+index 9ee953f02..23d98c7d2 100644
+--- a/tests/test_marketing_os_account_context.py
++++ b/tests/test_marketing_os_account_context.py
+@@ -3,6 +3,8 @@ import sqlite3
+ 
+ from marketing_os.data_paths import MarketingDataPaths
+ from marketing_os.domains import AccountContextRepository
++from marketing_os.session_scope import build_account_scope_prompt, resolve_account_scope
++from hermes_state import SessionDB
+ from model_tools import get_tool_definitions, handle_function_call
+ from toolsets import resolve_toolset
+ from tui_gateway import server
+@@ -168,3 +170,68 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
+     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
+     assert result["lifecycle"]["stage"] == "positioning_approved"
+     assert result["account_dna"]["taboos"] == ["虚构收益"]
++
++
++def test_session_scope_keeps_only_stable_routing_identity_in_prompt(tmp_path):
++    repository = AccountContextRepository(_seed_product_store(tmp_path))
++
++    scope = resolve_account_scope(
++        user_id="default",
++        account_id="acct-1",
++        repository=repository,
++    )
++    prompt = build_account_scope_prompt(scope)
++
++    assert scope == {
++        "user_id": "default",
++        "account_id": "acct-1",
++        "platform": "douyin",
++        "connected": True,
++    }
++    assert "account_id=acct-1" in prompt
++    assert "marketing_read_account_context" in prompt
++    assert "经营 AI 教育账号" not in prompt
++
++
++def test_native_gateway_binds_pristine_session_to_account(tmp_path, monkeypatch):
++    paths = _seed_product_store(tmp_path)
++    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
++    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
++    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
++    state_db = SessionDB(db_path=tmp_path / "state.db")
++    monkeypatch.setattr(server, "_db", state_db)
++    monkeypatch.setattr(server, "_schedule_agent_build", lambda _sid: None)
++
++    response = server.handle_request({
++        "jsonrpc": "2.0",
++        "id": "create-scoped-session",
++        "method": "session.create",
++        "params": {"marketing_account_id": "acct-1"},
++    })
++    sid = response["result"]["session_id"]
++    session = server._sessions[sid]
++    try:
++        assert response["result"]["info"]["marketing_scope"]["account_id"] == "acct-1"
++        server._ensure_session_db_row(session)
++        row = state_db.get_session(session["session_key"])
++        assert row["marketing_account_id"] == "acct-1"
++
++        bound = server.handle_request({
++            "jsonrpc": "2.0",
++            "id": "read-scope",
++            "method": "marketing.session.account.get",
++            "params": {"session_id": sid},
++        })
++        assert bound["result"]["scope"]["platform"] == "douyin"
++
++        session["history"].append({"role": "user", "content": "hello"})
++        rejected = server.handle_request({
++            "jsonrpc": "2.0",
++            "id": "change-scope",
++            "method": "marketing.session.account.set",
++            "params": {"session_id": sid, "account_id": "prospect_new"},
++        })
++        assert rejected["error"]["code"] == 4095
++    finally:
++        server._close_session_by_id(sid, end_reason="test_cleanup")
++        state_db.close()
+diff --git a/tests/tui_gateway/test_protocol.py b/tests/tui_gateway/test_protocol.py
+index 170e78aec..6da48ada6 100644
+--- a/tests/tui_gateway/test_protocol.py
++++ b/tests/tui_gateway/test_protocol.py
+@@ -353,6 +353,8 @@ def test_session_resume_defaults_to_deferred_build(server, monkeypatch):
+                 "id": target,
+                 "model": "vendor/cool-model",
+                 "model_config": {"provider": "vendor"},
++                "marketing_user_id": "default",
++                "marketing_account_id": "prospect_test",
+             }
+ 
+         def get_session_by_title(self, _title):
+@@ -404,9 +406,11 @@ def test_session_resume_defaults_to_deferred_build(server, monkeypatch):
+     assert result["info"]["model"] == "vendor/cool-model"
+     assert result["info"]["provider"] == "vendor"
+     assert result["info"]["desktop_contract"] == server.DESKTOP_BACKEND_CONTRACT
++    assert result["info"]["marketing_scope"]["account_id"] == "prospect_test"
+ 
+     sid = result["session_id"]
+     session = server._sessions[sid]
++    assert session["marketing_scope"]["account_id"] == "prospect_test"
+     # Registered but not built: agent is None and the resume key is carried so a
+     # later prompt.submit / _sess() upgrade continues THIS stored conversation.
+     assert session["agent"] is None
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index d0f087f37..5c34bc52c 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -1202,6 +1202,8 @@ def _start_agent_build(sid: str, session: dict) -> None:
+                 # id — pass it through so the upgrade continues that session
+                 # instead of starting a fresh one under the same key.
+                 kw = {"session_db": session_db}
++                if current.get("marketing_scope"):
++                    kw["marketing_scope"] = current["marketing_scope"]
+                 if resume_sid := current.get("resume_session_id"):
+                     kw["session_id"] = resume_sid
+                 resume_overrides = current.get("resume_runtime_overrides")
+@@ -1587,6 +1589,8 @@ def _ensure_session_db_row(session: dict) -> None:
+             source=_session_source(session),
+             model=row_model,
+             model_config=model_config or None,
++            marketing_user_id=(session.get("marketing_scope") or {}).get("user_id"),
++            marketing_account_id=(session.get("marketing_scope") or {}).get("account_id"),
+             parent_session_id=parent_session_id,
+             cwd=_session_cwd(session) if session.get("explicit_cwd") else None,
+         )
+@@ -3110,6 +3114,7 @@ def _session_info(agent, session: dict | None = None) -> dict:
+         "update_command": "",
+         "usage": _get_usage(agent),
+         "profile_name": _current_profile_name(),
++        "marketing_scope": (session or {}).get("marketing_scope"),
+     }
+     try:
+         from hermes_cli import __version__, __release_date__
+@@ -4180,6 +4185,7 @@ def _make_agent(
+     provider_override: str | None = None,
+     reasoning_config_override: dict | None = None,
+     service_tier_override: str | None = None,
++    marketing_scope: dict | None = None,
+ ):
+     from run_agent import AIAgent
+ 
+@@ -4219,6 +4225,27 @@ def _make_agent(
+             system_prompt = "\n\n".join(
+                 part for part in (system_prompt, skills_prompt) if part
+             ).strip()
++    # A conversation has one stable Marketing OS account scope. Resolve it
++    # from durable session state on resume, or use the explicit scope attached
++    # to a not-yet-persisted desktop draft. Mutable account facts never enter
++    # this cached prefix; the native account tool remains authoritative.
++    from marketing_os.session_scope import (
++        build_account_scope_prompt,
++        read_session_scope,
++    )
++
++    stable_scope = marketing_scope
++    if stable_scope is None:
++        stable_scope = read_session_scope(
++            session_db if session_db is not None else _get_db(),
++            session_id or key,
++        )
++    base_ephemeral_prompt = system_prompt
++    account_scope_prompt = build_account_scope_prompt(stable_scope)
++    if account_scope_prompt:
++        system_prompt = "\n\n".join(
++            part for part in (system_prompt, account_scope_prompt) if part
++        ).strip()
+     # Prefer a per-session model override (set by a prior in-session /model
+     # switch) over global config/env resolution. Resume-time stored sessions may
+     # also pass scalar model/provider/runtime knobs from the persisted DB row.
+@@ -4273,7 +4300,7 @@ def _make_agent(
+             "target_model": model or None,
+         })
+     _pr = _load_provider_routing()
+-    return AIAgent(
++    agent = AIAgent(
+         model=model,
+         max_iterations=_cfg_max_turns(cfg, 90),
+         provider=runtime.get("provider"),
+@@ -4320,6 +4347,12 @@ def _make_agent(
+         fallback_model=_load_fallback_model(),
+         **_agent_cbs(sid),
+     )
++    # Updating account scope is cache-safe only before the first model call.
++    # Keep the non-account prefix so the guarded RPC can rebuild the overlay
++    # without accumulating duplicate prompts.
++    agent._marketing_base_ephemeral_prompt = base_ephemeral_prompt
++    agent._marketing_scope = stable_scope
++    return agent
+ 
+ 
+ def _init_session(
+@@ -4363,10 +4396,14 @@ def _init_session(
+     db = session_db if session_db is not None else _get_db()
+     if db is not None:
+         row = db.get_session(key)
+-        if row and row.get("cwd"):
++        if row:
++            from marketing_os.session_scope import scope_from_session_row
++
+             with _sessions_lock:
+                 if sid in _sessions:
+-                    _sessions[sid]["cwd"] = row["cwd"]
++                    if row.get("cwd"):
++                        _sessions[sid]["cwd"] = row["cwd"]
++                    _sessions[sid]["marketing_scope"] = scope_from_session_row(row)
+         else:
+             try:
+                 _cwd = _sessions[sid]["cwd"]
+@@ -4860,6 +4897,17 @@ def _(rid, params: dict) -> dict:
+         explicit_cwd = False
+     resolved_cwd = _completion_cwd(params)
+     source = str(params.get("source") or "tui").strip() or "tui"
++    marketing_scope = None
++    if account_id := str(params.get("marketing_account_id") or "").strip():
++        from marketing_os.session_scope import resolve_account_scope
++
++        try:
++            marketing_scope = resolve_account_scope(
++                user_id=str(params.get("marketing_user_id") or "default"),
++                account_id=account_id,
++            )
++        except ValueError as exc:
++            return _err(rid, -32602, str(exc))
+     _enable_gateway_prompts()
+ 
+     # ``profile`` (app-global remote mode): a new chat started under a non-launch
+@@ -4868,6 +4916,33 @@ def _(rid, params: dict) -> dict:
+     # and each turn re-bind HERMES_HOME. None/own profile → launch (unchanged).
+     profile = (params.get("profile") or "").strip() or None
+     profile_home = _profile_home(profile)
++    if parent_session_id:
++        from hermes_state import SessionDB
++        from marketing_os.session_scope import read_session_scope
++
++        parent_db = None
++        close_parent_db = False
++        try:
++            if profile_home is not None:
++                parent_db = SessionDB(db_path=Path(profile_home) / "state.db")
++                close_parent_db = True
++            else:
++                parent_db = _get_db()
++            parent_scope = read_session_scope(parent_db, parent_session_id)
++        finally:
++            if close_parent_db and parent_db is not None:
++                parent_db.close()
++        if parent_scope:
++            if (
++                marketing_scope
++                and marketing_scope.get("account_id") != parent_scope.get("account_id")
++            ):
++                return _err(
++                    rid,
++                    4095,
++                    "a branched conversation must inherit its parent account scope",
++                )
++            marketing_scope = parent_scope
+ 
+     # The desktop composer owns its model/effort/fast as plain UI state and ships
+     # it on every session.create. Honor each as a PER-SESSION override (built into
+@@ -4918,6 +4993,7 @@ def _(rid, params: dict) -> dict:
+             "inflight_turn": None,
+             "last_active": now,
+             "model_override": session_model_override,
++            "marketing_scope": marketing_scope,
+             "create_reasoning_override": create_reasoning_override,
+             "create_service_tier_override": create_service_tier_override,
+             "parent_session_id": parent_session_id,
+@@ -4977,6 +5053,7 @@ def _(rid, params: dict) -> dict:
+                 "lazy": True,
+                 "desktop_contract": DESKTOP_BACKEND_CONTRACT,
+                 "profile_name": _current_profile_name(),
++                "marketing_scope": marketing_scope,
+             },
+         },
+     )
+@@ -5019,6 +5096,8 @@ def _(rid, params: dict) -> dict:
+                         "started_at": s.get("started_at") or 0,
+                         "message_count": s.get("message_count") or 0,
+                         "source": s.get("source") or "",
++                        "marketing_user_id": s.get("marketing_user_id"),
++                        "marketing_account_id": s.get("marketing_account_id"),
+                     }
+                     for s in rows
+                 ]
+@@ -5114,7 +5193,13 @@ def _(rid, params: dict) -> dict:
+         return _ok(rid, {"verification": {"status": "unknown", "evidence": None}})
+ 
+ 
+-def _lazy_resume_info(cwd: str, *, model: str = "", provider: str = "") -> dict:
++def _lazy_resume_info(
++    cwd: str,
++    *,
++    model: str = "",
++    provider: str = "",
++    marketing_scope: dict | None = None,
++) -> dict:
+     """session.info for a not-yet-built session (the shape session.create
+     returns). tools/skills land later when the deferred build emits session.info."""
+     info = {
+@@ -5126,6 +5211,7 @@ def _lazy_resume_info(cwd: str, *, model: str = "", provider: str = "") -> dict:
+         "lazy": True,
+         "desktop_contract": DESKTOP_BACKEND_CONTRACT,
+         "profile_name": _current_profile_name(),
++        "marketing_scope": marketing_scope,
+     }
+     if provider:
+         info["provider"] = provider
+@@ -5146,6 +5232,7 @@ def _deferred_session_record(
+     lazy: bool = False,
+     model_override=None,
+     resume_runtime_overrides: dict | None = None,
++    marketing_scope: dict | None = None,
+ ) -> dict:
+     """A live-session record whose AIAgent is built later (lazy watch / cold
+     resume) — _init_session's shape minus the agent."""
+@@ -5171,6 +5258,7 @@ def _deferred_session_record(
+         "last_active": now,
+         "lazy": lazy,
+         "model_override": model_override,
++        "marketing_scope": marketing_scope,
+         "pending_title": None,
+         "profile_home": str(profile_home) if profile_home is not None else None,
+         "resume_runtime_overrides": resume_runtime_overrides,
+@@ -5287,6 +5375,9 @@ def _(rid, params: dict) -> dict:
+     profile_resume_cwd = str(found.get("cwd") or "").strip() or _profile_configured_cwd(
+         profile_home
+     )
++    from marketing_os.session_scope import scope_from_session_row
++
++    marketing_scope = scope_from_session_row(found)
+ 
+     def _reuse_live_payload(sid: str, session: dict) -> dict:
+         payload = _live_session_payload(
+@@ -5343,6 +5434,7 @@ def _(rid, params: dict) -> dict:
+             close_on_disconnect=is_truthy_value(params.get("close_on_disconnect", False)),
+             profile_home=profile_home,
+             lazy=True,
++            marketing_scope=marketing_scope,
+         )
+         if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+             return _ok(rid, _reuse_live_payload(*live))
+@@ -5357,7 +5449,7 @@ def _(rid, params: dict) -> dict:
+                 "resumed": target,
+                 "message_count": len(messages),
+                 "messages": messages,
+-                "info": _lazy_resume_info(cwd),
++                "info": _lazy_resume_info(cwd, marketing_scope=marketing_scope),
+                 "inflight": None,
+                 "running": child_running,
+                 "session_key": target,
+@@ -5418,6 +5510,7 @@ def _(rid, params: dict) -> dict:
+             profile_home=profile_home,
+             model_override=overrides.get("model_override"),
+             resume_runtime_overrides=overrides or None,
++            marketing_scope=marketing_scope,
+         )
+         if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+             return _ok(rid, _reuse_live_payload(*live))
+@@ -5437,6 +5530,7 @@ def _(rid, params: dict) -> dict:
+                     cwd,
+                     model=model_override.get("model") or "",
+                     provider=overrides.get("provider_override") or "",
++                    marketing_scope=marketing_scope,
+                 ),
+                 "inflight": None,
+                 "running": False,
+@@ -12814,6 +12908,100 @@ def _(rid, params: dict) -> dict:
+     return _ok(rid, result)
+ 
+ 
++@method("marketing.session.account.get")
++def _(rid, params: dict) -> dict:
++    """Return the account routing scope owned by a live conversation."""
++    session, err = _sess_nowait(params, rid)
++    if err:
++        return err
++    scope = session.get("marketing_scope")
++    if scope is None:
++        from marketing_os.session_scope import read_session_scope
++
++        with _session_db(session) as db:
++            scope = read_session_scope(db, session.get("session_key") or "")
++        session["marketing_scope"] = scope
++    return _ok(rid, {"scope": scope})
++
++
++@method("marketing.session.account.set")
++def _(rid, params: dict) -> dict:
++    """Bind a pristine conversation to one account without breaking caching."""
++    session, err = _sess_nowait(params, rid)
++    if err:
++        return err
++    if session.get("running"):
++        return _err(rid, 4095, "cannot change account while the agent is running")
++    if session.get("history"):
++        return _err(
++            rid,
++            4095,
++            "account scope is immutable after conversation history begins; create a new chat",
++        )
++
++    from marketing_os.session_scope import (
++        build_account_scope_prompt,
++        resolve_account_scope,
++    )
++
++    account_id = str(params.get("account_id") or "").strip()
++    try:
++        scope = (
++            resolve_account_scope(
++                user_id=str(params.get("user_id") or "default"),
++                account_id=account_id,
++            )
++            if account_id
++            else None
++        )
++    except ValueError as exc:
++        return _err(rid, -32602, str(exc))
++
++    key = str(session.get("session_key") or "")
++    with _session_db(session) as db:
++        row = db.get_session(key) if db is not None else None
++        if row and int(row.get("api_call_count") or 0) > 0:
++            return _err(
++                rid,
++                4095,
++                "account scope is immutable after the first model call; create a new chat",
++            )
++        if row and not db.update_session_marketing_scope(
++            key,
++            marketing_user_id=(scope or {}).get("user_id"),
++            marketing_account_id=(scope or {}).get("account_id"),
++        ):
++            return _err(
++                rid,
++                4095,
++                "account scope changed concurrently with the first model call",
++            )
++
++    session["marketing_scope"] = scope
++    # session.create normally supplies scope before deferred construction. The
++    # RPC also supports a just-opened draft whose agent finished pre-warming:
++    # changing the ephemeral suffix is safe while zero model calls exist.
++    if session.get("agent") is None and session.get("agent_build_started"):
++        wait_error = _wait_agent(session, rid)
++        if wait_error:
++            return wait_error
++    agent = session.get("agent")
++    if agent is not None:
++        if int(getattr(agent, "session_api_calls", 0) or 0) > 0:
++            return _err(
++                rid,
++                4095,
++                "account scope is immutable after the first model call; create a new chat",
++            )
++        base = str(getattr(agent, "_marketing_base_ephemeral_prompt", "") or "")
++        overlay = build_account_scope_prompt(scope)
++        agent.ephemeral_system_prompt = "\n\n".join(
++            part for part in (base, overlay) if part
++        ).strip() or None
++        agent._marketing_scope = scope
++    return _ok(rid, {"scope": scope})
++
++
+ @method("insights.get")
+ def _(rid, params: dict) -> dict:
+     days = params.get("days", 30)
+-- 
+2.54.0
+

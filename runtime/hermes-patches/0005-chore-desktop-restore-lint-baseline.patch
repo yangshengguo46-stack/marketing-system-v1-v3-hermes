@@ -1,0 +1,40 @@
+From 48e2cdf6f064ae325197e128f0a22dbeb0064227 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 19:28:28 +0800
+Subject: [PATCH 1/2] chore(desktop): restore lint baseline
+
+---
+ apps/desktop/electron/titlebar-overlay-width.cjs         | 2 +-
+ apps/desktop/src/app/session/hooks/use-message-stream.ts | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/apps/desktop/electron/titlebar-overlay-width.cjs b/apps/desktop/electron/titlebar-overlay-width.cjs
+index 7c1e4ca09..a622c5f0a 100644
+--- a/apps/desktop/electron/titlebar-overlay-width.cjs
++++ b/apps/desktop/electron/titlebar-overlay-width.cjs
+@@ -16,7 +16,7 @@ const OVERLAY_FALLBACK_WIDTH = 144
+  *
+  * @param {{ isWindows?: boolean, isWsl?: boolean, isMac?: boolean }} opts
+  */
+-function nativeOverlayWidth({ isWindows = false, isWsl = false, isMac = false } = {}) {
++function nativeOverlayWidth({ isMac = false } = {}) {
+   if (isMac) return 0
+   return OVERLAY_FALLBACK_WIDTH
+ }
+diff --git a/apps/desktop/src/app/session/hooks/use-message-stream.ts b/apps/desktop/src/app/session/hooks/use-message-stream.ts
+index a455bae06..935ce7ada 100644
+--- a/apps/desktop/src/app/session/hooks/use-message-stream.ts
++++ b/apps/desktop/src/app/session/hooks/use-message-stream.ts
+@@ -2,8 +2,8 @@ import type { QueryClient } from '@tanstack/react-query'
+ import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
+ 
+ import { writeAgentTerminalChunk } from '@/app/right-sidebar/terminal/agent-terminal-stream'
+-import { closeAgentTerminalByProc } from '@/app/right-sidebar/terminal/terminals'
+ import { readActiveTerminal } from '@/app/right-sidebar/terminal/buffer'
++import { closeAgentTerminalByProc } from '@/app/right-sidebar/terminal/terminals'
+ import { translateNow } from '@/i18n'
+ import {
+   appendAssistantTextPart,
+-- 
+2.54.0
+
