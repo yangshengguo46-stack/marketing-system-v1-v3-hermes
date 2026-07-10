@@ -16,6 +16,7 @@
 6. Hermes 上游代码与 Marketing OS 既有代码都只是可拆解的材料，不是不可变边界。迁移按能力域重新组合，不按旧目录照搬；保留的是全周期经营、证据驱动、长期学习和真实回执闭环的设计哲学。
 7. 结构重塑必须服务同一纵向闭环；禁止另造第二套 Agent、数据库、浏览器身份或发布真相源。
 8. 统一使用 `designed / code / automated / dev-runtime / packaged / human-loop` 六级证据。
+9. 保留 Hermes 原生 MCP、Skill、Plugin 和工具中间件合同；生态组件可独立更新，Hermes 核心上游变更必须经 Marketing OS 版本集成与回归后发布，禁止终端用户原地覆盖产品 fork。
 
 ## 当前入口与历史台账
 
