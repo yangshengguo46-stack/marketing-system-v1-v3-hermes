@@ -3,6 +3,8 @@ import sqlite3
 
 from marketing_os.data_paths import MarketingDataPaths
 from marketing_os.domains import AccountContextRepository
+from model_tools import get_tool_definitions, handle_function_call
+from toolsets import resolve_toolset
 from tui_gateway import server
 
 
@@ -146,3 +148,23 @@ def test_native_gateway_reads_same_marketing_store(tmp_path, monkeypatch):
 
     assert response["result"]["account"]["platform"] == "douyin"
     assert response["result"]["lifecycle"]["business_goal"] == "经营 AI 教育账号"
+
+
+def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_path, monkeypatch):
+    paths = _seed_product_store(tmp_path)
+    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
+    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
+    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
+
+    definitions = get_tool_definitions(enabled_toolsets=["marketing"], quiet_mode=True)
+    names = {item["function"]["name"] for item in definitions}
+    result = json.loads(handle_function_call(
+        "marketing_read_account_context",
+        {"account_id": "acct-1"},
+        enabled_toolsets=["marketing"],
+    ))
+
+    assert names == {"marketing_read_accounts", "marketing_read_account_context"}
+    assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
+    assert result["lifecycle"]["stage"] == "positioning_approved"
+    assert result["account_dna"]["taboos"] == ["虚构收益"]

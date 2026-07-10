@@ -29,6 +29,9 @@ from typing import List, Dict, Any, Set, Optional
 # Shared tool list for CLI and all messaging platform toolsets.
 # Edit this once to update all platforms simultaneously.
 _HERMES_CORE_TOOLS = [
+    # Marketing OS product context. These bounded read tools are always present
+    # so desktop, messaging and cron sessions operate on the same accounts.
+    "marketing_read_accounts", "marketing_read_account_context",
     # Web
     "web_search", "web_extract",
     # Terminal + process management
@@ -94,6 +97,12 @@ _HERMES_WEBHOOK_SAFE_TOOLS = [
 # These can include individual tools or reference other toolsets
 TOOLSETS = {
     # Basic toolsets - individual tool categories
+    "marketing": {
+        "description": "Marketing OS account, audience, positioning and operating-context tools",
+        "tools": ["marketing_read_accounts", "marketing_read_account_context"],
+        "includes": [],
+    },
+
     "web": {
         "description": "Web research and content extraction tools",
         "tools": ["web_search", "web_extract"],
