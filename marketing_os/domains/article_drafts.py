@@ -9,6 +9,7 @@ from typing import Any
 
 
 ARTICLE_STYLEBOOK_VERSION = "2026-07-10.hermes-native-v1"
+ARTICLE_CLAIM_AUDIT_VERSION = "marketing.article_claim_audit.v1"
 
 ARTICLE_STYLEBOOKS: dict[str, dict[str, Any]] = {
     "wechat_official": {
@@ -139,6 +140,7 @@ class ArticleDraftValidator:
             variants=normalized_variants,
             platforms=platforms,
             known_evidence=known_evidence,
+            evidence_records=evidence_records,
         )
         stylebooks = article_stylebooks(platforms)
         visual_requirements = [
@@ -202,6 +204,7 @@ def _validate_bundle(
     variants: dict[str, dict[str, Any]],
     platforms: list[str],
     known_evidence: set[str],
+    evidence_records: list[dict[str, Any]],
 ) -> dict[str, Any]:
     issues: list[str] = []
     parent_chars = _content_chars(parent_body)
@@ -267,8 +270,25 @@ def _validate_bundle(
     if duplicate_pairs:
         issues.append("platform_variants_not_distinct")
 
+    claim_audit = _audit_claim_support(
+        documents={
+            "parent": parent_body,
+            **{
+                f"platform:{platform}": str(
+                    variants.get(platform, {}).get("body_markdown") or ""
+                )
+                for platform in platforms
+            },
+        },
+        evidence_records=evidence_records,
+    )
+    if claim_audit["uncited_findings"]:
+        issues.append("factual_claim_citation_missing")
+    if claim_audit["numeric_mismatch_findings"]:
+        issues.append("numeric_claim_not_supported_by_cited_evidence")
+
     return {
-        "version": "marketing.article_validation.v1",
+        "version": "marketing.article_validation.v2",
         "ready": not issues,
         "issues": issues,
         "parent_char_count": parent_chars,
@@ -283,6 +303,7 @@ def _validate_bundle(
         "unknown_platform_citations": unknown_variant_citations,
         "copied_parent_variants": copied_parent,
         "duplicate_platform_variant_pairs": duplicate_pairs,
+        "claim_audit": claim_audit,
         "pending_human_checks": [
             "platform tone and account fit",
             "claim meaning matches cited evidence",
@@ -290,6 +311,162 @@ def _validate_bundle(
             "compliance and sensitive-domain review",
         ],
     }
+
+
+_ATTRIBUTION_PATTERN = re.compile(
+    r"(?:联合国教科文组织|UNESCO|教育部|政府工作报告|官方(?:文件|政策|指南)|"
+    r"(?:研究|报告|调查|数据显示|统计显示|指南|政策)(?:发现|显示|指出|提出|要求)|"
+    r"全球首个|国内首个|首次发布|唯一)",
+    flags=re.IGNORECASE,
+)
+_GENERALIZATION_PATTERN = re.compile(
+    r"(?:绝大多数|大多数|多数(?:机构|学校|家长|教师|学生|课程|培训班)|"
+    r"普遍(?:认为|采用|存在)|几乎所有|显著(?:提高|提升|下降|减少)|大幅(?:提高|提升|下降|减少))"
+)
+_PRESCRIPTIVE_PATTERN = re.compile(
+    r"(?:建议|可以|不妨|试着|请|行动清单|行动步骤|练习|实验验证|先做|让孩子|让学生|让教师)"
+)
+_ARABIC_QUANTITY_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])\d+(?:\.\d+)?\s*(?:%|％|年|个月|月|周|天|小时|分钟|"
+    r"倍|成|万人|万人次|人|项|次|个版本)(?:以上|以下|左右|以内|以外)?"
+)
+_CHINESE_QUANTITY_PATTERN = re.compile(
+    r"(?:每|平均|约|近|超过|至少|不足|仅)?\s*[一二三四五六七八九十百千万半两]+\s*"
+    r"(?:年|个月|月|周|天|小时|分钟|次|倍|成)(?:以上|以下|左右|以内|以外|有效)?"
+)
+_YEAR_PATTERN = re.compile(r"(?<!\d)(?:19|20)\d{2}(?:年)?(?!\d)")
+
+
+def _audit_claim_support(
+    *,
+    documents: dict[str, str],
+    evidence_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    evidence_text = {
+        str(item.get("id") or ""): _support_text(item)
+        for item in evidence_records
+        if item.get("id")
+    }
+    uncited: list[dict[str, Any]] = []
+    numeric_mismatch: list[dict[str, Any]] = []
+    inspected = 0
+    cited = 0
+    for document, body in documents.items():
+        for paragraph_index, paragraph in enumerate(_claim_paragraphs(body), start=1):
+            inspected += 1
+            citations = sorted(_citations(paragraph))
+            if citations:
+                cited += 1
+            claim_text = _strip_citations(paragraph)
+            numeric_tokens = _numeric_claim_tokens(claim_text)
+            attribution_terms = sorted(
+                {
+                    match.group(0)
+                    for pattern in (_ATTRIBUTION_PATTERN, _GENERALIZATION_PATTERN)
+                    for match in pattern.finditer(claim_text)
+                }
+            )
+            if _PRESCRIPTIVE_PATTERN.search(claim_text) and not attribution_terms:
+                numeric_tokens = []
+            if not numeric_tokens and not attribution_terms:
+                continue
+            if not citations:
+                uncited.append(
+                    {
+                        "document": document,
+                        "paragraph": paragraph_index,
+                        "excerpt": _claim_excerpt(claim_text),
+                        "numeric_tokens": numeric_tokens,
+                        "attribution_terms": attribution_terms,
+                        "evidence_refs": [],
+                    }
+                )
+                continue
+            for token in numeric_tokens:
+                cited_sources = [evidence_text.get(ref, "") for ref in citations]
+                if not any(_quantity_supported(token, source) for source in cited_sources):
+                    numeric_mismatch.append(
+                        {
+                            "document": document,
+                            "paragraph": paragraph_index,
+                            "excerpt": _claim_excerpt(claim_text),
+                            "numeric_token": token,
+                            "evidence_refs": citations,
+                        }
+                    )
+    return {
+        "version": ARTICLE_CLAIM_AUDIT_VERSION,
+        "ready": not uncited and not numeric_mismatch,
+        "verification_scope": "deterministic citation proximity and numeric token support",
+        "claim_truth_verified": False,
+        "paragraphs_inspected": inspected,
+        "paragraphs_with_citations": cited,
+        "uncited_findings": uncited,
+        "numeric_mismatch_findings": numeric_mismatch,
+        "note": (
+            "通过只表示高风险归因/数量主张就近引用，且数量词能在引用证据摘要中找到；"
+            "语义是否被来源完整支持仍需主张级人工或语义核验。"
+        ),
+    }
+
+
+def _claim_paragraphs(value: str) -> list[str]:
+    result: list[str] = []
+    for block in re.split(r"\n\s*\n+", str(value or "")):
+        text = block.strip()
+        if not text or text.startswith("#") or text.startswith("```"):
+            continue
+        if re.fullmatch(r"(?:\s*\[evidence_[0-9a-f]{28}\]\s*)+", text):
+            if result:
+                result[-1] = f"{result[-1]} {text}"
+            continue
+        result.append(text)
+    return result
+
+
+def _strip_citations(value: str) -> str:
+    text = re.sub(r"\[evidence_[0-9a-f]{28}\]", "", value)
+    text = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)、]\s+)", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _numeric_claim_tokens(value: str) -> list[str]:
+    tokens = {
+        re.sub(r"\s+", "", match.group(0)).replace("％", "%")
+        for pattern in (
+            _ARABIC_QUANTITY_PATTERN,
+            _CHINESE_QUANTITY_PATTERN,
+            _YEAR_PATTERN,
+        )
+        for match in pattern.finditer(value)
+    }
+    return sorted(token for token in tokens if token)
+
+
+def _support_text(item: dict[str, Any]) -> str:
+    return re.sub(
+        r"\s+",
+        "",
+        " ".join(
+            str(item.get(key) or "")
+            for key in ("title", "excerpt", "canonical_url", "captured_at")
+        ),
+    ).replace("％", "%").lower()
+
+
+def _quantity_supported(token: str, source: str) -> bool:
+    normalized = re.sub(r"\s+", "", token).replace("％", "%").lower()
+    if normalized in source:
+        return True
+    # A cited source may write a year as ISO date while the draft says “2026年”.
+    if normalized.endswith("年") and normalized[:-1].isdigit():
+        return normalized[:-1] in source
+    return False
+
+
+def _claim_excerpt(value: str) -> str:
+    text = re.sub(r"\s+", " ", value).strip()
+    return text[:220] + ("…" if len(text) > 220 else "")
 
 
 def _citations(value: str) -> set[str]:

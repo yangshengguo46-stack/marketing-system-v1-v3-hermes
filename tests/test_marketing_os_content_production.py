@@ -1,12 +1,18 @@
 import json
 import hashlib
+import sqlite3
 
 import hermes_state
 import model_tools
 import pytest
 from hermes_state import SessionDB
 from marketing_os.data_paths import MarketingDataPaths
-from marketing_os.domains import ContentAssetRepository, ContentProductionPlanner, EvidenceRepository
+from marketing_os.domains import (
+    ArticleDraftValidator,
+    ContentAssetRepository,
+    ContentProductionPlanner,
+    EvidenceRepository,
+)
 from marketing_os.evidence_capture import enrich_tool_result_with_evidence
 from model_tools import get_tool_definitions, handle_function_call
 
@@ -506,3 +512,239 @@ def test_incomplete_or_duplicated_article_variants_are_saved_but_not_review_read
     assert "platform_variants_copy_parent" in issues
     assert "platform_variants_not_distinct" in issues
     assert created["content"]["prediction"]["traffic_range"] is None
+
+
+def test_article_claim_audit_blocks_uncited_quantitative_market_claims(
+    tmp_path, monkeypatch
+):
+    _bind_session(tmp_path, monkeypatch)
+    _, evidence_id = _capture_evidence()
+    planned = json.loads(
+        handle_function_call(
+            "marketing_plan_content_production",
+            {
+                "objective": "写一篇有证据的 AI 教育长文",
+                "platforms": ["zhihu"],
+                "audience": "家长和教师",
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    unsupported = "市场上90%以上的培训班都只教提示词，这个比例没有任何来源。"
+    created = json.loads(
+        handle_function_call(
+            "marketing_draft_article_create",
+            {
+                "title": "AI 教育真正该教什么",
+                "plan_id": planned["plan_id"],
+                "parent_body_markdown": f"{_long_article(evidence_id, '父稿')}\n\n{unsupported}",
+                "platform_variants": {
+                    "zhihu": {
+                        "title": "AI 教育真正该教什么",
+                        "body_markdown": (
+                            f"{_long_article(evidence_id, '知乎独立版本')}\n\n{unsupported}"
+                        ),
+                    }
+                },
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+
+    assert created["status"] == "draft"
+    validation = created["content"]["validation"]
+    assert "factual_claim_citation_missing" in validation["issues"]
+    findings = validation["claim_audit"]["uncited_findings"]
+    assert any(
+        any(token.startswith("90%") for token in item["numeric_tokens"])
+        for item in findings
+    )
+
+
+def test_article_claim_audit_accepts_cited_number_found_in_evidence_excerpt():
+    evidence_id = "evidence_" + "a" * 28
+    records = [
+        {
+            "id": evidence_id,
+            "title": "行动计划",
+            "excerpt": "行动计划提出，到2030年人工智能与教育深度融合格局基本形成。",
+            "canonical_url": "https://example.com/policy",
+            "captured_at": "2026-07-10T00:00:00+00:00",
+            "content_sha256": "b" * 64,
+            "verification_level": "source_integrity",
+        }
+    ]
+    supported = f"教育部政策提出，到2030年相关建设目标将进一步推进。 [{evidence_id}]"
+    bundle = ArticleDraftValidator().build_bundle(
+        title="AI 教育行动计划",
+        parent_body_markdown=f"{_long_article(evidence_id, '父稿')}\n\n{supported}",
+        target_platforms=["zhihu"],
+        variants={
+            "zhihu": {
+                "title": "AI 教育行动计划：边界与行动",
+                "body_markdown": f"{_long_article(evidence_id, '知乎独立版本')}\n\n{supported}",
+            }
+        },
+        evidence_records=records,
+    )
+
+    assert bundle["review_status"] == "ready_for_human_review"
+    assert bundle["validation"]["claim_audit"]["ready"] is True
+
+
+def test_existing_v1_article_is_revalidated_and_downgraded_on_repository_open(
+    tmp_path, monkeypatch
+):
+    paths = _bind_session(tmp_path, monkeypatch)
+    _, evidence_id = _capture_evidence()
+    planned = json.loads(
+        handle_function_call(
+            "marketing_plan_content_production",
+            {
+                "objective": "迁移旧文章质量门",
+                "platforms": ["zhihu"],
+                "audience": "家长和教师",
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    unsupported = "市场上90%以上的培训班都只教提示词，这个比例没有来源。"
+    created = json.loads(
+        handle_function_call(
+            "marketing_draft_article_create",
+            {
+                "title": "旧版误判文章",
+                "plan_id": planned["plan_id"],
+                "parent_body_markdown": f"{_long_article(evidence_id, '父稿')}\n\n{unsupported}",
+                "platform_variants": {
+                    "zhihu": {
+                        "title": "旧版误判文章",
+                        "body_markdown": (
+                            f"{_long_article(evidence_id, '知乎版本')}\n\n{unsupported}"
+                        ),
+                    }
+                },
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    old_payload = dict(created["content"])
+    old_payload["review_status"] = "ready_for_human_review"
+    old_payload["validation"] = {
+        "version": "marketing.article_validation.v1",
+        "ready": True,
+        "issues": [],
+    }
+    with sqlite3.connect(paths.agent_db) as db:
+        db.execute(
+            "UPDATE content_assets SET content_json=?, status='review_ready' WHERE id=?",
+            (json.dumps(old_payload, ensure_ascii=False), created["id"]),
+        )
+        db.execute(
+            "UPDATE content_production_plans SET status='review_ready' WHERE id=?",
+            (planned["plan_id"],),
+        )
+
+    repository = ContentAssetRepository(paths)
+    migrated = repository.get(
+        asset_id=created["id"], user_id="default", account_id="acct-1"
+    )
+
+    assert migrated["status"] == "draft"
+    assert migrated["version"] == 2
+    assert migrated["content"]["review_status"] == "needs_revision"
+    assert migrated["content"]["validation"]["version"] == "marketing.article_validation.v2"
+    assert "factual_claim_citation_missing" in migrated["content"]["validation"]["issues"]
+    with sqlite3.connect(paths.agent_db) as db:
+        checkpoint_status = db.execute(
+            "SELECT status FROM content_production_plans WHERE id=?",
+            (planned["plan_id"],),
+        ).fetchone()[0]
+    assert checkpoint_status == "draft_created"
+
+
+def test_article_revision_creates_immutable_version_chain(tmp_path, monkeypatch):
+    _bind_session(tmp_path, monkeypatch)
+    _, evidence_id = _capture_evidence()
+    planned = json.loads(
+        handle_function_call(
+            "marketing_plan_content_production",
+            {
+                "objective": "写一篇可持续修订的知乎文章",
+                "platforms": ["zhihu"],
+                "audience": "AI 入门用户",
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    first = json.loads(
+        handle_function_call(
+            "marketing_draft_article_create",
+            {
+                "title": "第一版",
+                "plan_id": planned["plan_id"],
+                "parent_body_markdown": _long_article(evidence_id, "父稿第一版"),
+                "platform_variants": {
+                    "zhihu": {
+                        "title": "第一版知乎稿",
+                        "body_markdown": _long_article(evidence_id, "知乎第一版"),
+                    }
+                },
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    second = json.loads(
+        handle_function_call(
+            "marketing_draft_article_create",
+            {
+                "title": "第二版",
+                "plan_id": planned["plan_id"],
+                "parent_body_markdown": _long_article(evidence_id, "父稿第二版"),
+                "platform_variants": {
+                    "zhihu": {
+                        "title": "第二版知乎稿",
+                        "body_markdown": _long_article(evidence_id, "知乎第二版"),
+                    }
+                },
+                "evidence_refs": [evidence_id],
+                "revision_of": first["id"],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+
+    assert first["version"] == 1
+    assert second["version"] == 2
+    assert second["parent_id"] == first["id"]
+    repository = ContentAssetRepository()
+    parent = repository.get(
+        asset_id=first["id"], user_id="default", account_id="acct-1"
+    )
+    assert parent["status"] == "superseded"
+    active = repository.list(user_id="default", account_id="acct-1")
+    assert [item["id"] for item in active["assets"]] == [second["id"]]
+    history = repository.list(
+        user_id="default", account_id="acct-1", status="superseded"
+    )
+    assert [item["id"] for item in history["assets"]] == [first["id"]]

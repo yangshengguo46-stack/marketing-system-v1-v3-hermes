@@ -191,10 +191,12 @@ CREATE_ARTICLE_DRAFT_SCHEMA = {
     "name": "marketing_draft_article_create",
     "description": (
         "Save an Agent-authored long-form parent draft and its distinct Zhihu/WeChat variants as one "
-        "validated article bundle for the account bound to this conversation. Cite evidence in every "
-        "body using exact [evidence_xxx] markers returned by web_extract or "
+        "validated article bundle for the account bound to this conversation. Cite evidence in the "
+        "same paragraph as every factual attribution or quantitative claim, using exact "
+        "[evidence_xxx] markers returned by web_extract or "
         "marketing_read_evidence_pack. The tool persists useful incomplete drafts as needs_revision, "
-        "but only structurally complete, cited and platform-distinct bundles become review_ready."
+        "but only structurally complete, cited, numerically supported and platform-distinct bundles "
+        "become review_ready. Never invent percentages, time intervals or market prevalence."
     ),
     "parameters": {
         "type": "object",
@@ -223,6 +225,13 @@ CREATE_ARTICLE_DRAFT_SCHEMA = {
                 "type": "array",
                 "items": {"type": "string"},
                 "minItems": 1,
+            },
+            "revision_of": {
+                "type": "string",
+                "description": (
+                    "Existing ArticleBundle asset_id when revising a saved draft. The new asset "
+                    "becomes the next immutable version and the parent is marked superseded."
+                ),
             },
         },
         "required": [
@@ -411,6 +420,7 @@ def _create_article_draft(args: dict, **kwargs) -> str:
         evidence_refs=args.get("evidence_refs") or [],
         topic=str(args.get("topic") or ""),
         hook=str(args.get("hook") or ""),
+        revision_of=str(args.get("revision_of") or ""),
     )
     return json.dumps(result, ensure_ascii=False)
 

@@ -135,6 +135,7 @@ class ContentAssetRepository:
         evidence_refs: list[str],
         topic: str = "",
         hook: str = "",
+        revision_of: str = "",
     ) -> dict[str, Any]:
         plan_id_value = _bounded_text(plan_id, "plan_id", 120)
         with self._connect() as db:
@@ -147,6 +148,28 @@ class ContentAssetRepository:
             raise KeyError("production plan not found in account scope")
         if plan_row["kind"] != "article_soft":
             raise ValueError("article bundle requires an article_soft production plan")
+        parent_asset_id: str | None = None
+        next_version = 1
+        revision_of_value = str(revision_of or "").strip()
+        if revision_of_value:
+            with self._connect() as db:
+                parent_row = db.execute(
+                    """SELECT * FROM content_assets
+                    WHERE id=? AND user_id=? AND account_id=?""",
+                    (revision_of_value, user_id, account_id),
+                ).fetchone()
+            if parent_row is None:
+                raise KeyError("article revision parent not found in account scope")
+            if parent_row["platform"] != "multi_article" or parent_row["type"] != "script":
+                raise ValueError("article revision parent is not an ArticleBundle")
+            try:
+                parent_content = json.loads(parent_row["content_json"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("article revision parent content is invalid") from exc
+            if parent_content.get("_production_plan_id") != plan_id_value:
+                raise ValueError("article revision must keep the same production plan")
+            parent_asset_id = parent_row["id"]
+            next_version = int(parent_row["version"] or 1) + 1
         target_platforms = json.loads(plan_row["platforms_json"])
         verified_evidence = EvidenceRepository(self.paths).require_verified(
             user_id=user_id,
@@ -180,6 +203,8 @@ class ContentAssetRepository:
             allow_multi_article=True,
             asset_status="review_ready" if ready else "draft",
             plan_checkpoint_status="review_ready" if ready else "draft_created",
+            parent_id=parent_asset_id,
+            asset_version=next_version,
         )
 
     def _save_draft(
@@ -200,6 +225,8 @@ class ContentAssetRepository:
         allow_multi_article: bool = False,
         asset_status: str = "draft",
         plan_checkpoint_status: str = "draft_created",
+        parent_id: str | None = None,
+        asset_version: int = 1,
     ) -> dict[str, Any]:
         title_value = _bounded_text(title, "title", 300)
         plan_id_value = _bounded_text(plan_id, "plan_id", 120)
@@ -213,6 +240,8 @@ class ContentAssetRepository:
             raise ValueError(f"unsupported production kind: {production_kind}")
         if asset_status not in {"draft", "review_ready"}:
             raise ValueError("unsupported content asset status")
+        if int(asset_version) < 1:
+            raise ValueError("content asset version must be positive")
         if not isinstance(content, dict) or not content:
             raise ValueError("content must be a non-empty object")
         if any(str(key).startswith("_") for key in content):
@@ -256,7 +285,7 @@ class ContentAssetRepository:
                 """INSERT INTO content_assets
                 (id,user_id,account_id,platform,title,type,status,parent_id,experiment_id,
                  topic,hook,version,content_json,metrics_json,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?,1,?,'{}',?,?)""",
+                VALUES (?,?,?,?,?,?,?,?,NULL,?,?,?,?,'{}',?,?)""",
                 (
                     asset_id,
                     user_id,
@@ -265,13 +294,23 @@ class ContentAssetRepository:
                     title_value,
                     asset_type,
                     asset_status,
+                    parent_id,
                     _optional_text(topic, 200),
                     _optional_text(hook, 200),
+                    int(asset_version),
                     encoded,
                     now,
                     now,
                 ),
             )
+            if parent_id:
+                updated = db.execute(
+                    """UPDATE content_assets SET status='superseded', updated_at=?
+                    WHERE id=? AND user_id=? AND account_id=?""",
+                    (now, parent_id, user_id, account_id),
+                ).rowcount
+                if updated != 1:
+                    raise KeyError("article revision parent disappeared from account scope")
             db.execute(
                 """UPDATE content_production_plans
                 SET status=?, updated_at=? WHERE id=?""",
@@ -304,6 +343,8 @@ class ContentAssetRepository:
         if status:
             query += " AND status=?"
             params.append(status)
+        else:
+            query += " AND status!='superseded'"
         if platform:
             if platform not in CONTENT_ASSET_PLATFORMS:
                 raise ValueError(f"unsupported content platform: {platform}")
@@ -363,6 +404,98 @@ class ContentAssetRepository:
                     ON content_production_plans(user_id, account_id, updated_at);
                 """
             )
+            self._migrate_article_validation_v2(db)
+
+    def _migrate_article_validation_v2(self, db: sqlite3.Connection) -> None:
+        evidence_table = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_records'"
+        ).fetchone()
+        if evidence_table is None:
+            return
+        rows = db.execute(
+            """SELECT * FROM content_assets
+            WHERE platform='multi_article' AND type='script'"""
+        ).fetchall()
+        for row in rows:
+            try:
+                previous = json.loads(row["content_json"])
+            except (TypeError, ValueError):
+                continue
+            if previous.get("schema") != "marketing.article_bundle.v1":
+                continue
+            previous_validation = previous.get("validation") or {}
+            if previous_validation.get("version") == "marketing.article_validation.v2":
+                continue
+            evidence_ids = previous.get("_provenance_evidence_refs") or [
+                item.get("evidence_id")
+                for item in previous.get("evidence_pack") or []
+                if isinstance(item, dict) and item.get("evidence_id")
+            ]
+            evidence_records: list[dict[str, Any]] = []
+            if evidence_ids:
+                placeholders = ",".join("?" for _ in evidence_ids)
+                evidence_records = [
+                    dict(item)
+                    for item in db.execute(
+                        f"""SELECT * FROM evidence_records
+                        WHERE user_id=? AND account_id=? AND id IN ({placeholders})""",
+                        [row["user_id"], row["account_id"], *evidence_ids],
+                    ).fetchall()
+                ]
+            try:
+                bundle = ArticleDraftValidator().build_bundle(
+                    title=str(
+                        (previous.get("parent_draft") or {}).get("title")
+                        or row["title"]
+                    ),
+                    parent_body_markdown=str(
+                        (previous.get("parent_draft") or {}).get("body_markdown")
+                        or ""
+                    ),
+                    target_platforms=list(
+                        (previous.get("platform_variants") or {}).keys()
+                    ),
+                    variants=previous.get("platform_variants") or {},
+                    evidence_records=evidence_records,
+                    topic=str(previous.get("topic") or row["topic"] or ""),
+                    hook=str(previous.get("hook") or row["hook"] or ""),
+                )
+                for key, value in previous.items():
+                    if str(key).startswith("_"):
+                        bundle[key] = value
+                ready = bundle["review_status"] == "ready_for_human_review"
+                encoded = _bounded_json(bundle, "content", 500_000)
+            except (KeyError, TypeError, ValueError) as exc:
+                failed = dict(previous)
+                failed["review_status"] = "needs_revision"
+                failed["validation"] = {
+                    "version": "marketing.article_validation.v2",
+                    "ready": False,
+                    "issues": ["article_validation_migration_failed"],
+                    "migration_error": str(exc)[:300],
+                }
+                ready = False
+                encoded = _bounded_json(failed, "content", 500_000)
+            now = _now()
+            db.execute(
+                """UPDATE content_assets
+                SET content_json=?, status=?, version=version+1, updated_at=?
+                WHERE id=?""",
+                (encoded, "review_ready" if ready else "draft", now, row["id"]),
+            )
+            plan_id = previous.get("_production_plan_id")
+            if plan_id:
+                db.execute(
+                    """UPDATE content_production_plans
+                    SET status=?, updated_at=? WHERE id=? AND user_id=? AND account_id=?""",
+                    (
+                        "review_ready" if ready else "draft_created",
+                        now,
+                        plan_id,
+                        row["user_id"],
+                        row["account_id"],
+                    ),
+                )
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.paths.agent_db, timeout=10)
