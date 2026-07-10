@@ -12772,6 +12772,24 @@ def _(rid, params: dict) -> dict:
 # ── Methods: insights ────────────────────────────────────────────────
 
 
+@method("marketing.product.status")
+def _(rid, _params: dict) -> dict:
+    """Expose the product-fork identity through the native Hermes gateway."""
+    from marketing_os.product import PRODUCT_ID, PRODUCT_NAME
+
+    return _ok(
+        rid,
+        {
+            "product_id": PRODUCT_ID,
+            "product_name": PRODUCT_NAME,
+            "runtime": "hermes-product-fork",
+            "agent_owner": "native",
+            "desktop_owner": "apps/desktop",
+            "surfaces": ["desktop", "messaging", "cron"],
+        },
+    )
+
+
 @method("insights.get")
 def _(rid, params: dict) -> dict:
     days = params.get("days", 30)

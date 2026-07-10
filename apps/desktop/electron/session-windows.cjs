@@ -44,7 +44,7 @@ function chatWindowWebPreferences(preloadPath) {
 // just to stream into it.
 function buildSessionWindowUrl(sessionId, { devServer, rendererIndexPath, watch, newSession } = {}) {
   const query = `?win=secondary${newSession ? '&new=1' : ''}${watch ? '&watch=1' : ''}`
-  const route = newSession ? '#/' : `#/${encodeURIComponent(sessionId)}`
+  const route = newSession ? '#/chat' : `#/chat/${encodeURIComponent(sessionId)}`
 
   if (devServer) {
     const base = devServer.endsWith('/') ? devServer.slice(0, -1) : devServer

@@ -45,7 +45,7 @@ function resumeRetryDelayMs(attempt: number): number {
 
 // HashRouter boot edge case: pathname briefly reads `/` before the hash is
 // parsed. If the hash references a real session, defer; resume picks it up
-// next tick. Without this, ctrl+R on `#/:sessionId` flashes 5 loading states.
+// next tick. Without this, ctrl+R on `#/chat/:sessionId` flashes 5 loading states.
 function rawHashLooksLikeSession(): boolean {
   if (typeof window === 'undefined') {
     return false

@@ -162,6 +162,7 @@ const MessagingView = lazy(async () => ({ default: (await import('./messaging'))
 const ProfilesView = lazy(async () => ({ default: (await import('./profiles')).ProfilesView }))
 const SettingsView = lazy(async () => ({ default: (await import('./settings')).SettingsView }))
 const SkillsView = lazy(async () => ({ default: (await import('./skills')).SkillsView }))
+const WorkbenchView = lazy(async () => ({ default: (await import('./workbench')).WorkbenchView }))
 
 // Latest cron-job sessions surfaced in the collapsed "Cron jobs" section. The
 // Cron sessions are written by a background scheduler tick (the desktop
@@ -359,7 +360,7 @@ export function DesktopController() {
     return () => unsubscribe?.()
   }, [])
 
-  // hermes:// deep links (e.g. a docs "Send to App" button for an automation blueprint).
+  // marketing-os:// deep links (for example, a "Send to App" automation blueprint).
   // Build the equivalent /blueprint slash command from the payload and drop
   // it into the composer — the user reviews/edits, then sends; the agent (or
   // the shared command handler) creates the job. Signal readiness so a link
@@ -1383,8 +1384,16 @@ export function DesktopController() {
       )}
       <PaneMain>
         <Routes>
-          <Route element={chatView} index />
-          <Route element={chatView} path=":sessionId" />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <WorkbenchView onNewChat={() => navigate(NEW_CHAT_ROUTE)} requestGateway={requestGateway} />
+              </Suspense>
+            }
+            index
+          />
+          <Route element={chatView} path="chat" />
+          <Route element={chatView} path="chat/:sessionId" />
           <Route
             element={
               <Suspense fallback={null}>
@@ -1416,6 +1425,7 @@ export function DesktopController() {
           <Route element={null} path="agents" />
           <Route element={<Navigate replace to={NEW_CHAT_ROUTE} />} path="new" />
           <Route element={<LegacySessionRedirect />} path="sessions/:sessionId" />
+          <Route element={<LegacySessionRedirect />} path=":sessionId" />
           <Route element={<Navigate replace to={NEW_CHAT_ROUTE} />} path="*" />
         </Routes>
       </PaneMain>

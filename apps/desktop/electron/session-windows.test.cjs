@@ -56,13 +56,13 @@ function makeFakeWindow() {
 test('buildSessionWindowUrl puts the secondary flag before the hash route (dev server)', () => {
   const url = buildSessionWindowUrl('abc123', { devServer: 'http://localhost:5173' })
 
-  assert.equal(url, 'http://localhost:5173/?win=secondary#/abc123')
+  assert.equal(url, 'http://localhost:5173/?win=secondary#/chat/abc123')
 })
 
 test('buildSessionWindowUrl avoids a double slash when the dev server has a trailing slash', () => {
   const url = buildSessionWindowUrl('abc123', { devServer: 'http://localhost:5173/' })
 
-  assert.equal(url, 'http://localhost:5173/?win=secondary#/abc123')
+  assert.equal(url, 'http://localhost:5173/?win=secondary#/chat/abc123')
 })
 
 test('buildSessionWindowUrl encodes the session id in the hash route', () => {
@@ -70,26 +70,26 @@ test('buildSessionWindowUrl encodes the session id in the hash route', () => {
 
   // The query flag must precede the '#' or HashRouter would swallow it as the
   // route; the id is URL-encoded so slashes/spaces survive routeSessionId().
-  assert.equal(url, 'http://localhost:5173/?win=secondary#/a%20b%2Fc')
+  assert.equal(url, 'http://localhost:5173/?win=secondary#/chat/a%20b%2Fc')
   assert.ok(url.indexOf('?win=secondary') < url.indexOf('#'))
 })
 
 test('buildSessionWindowUrl builds a packaged file URL with the flag before the hash', () => {
   const url = buildSessionWindowUrl('abc', { rendererIndexPath: '/opt/app/index.html' })
 
-  assert.match(url, /^file:\/\/.*index\.html\?win=secondary#\/abc$/)
+  assert.match(url, /^file:\/\/.*index\.html\?win=secondary#\/chat\/abc$/)
 })
 
 test('buildSessionWindowUrl adds the watch flag for spectator windows, before the hash', () => {
   const url = buildSessionWindowUrl('abc', { devServer: 'http://localhost:5173', watch: true })
 
-  assert.equal(url, 'http://localhost:5173/?win=secondary&watch=1#/abc')
+  assert.equal(url, 'http://localhost:5173/?win=secondary&watch=1#/chat/abc')
 })
 
-test('buildSessionWindowUrl routes new-session windows to the draft (#/)', () => {
+test('buildSessionWindowUrl routes new-session windows to the chat draft', () => {
   const url = buildSessionWindowUrl(null, { devServer: 'http://localhost:5173', newSession: true })
 
-  assert.equal(url, 'http://localhost:5173/?win=secondary&new=1#/')
+  assert.equal(url, 'http://localhost:5173/?win=secondary&new=1#/chat')
 })
 
 test('registry opens one window per session and focuses on re-open', () => {

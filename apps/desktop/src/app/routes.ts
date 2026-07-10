@@ -1,5 +1,6 @@
-export const SESSION_ROUTE_PREFIX = '/'
-export const NEW_CHAT_ROUTE = '/'
+export const SESSION_ROUTE_PREFIX = '/chat/'
+export const NEW_CHAT_ROUTE = '/chat'
+export const WORKBENCH_ROUTE = '/'
 export const SETTINGS_ROUTE = '/settings'
 export const COMMAND_CENTER_ROUTE = '/command-center'
 export const SKILLS_ROUTE = '/skills'
@@ -19,6 +20,7 @@ export type AppView =
   | 'profiles'
   | 'settings'
   | 'skills'
+  | 'workbench'
 
 export type AppRouteId =
   | 'agents'
@@ -30,6 +32,7 @@ export type AppRouteId =
   | 'profiles'
   | 'settings'
   | 'skills'
+  | 'workbench'
 
 export interface AppRoute {
   id: AppRouteId
@@ -38,6 +41,7 @@ export interface AppRoute {
 }
 
 export const APP_ROUTES = [
+  { id: 'workbench', path: WORKBENCH_ROUTE, view: 'workbench' },
   { id: 'new', path: NEW_CHAT_ROUTE, view: 'chat' },
   { id: 'settings', path: SETTINGS_ROUTE, view: 'settings' },
   { id: 'command-center', path: COMMAND_CENTER_ROUTE, view: 'command-center' },

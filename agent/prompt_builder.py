@@ -27,6 +27,7 @@ from agent.skill_utils import (
     skill_matches_platform,
 )
 from utils import atomic_json_write
+from marketing_os.product import PRODUCT_AGENT_IDENTITY, PRODUCT_RUNTIME_GUIDANCE
 
 logger = logging.getLogger(__name__)
 
@@ -120,25 +121,15 @@ def _strip_yaml_frontmatter(content: str) -> str:
 # Constants
 # =========================================================================
 
-DEFAULT_AGENT_IDENTITY = (
-    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
-    "You are helpful, knowledgeable, and direct. You assist users with a wide "
-    "range of tasks including answering questions, writing and editing code, "
-    "analyzing information, creative work, and executing actions via your tools. "
-    "You communicate clearly, admit uncertainty when appropriate, and prioritize "
-    "being genuinely useful over being verbose unless otherwise directed below. "
-    "Be targeted and efficient in your exploration and investigations."
-)
+DEFAULT_AGENT_IDENTITY = PRODUCT_AGENT_IDENTITY
 
 HERMES_AGENT_HELP_GUIDANCE = (
-    "You run on Hermes Agent (by Nous Research). When the user needs help with "
-    "Hermes itself — configuring, setting up, using, extending, or troubleshooting "
-    "it — or when you need to understand your own features, tools, or capabilities, "
-    "the documentation at https://hermes-agent.nousresearch.com/docs is your "
-    "authoritative reference and always holds the latest, most up-to-date "
-    "information. Load the `hermes-agent` skill with skill_view(name='hermes-agent') "
-    "for additional guidance and proven workflows, but treat the docs as the source "
-    "of truth when the two differ."
+    PRODUCT_RUNTIME_GUIDANCE
+    + " The underlying Hermes runtime remains MIT-licensed Nous Research software; "
+    "retain that attribution in technical diagnostics and license surfaces. When "
+    "debugging an inherited Hermes runtime behavior, the upstream documentation at "
+    "https://hermes-agent.nousresearch.com/docs may be used as a technical reference "
+    "but does not override Marketing OS product policy."
 )
 
 MEMORY_GUIDANCE = (

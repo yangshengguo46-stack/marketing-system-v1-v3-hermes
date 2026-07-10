@@ -1,19 +1,19 @@
 import { cn } from '@/lib/utils'
+import { PRODUCT_NAME } from '@/product'
 
-const assetPath = (path: string) => `${import.meta.env.BASE_URL}${path.replace(/^\/+/, '')}`
-
-// Brand badge: nous-girl mark on a white tile, identical in light/dark.
-// Fills the tile (softly rounded); size via className (default size-14).
+// Product-owned mark. Marketing OS Desktop is the fork itself, not a second
+// shell around an upstream Hermes avatar.
 export function BrandMark({ className, ...props }: React.ComponentProps<'span'>) {
   return (
     <span
+      aria-label={PRODUCT_NAME}
       className={cn(
-        'inline-flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white',
+        'inline-flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-[28%] bg-[#ff5b55] text-[0.42em] font-black tracking-[-0.08em] text-white shadow-[0_12px_30px_rgba(255,91,85,0.24)]',
         className
       )}
       {...props}
     >
-      <img alt="" className="size-full object-contain" src={assetPath('nous-girl.jpg')} />
+      M
     </span>
   )
 }
