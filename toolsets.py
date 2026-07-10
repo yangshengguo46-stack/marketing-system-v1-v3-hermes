@@ -31,7 +31,7 @@ from typing import List, Dict, Any, Set, Optional
 _HERMES_CORE_TOOLS = [
     # Marketing OS product context. These bounded read tools are always present
     # so desktop, messaging and cron sessions operate on the same accounts.
-    "marketing_read_accounts", "marketing_read_account_context",
+    "marketing_read_accounts", "marketing_read_account_context", "marketing_update_account_lifecycle",
     # Web
     "web_search", "web_extract",
     # Terminal + process management
@@ -99,7 +99,11 @@ TOOLSETS = {
     # Basic toolsets - individual tool categories
     "marketing": {
         "description": "Marketing OS account, audience, positioning and operating-context tools",
-        "tools": ["marketing_read_accounts", "marketing_read_account_context"],
+        "tools": [
+            "marketing_read_accounts",
+            "marketing_read_account_context",
+            "marketing_update_account_lifecycle",
+        ],
         "includes": [],
     },
 

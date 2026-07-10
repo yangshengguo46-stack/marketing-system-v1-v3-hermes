@@ -88,6 +88,52 @@ def read_session_scope(session_db: Any, session_id: str) -> dict[str, Any] | Non
     return scope_from_session_row(session_db.get_session(session_id))
 
 
+def read_tool_session_scope(
+    *, task_id: str | None = None, session_id: str | None = None
+) -> dict[str, Any] | None:
+    """Resolve the durable account scope for a native model-tool invocation."""
+
+    durable_id = str(session_id or task_id or "").strip()
+    if not durable_id:
+        return None
+    try:
+        from hermes_state import SessionDB
+
+        db = SessionDB()
+        try:
+            return read_session_scope(db, durable_id)
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
+def enforce_tool_account_scope(
+    args: dict[str, Any],
+    *,
+    task_id: str | None = None,
+    session_id: str | None = None,
+    require_bound: bool = False,
+) -> tuple[str, str]:
+    """Return ``(user_id, account_id)`` while preventing cross-account calls."""
+
+    scope = read_tool_session_scope(task_id=task_id, session_id=session_id)
+    requested_user = str(args.get("user_id") or "default").strip() or "default"
+    requested_account = str(args.get("account_id") or "").strip()
+    if scope:
+        if requested_user not in {"", "default", scope["user_id"]}:
+            raise ValueError("tool user_id does not match the bound conversation")
+        if requested_account and requested_account != scope["account_id"]:
+            raise ValueError("tool account_id does not match the bound conversation")
+        return str(scope["user_id"]), str(scope["account_id"])
+    if require_bound:
+        raise ValueError("this operation requires a conversation bound to a Marketing OS account")
+    return (
+        _normalize_id(requested_user, field="user_id"),
+        _normalize_id(requested_account, field="account_id"),
+    )
+
+
 def build_account_scope_prompt(scope: dict[str, Any] | None) -> str:
     """Build the compact, byte-stable account routing prompt for one session."""
 

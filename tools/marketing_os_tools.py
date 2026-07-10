@@ -1,10 +1,11 @@
-"""Native read tools for the Marketing OS account operating context."""
+"""Native tools for the Marketing OS account operating context."""
 
 from __future__ import annotations
 
 import json
 
-from marketing_os.domains import AccountContextRepository
+from marketing_os.domains import AccountContextRepository, AccountLifecycleRepository
+from marketing_os.session_scope import enforce_tool_account_scope
 from tools.registry import registry
 
 
@@ -43,17 +44,110 @@ READ_ACCOUNT_CONTEXT_SCHEMA = {
     },
 }
 
+UPDATE_ACCOUNT_LIFECYCLE_SCHEMA = {
+    "name": "marketing_update_account_lifecycle",
+    "description": (
+        "Advance the bound account's versioned onboarding lifecycle. Use begin_project after the "
+        "user states a real operating goal; draft_audience_hypothesis to save a reviewable hypothesis; "
+        "and confirm_audience_hypothesis only after the user explicitly accepts that exact draft. "
+        "The account is taken from the current conversation and cannot be overridden."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "begin_project",
+                    "draft_audience_hypothesis",
+                    "confirm_audience_hypothesis",
+                ],
+            },
+            "business_goal": {"type": "string"},
+            "constraints": {"type": "object"},
+            "project_id": {"type": "string"},
+            "hypothesis_id": {"type": "string"},
+            "segments": {"type": "array", "items": {}},
+            "pains": {"type": "array", "items": {}},
+            "scenarios": {"type": "array", "items": {}},
+            "exclusions": {"type": "array", "items": {}},
+            "data_gaps": {"type": "array", "items": {}},
+            "confirmed_by_user": {
+                "type": "boolean",
+                "description": (
+                    "Set true only when the user explicitly accepted this exact draft in the current conversation."
+                ),
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 def _list_accounts(_args: dict, **_kwargs) -> str:
     return json.dumps(AccountContextRepository().list_accounts(), ensure_ascii=False)
 
 
-def _read_account_context(args: dict, **_kwargs) -> str:
+def _read_account_context(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        args,
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+    )
     result = AccountContextRepository().read(
-        user_id=str(args.get("user_id") or "default"),
-        account_id=str(args.get("account_id") or ""),
+        user_id=user_id,
+        account_id=account_id,
     )
     return json.dumps(result, ensure_ascii=False)
+
+
+def _update_account_lifecycle(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    repository = AccountLifecycleRepository()
+    action = str(args.get("action") or "")
+    if action == "begin_project":
+        result = repository.begin_project(
+            user_id=user_id,
+            account_id=account_id,
+            business_goal=str(args.get("business_goal") or ""),
+            constraints=args.get("constraints") or {},
+        )
+    elif action == "draft_audience_hypothesis":
+        result = repository.draft_audience_hypothesis(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            segments=args.get("segments"),
+            pains=args.get("pains"),
+            scenarios=args.get("scenarios"),
+            exclusions=args.get("exclusions"),
+            data_gaps=args.get("data_gaps"),
+        )
+    elif action == "confirm_audience_hypothesis":
+        result = repository.confirm_audience_hypothesis(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            hypothesis_id=str(args.get("hypothesis_id") or ""),
+            confirmed_by_user=args.get("confirmed_by_user") is True,
+        )
+    else:
+        raise ValueError(f"unsupported lifecycle action: {action}")
+    return json.dumps(
+        {
+            "action": action,
+            "result": result,
+            "account_context": AccountContextRepository().read(
+                user_id=user_id, account_id=account_id
+            ),
+        },
+        ensure_ascii=False,
+    )
 
 
 registry.register(
@@ -72,4 +166,13 @@ registry.register(
     handler=_read_account_context,
     description="Read verified audience, positioning and lifecycle context for one account.",
     emoji="🧭",
+)
+
+registry.register(
+    name="marketing_update_account_lifecycle",
+    toolset="marketing",
+    schema=UPDATE_ACCOUNT_LIFECYCLE_SCHEMA,
+    handler=_update_account_lifecycle,
+    description="Create and confirm versioned account goals and audience hypotheses.",
+    emoji="🧬",
 )
