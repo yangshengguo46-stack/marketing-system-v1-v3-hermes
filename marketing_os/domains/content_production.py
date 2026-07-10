@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from marketing_os.domains.article_drafts import article_stylebooks
+
 
 CONTENT_KINDS = {"article_soft", "faceless_video", "premium_human_video"}
 ARTICLE_PLATFORMS = {"zhihu", "wechat_official"}
@@ -49,7 +51,7 @@ SHARED_CAPABILITIES = {
     },
     "copywriting": {
         "purpose": "生产父稿、平台变体、旁白、标题和 CTA。",
-        "native_tools": ["marketing_draft_content_create"],
+        "native_tools": ["marketing_draft_article_create", "marketing_draft_content_create"],
         "maturity": "ready",
     },
     "stock_material": {
@@ -181,7 +183,7 @@ class ContentProductionPlanner:
         else:
             next_action = "使用已固化的 EvidencePack 生成父稿，再保存为可恢复草稿"
 
-        return {
+        result = {
             "status": "planned",
             "architecture": "hermes-native-shared-capability-pool",
             "kind": kind_value,
@@ -214,6 +216,9 @@ class ContentProductionPlanner:
             ],
             "fallback": _fallback(kind_value),
         }
+        if kind_value == "article_soft":
+            result["platform_stylebooks"] = article_stylebooks(platform_values)
+        return result
 
 
 def infer_content_kind(objective: str, *, kind: str = "auto", platforms: Any = None) -> str:

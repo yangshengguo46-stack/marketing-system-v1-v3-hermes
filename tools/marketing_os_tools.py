@@ -157,9 +157,10 @@ READ_EVIDENCE_PACK_SCHEMA = {
 CREATE_CONTENT_DRAFT_SCHEMA = {
     "name": "marketing_draft_content_create",
     "description": (
-        "Save a substantive, reversible content draft for the account bound to this conversation. "
-        "Use after planning and evidence collection. The account id is taken from the Hermes session "
-        "and cannot be supplied or overridden by the model."
+        "Save a substantive, reversible video/image/caption draft for the account bound to this "
+        "conversation. Article drafts must use marketing_draft_article_create so parent/variant and "
+        "citation checks cannot be bypassed. At least one verified EvidencePack ID is required. The "
+        "account id is taken from the Hermes session and cannot be supplied or overridden by the model."
     ),
     "parameters": {
         "type": "object",
@@ -183,6 +184,54 @@ CREATE_CONTENT_DRAFT_SCHEMA = {
             "memory_refs": {"type": "array", "items": {"type": "string"}},
         },
         "required": ["title", "plan_id", "platform", "production_kind", "content"],
+    },
+}
+
+CREATE_ARTICLE_DRAFT_SCHEMA = {
+    "name": "marketing_draft_article_create",
+    "description": (
+        "Save an Agent-authored long-form parent draft and its distinct Zhihu/WeChat variants as one "
+        "validated article bundle for the account bound to this conversation. Cite evidence in every "
+        "body using exact [evidence_xxx] markers returned by web_extract or "
+        "marketing_read_evidence_pack. The tool persists useful incomplete drafts as needs_revision, "
+        "but only structurally complete, cited and platform-distinct bundles become review_ready."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "plan_id": {"type": "string"},
+            "topic": {"type": "string"},
+            "hook": {"type": "string"},
+            "parent_body_markdown": {"type": "string"},
+            "platform_variants": {
+                "type": "object",
+                "description": "Keys must match every platform in the production plan.",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "body_markdown": {"type": "string"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "cta": {"type": "string"},
+                    },
+                    "required": ["title", "body_markdown"],
+                },
+            },
+            "evidence_refs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+        },
+        "required": [
+            "title",
+            "plan_id",
+            "parent_body_markdown",
+            "platform_variants",
+            "evidence_refs",
+        ],
     },
 }
 
@@ -345,6 +394,27 @@ def _create_content_draft(args: dict, **kwargs) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def _create_article_draft(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = ContentAssetRepository().create_article_bundle(
+        user_id=user_id,
+        account_id=account_id,
+        title=str(args.get("title") or ""),
+        plan_id=str(args.get("plan_id") or ""),
+        parent_body_markdown=str(args.get("parent_body_markdown") or ""),
+        platform_variants=args.get("platform_variants") or {},
+        evidence_refs=args.get("evidence_refs") or [],
+        topic=str(args.get("topic") or ""),
+        hook=str(args.get("hook") or ""),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 registry.register(
     name="marketing_read_accounts",
     toolset="marketing",
@@ -406,4 +476,13 @@ registry.register(
     handler=_create_content_draft,
     description="Persist a reversible content draft in the current account scope.",
     emoji="✍️",
+)
+
+registry.register(
+    name="marketing_draft_article_create",
+    toolset="marketing",
+    schema=CREATE_ARTICLE_DRAFT_SCHEMA,
+    handler=_create_article_draft,
+    description="Persist a validated parent article and platform-native variants.",
+    emoji="📝",
 )

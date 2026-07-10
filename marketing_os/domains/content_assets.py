@@ -11,11 +11,13 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from marketing_os.data_paths import MarketingDataPaths
+from marketing_os.domains.article_drafts import ArticleDraftValidator
 from marketing_os.domains.content_production import CONTENT_KINDS, VALID_PLATFORMS
 from marketing_os.domains.evidence import EvidenceRepository
 
 
 ASSET_TYPES = {"script", "video", "image", "caption"}
+CONTENT_ASSET_PLATFORMS = VALID_PLATFORMS | {"multi_article"}
 
 
 class ContentAssetRepository:
@@ -102,14 +104,115 @@ class ContentAssetRepository:
         evidence_refs: list[str] | None = None,
         memory_refs: list[str] | None = None,
     ) -> dict[str, Any]:
+        if production_kind == "article_soft":
+            raise ValueError(
+                "article_soft drafts must use the validated article bundle path"
+            )
+        return self._save_draft(
+            user_id=user_id,
+            account_id=account_id,
+            title=title,
+            plan_id=plan_id,
+            asset_type=asset_type,
+            platform=platform,
+            production_kind=production_kind,
+            content=content,
+            topic=topic,
+            hook=hook,
+            evidence_refs=evidence_refs,
+            memory_refs=memory_refs,
+        )
+
+    def create_article_bundle(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        title: str,
+        plan_id: str,
+        parent_body_markdown: str,
+        platform_variants: dict[str, Any],
+        evidence_refs: list[str],
+        topic: str = "",
+        hook: str = "",
+    ) -> dict[str, Any]:
+        plan_id_value = _bounded_text(plan_id, "plan_id", 120)
+        with self._connect() as db:
+            plan_row = db.execute(
+                """SELECT * FROM content_production_plans
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (plan_id_value, user_id, account_id),
+            ).fetchone()
+        if plan_row is None:
+            raise KeyError("production plan not found in account scope")
+        if plan_row["kind"] != "article_soft":
+            raise ValueError("article bundle requires an article_soft production plan")
+        target_platforms = json.loads(plan_row["platforms_json"])
+        verified_evidence = EvidenceRepository(self.paths).require_verified(
+            user_id=user_id,
+            account_id=account_id,
+            evidence_ids=evidence_refs,
+            require_any=True,
+        )
+        bundle = ArticleDraftValidator().build_bundle(
+            title=title,
+            parent_body_markdown=parent_body_markdown,
+            target_platforms=target_platforms,
+            variants=platform_variants,
+            evidence_records=verified_evidence,
+            topic=topic,
+            hook=hook,
+        )
+        ready = bundle["review_status"] == "ready_for_human_review"
+        return self._save_draft(
+            user_id=user_id,
+            account_id=account_id,
+            title=title,
+            plan_id=plan_id_value,
+            asset_type="script",
+            platform="multi_article",
+            production_kind="article_soft",
+            content=bundle,
+            topic=topic,
+            hook=hook,
+            evidence_refs=evidence_refs,
+            memory_refs=[],
+            allow_multi_article=True,
+            asset_status="review_ready" if ready else "draft",
+            plan_checkpoint_status="review_ready" if ready else "draft_created",
+        )
+
+    def _save_draft(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        title: str,
+        plan_id: str,
+        asset_type: str,
+        platform: str,
+        production_kind: str,
+        content: dict[str, Any],
+        topic: str = "",
+        hook: str = "",
+        evidence_refs: list[str] | None = None,
+        memory_refs: list[str] | None = None,
+        allow_multi_article: bool = False,
+        asset_status: str = "draft",
+        plan_checkpoint_status: str = "draft_created",
+    ) -> dict[str, Any]:
         title_value = _bounded_text(title, "title", 300)
         plan_id_value = _bounded_text(plan_id, "plan_id", 120)
         if asset_type not in ASSET_TYPES:
             raise ValueError(f"unsupported asset type: {asset_type}")
-        if platform not in VALID_PLATFORMS:
+        if platform not in CONTENT_ASSET_PLATFORMS:
             raise ValueError(f"unsupported content platform: {platform}")
+        if platform == "multi_article" and not allow_multi_article:
+            raise ValueError("multi_article is reserved for validated article bundles")
         if production_kind not in CONTENT_KINDS:
             raise ValueError(f"unsupported production kind: {production_kind}")
+        if asset_status not in {"draft", "review_ready"}:
+            raise ValueError("unsupported content asset status")
         if not isinstance(content, dict) or not content:
             raise ValueError("content must be a non-empty object")
         if any(str(key).startswith("_") for key in content):
@@ -140,7 +243,12 @@ class ContentAssetRepository:
             plan_platforms = json.loads(plan_row["platforms_json"])
             if plan_row["kind"] != production_kind:
                 raise ValueError("draft production kind does not match its plan")
-            if platform not in plan_platforms:
+            if platform == "multi_article":
+                if production_kind != "article_soft" or any(
+                    item not in {"zhihu", "wechat_official"} for item in plan_platforms
+                ):
+                    raise ValueError("article bundle platforms do not match its plan")
+            elif platform not in plan_platforms:
                 raise ValueError("draft platform is outside its production plan")
             payload["_production_plan_id"] = plan_id_value
             encoded = _bounded_json(payload, "content", 500_000)
@@ -148,7 +256,7 @@ class ContentAssetRepository:
                 """INSERT INTO content_assets
                 (id,user_id,account_id,platform,title,type,status,parent_id,experiment_id,
                  topic,hook,version,content_json,metrics_json,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,'draft',NULL,NULL,?,?,1,?,'{}',?,?)""",
+                VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?,1,?,'{}',?,?)""",
                 (
                     asset_id,
                     user_id,
@@ -156,6 +264,7 @@ class ContentAssetRepository:
                     platform,
                     title_value,
                     asset_type,
+                    asset_status,
                     _optional_text(topic, 200),
                     _optional_text(hook, 200),
                     encoded,
@@ -165,8 +274,8 @@ class ContentAssetRepository:
             )
             db.execute(
                 """UPDATE content_production_plans
-                SET status='draft_created', updated_at=? WHERE id=?""",
-                (now, plan_id_value),
+                SET status=?, updated_at=? WHERE id=?""",
+                (plan_checkpoint_status, now, plan_id_value),
             )
         return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
 
@@ -196,7 +305,7 @@ class ContentAssetRepository:
             query += " AND status=?"
             params.append(status)
         if platform:
-            if platform not in VALID_PLATFORMS:
+            if platform not in CONTENT_ASSET_PLATFORMS:
                 raise ValueError(f"unsupported content platform: {platform}")
             query += " AND platform=?"
             params.append(platform)

@@ -82,6 +82,20 @@ def _capture_evidence(*, session_id="session-1", task_id="session-1"):
     return payload, payload["marketing_evidence"]["records"][0]["evidence_id"]
 
 
+def _long_article(evidence_id, voice):
+    sections = []
+    for heading, idea in (
+        ("先说结论", "先把判断边界说清楚，再讨论工具能解决什么问题"),
+        ("证据意味着什么", "来源只能支持有限结论，不能把相关性包装成确定因果"),
+        ("真正的使用方法", "从一个重复任务开始，记录输入、人工判断与输出差异"),
+        ("容易踩的坑", "效率提升不等于岗位价值提升，保留复核和责任边界"),
+        ("下一步行动", "用一周小实验验证时间成本、错误率和实际收益"),
+    ):
+        paragraph = (f"{voice}：{idea}。这段内容围绕真实工作场景展开，并说明适用条件和反例。" * 8)
+        sections.append(f"## {heading}\n\n{paragraph} [{evidence_id}]")
+    return "\n\n".join(sections)
+
+
 @pytest.mark.parametrize(
     ("objective", "kind"),
     [
@@ -122,17 +136,21 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     )
     created = json.loads(
         handle_function_call(
-            "marketing_draft_content_create",
+            "marketing_draft_article_create",
             {
                 "title": "普通人如何把 AI 变成工作搭档",
                 "plan_id": planned["plan_id"],
-                "type": "script",
-                "platform": "wechat_official",
-                "production_kind": "article_soft",
                 "topic": "AI 工作流",
                 "hook": "不是多学一个工具，而是重做工作方式",
-                "content": {
-                    "markdown": "# 普通人如何把 AI 变成工作搭档\n\n这是一份可审阅草稿。"
+                "parent_body_markdown": _long_article(evidence_id, "父稿"),
+                "platform_variants": {
+                    "wechat_official": {
+                        "title": "普通人如何把 AI 变成工作搭档",
+                        "summary": "从一个真实任务开始改造工作流",
+                        "body_markdown": _long_article(evidence_id, "公众号版本更重场景和行动"),
+                        "tags": ["AI", "工作流"],
+                        "cta": "从你最重复的一项任务开始记录。",
+                    }
                 },
                 "evidence_refs": [evidence_id],
             },
@@ -144,7 +162,7 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     listed = json.loads(
         handle_function_call(
             "marketing_read_content_assets",
-            {"status": "draft"},
+            {"status": "review_ready"},
             task_id="session-1",
             session_id="session-1",
             enabled_toolsets=["marketing"],
@@ -163,16 +181,23 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     assert planned["account_scope"]["account_id"] == "acct-1"
     assert planned["checkpoint_status"] == "planned"
     assert planned["recommended_next_action"].startswith("使用已固化")
+    assert planned["platform_stylebooks"]["wechat_official"]["guidance_status"].startswith(
+        "operational_guidance"
+    )
     assert extract_result["marketing_evidence"]["records"][0]["status"] == "verified"
     assert created["account_id"] == "acct-1"
     assert created["content"]["_created_by"] == "hermes-native-marketing"
     assert created["content"]["_production_plan_id"] == planned["plan_id"]
     assert created["content"]["_provenance_evidence_refs"] == [evidence_id]
     assert created["content"]["_evidence_verification_level"] == "source_integrity"
+    assert created["content"]["schema"] == "marketing.article_bundle.v1"
+    assert created["content"]["review_status"] == "ready_for_human_review"
+    assert created["content"]["validation"]["ready"] is True
+    assert created["content"]["platform_stylebooks"]["wechat_official"]["cover"]["primary_ratio"] == "2.35:1"
     assert listed["total"] == 1
     assert listed["assets"][0]["id"] == created["id"]
     assert replanned["plan_id"] == planned["plan_id"]
-    assert replanned["checkpoint_status"] == "draft_created"
+    assert replanned["checkpoint_status"] == "review_ready"
     assert ContentAssetRepository(paths).list(user_id="default", account_id="acct-2")["total"] == 0
 
 
@@ -181,9 +206,11 @@ def test_content_write_schema_cannot_override_account_scope():
     by_name = {item["function"]["name"]: item["function"] for item in definitions}
 
     create_properties = by_name["marketing_draft_content_create"]["parameters"]["properties"]
+    article_properties = by_name["marketing_draft_article_create"]["parameters"]["properties"]
     plan_properties = by_name["marketing_plan_content_production"]["parameters"]["properties"]
 
     assert "account_id" not in create_properties
+    assert "account_id" not in article_properties
     assert "account_id" not in plan_properties
     assert "marketing_read_evidence_pack" in by_name
     assert "marketing_read_content_assets" in by_name
@@ -200,8 +227,8 @@ def test_content_repository_rejects_reserved_provenance_keys(tmp_path):
             title="bad",
             plan_id="production_plan_missing",
             asset_type="script",
-            platform="zhihu",
-            production_kind="article_soft",
+            platform="douyin",
+            production_kind="faceless_video",
             content={"_created_by": "model-forged"},
         )
 
@@ -231,8 +258,8 @@ def test_draft_requires_real_plan_in_same_account_scope(tmp_path):
             title="不能绕过工单",
             plan_id="production_plan_invented",
             asset_type="script",
-            platform="zhihu",
-            production_kind="article_soft",
+            platform="douyin",
+            production_kind="faceless_video",
             content={"markdown": "正文"},
             evidence_refs=[evidence_id],
         )
@@ -375,13 +402,17 @@ def test_draft_rejects_evidence_from_another_account(tmp_path, monkeypatch):
 
     result = json.loads(
         handle_function_call(
-            "marketing_draft_content_create",
+            "marketing_draft_article_create",
             {
                 "title": "不能串账号",
                 "plan_id": planned["plan_id"],
-                "platform": "wechat_official",
-                "production_kind": "article_soft",
-                "content": {"markdown": "正文"},
+                "parent_body_markdown": _long_article(foreign_id, "父稿"),
+                "platform_variants": {
+                    "wechat_official": {
+                        "title": "不能串账号",
+                        "body_markdown": _long_article(foreign_id, "公众号"),
+                    }
+                },
                 "evidence_refs": [foreign_id],
             },
             task_id="session-1",
@@ -391,3 +422,87 @@ def test_draft_rejects_evidence_from_another_account(tmp_path, monkeypatch):
     )
 
     assert "current account scope" in result["error"]
+
+
+def test_generic_draft_cannot_bypass_article_validation(tmp_path, monkeypatch):
+    _bind_session(tmp_path, monkeypatch)
+    _, evidence_id = _capture_evidence()
+    planned = json.loads(
+        handle_function_call(
+            "marketing_plan_content_production",
+            {
+                "objective": "写一篇知乎文章",
+                "platforms": ["zhihu"],
+                "audience": "AI 入门用户",
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    result = json.loads(
+        handle_function_call(
+            "marketing_draft_content_create",
+            {
+                "title": "绕过校验",
+                "plan_id": planned["plan_id"],
+                "platform": "zhihu",
+                "production_kind": "article_soft",
+                "content": {"markdown": "几句话冒充长文"},
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+
+    assert "validated article bundle path" in result["error"]
+
+
+def test_incomplete_or_duplicated_article_variants_are_saved_but_not_review_ready(
+    tmp_path, monkeypatch
+):
+    _bind_session(tmp_path, monkeypatch)
+    _, evidence_id = _capture_evidence()
+    planned = json.loads(
+        handle_function_call(
+            "marketing_plan_content_production",
+            {
+                "objective": "写一篇知乎和公众号长文",
+                "platforms": ["zhihu", "wechat_official"],
+                "audience": "AI 入门用户",
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    parent = _long_article(evidence_id, "完全相同的版本")
+    created = json.loads(
+        handle_function_call(
+            "marketing_draft_article_create",
+            {
+                "title": "同一份稿子不能复制到所有平台",
+                "plan_id": planned["plan_id"],
+                "parent_body_markdown": parent,
+                "platform_variants": {
+                    "zhihu": {"title": "知乎版", "body_markdown": parent},
+                    "wechat_official": {"title": "公众号版", "body_markdown": parent},
+                },
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+
+    assert created["status"] == "draft"
+    assert created["content"]["review_status"] == "needs_revision"
+    issues = created["content"]["validation"]["issues"]
+    assert "platform_variants_copy_parent" in issues
+    assert "platform_variants_not_distinct" in issues
+    assert created["content"]["prediction"]["traffic_range"] is None
