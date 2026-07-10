@@ -5,7 +5,7 @@
 - Baseline date: 2026-06-28
 - Local checkout: `runtime/hermes-agent`
 - Adaptation branch: `codex/marketing-os-runtime`
-- Product tree: `136e3ca3d72846b43c0e8bcf68fd00bf435b5a14`
+- Product tree: `226d83bda3781b91e2b40c5eda493cfca2a8ae0c`
 - Reproducible lock: `runtime/hermes-runtime.lock.json`
 - Patch series: `runtime/hermes-patches/*.patch`
 
@@ -36,6 +36,7 @@ Direct modification of the Hermes fork is now permitted. Rules:
 | 15 | 2026-07-10 | `0015-fix-desktop-preserve-original-app-identity.patch` | Hermes-native 桌面继续使用旧 Electron 内部身份和 appId，保住 macOS Keychain safeStorage、浏览器数据和既有系统权限；对外产品名仍为 Marketing OS | `legacy-provider-migration.test.cjs`、desktop platform 回归 |
 | 16 | 2026-07-10 | `0016-feat-content-enforce-claim-support-and-revision-hist.patch` | 高风险主张必须同段引用、数量 token 必须能在证据摘要中匹配；文章修订生成不可变版本链，不覆盖旧稿 | `tests/test_marketing_os_content_production.py`、真实 Provider v2→v4 E2E |
 | 17 | 2026-07-10 | `0017-fix-web-expose-native-extraction-error-types.patch` | 原生网页抽取即使异常文本为空，也返回可诊断的异常类型，不再只显示空错误 | `tests/test_marketing_os_native_web_extract.py` |
+| 18 | 2026-07-11 | `0018-refactor-desktop-make-Marketing-OS-the-only-product-.patch` | Hermes-native `apps/desktop` 是唯一产品壳；macOS/Windows/Linux 包元数据、Windows exe stamp、卸载路径和打包测试统一为 Marketing OS，旧 Hermes 安装名仅作迁移兼容 | `product-identity.test.cjs`、desktop platform、typecheck/lint/build |
 
 ## Reproduction contract
 

@@ -1,0 +1,481 @@
+From 129ca6acacb47b736965a5b2fceb2aa554795dcb Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Sat, 11 Jul 2026 02:01:11 +0800
+Subject: [PATCH] refactor(desktop): make Marketing OS the only product shell
+
+---
+ apps/desktop/README.md                        | 142 +++---------------
+ apps/desktop/electron/desktop-uninstall.cjs   |  14 +-
+ .../electron/desktop-uninstall.test.cjs       |   8 +
+ .../electron/product-identity.test.cjs        |  29 ++++
+ apps/desktop/package.json                     |  14 +-
+ apps/desktop/scripts/after-pack.cjs           |   8 +-
+ apps/desktop/scripts/set-exe-identity.cjs     |  20 +--
+ apps/desktop/scripts/test-desktop.mjs         |  16 +-
+ 8 files changed, 97 insertions(+), 154 deletions(-)
+ create mode 100644 apps/desktop/electron/product-identity.test.cjs
+
+diff --git a/apps/desktop/README.md b/apps/desktop/README.md
+index 8a6d3efe9..3f6a703a9 100644
+--- a/apps/desktop/README.md
++++ b/apps/desktop/README.md
+@@ -1,141 +1,41 @@
+-# Hermes Desktop ☤
++# Marketing OS Desktop
+ 
+-<p align="center">
+-  <a href="https://github.com/NousResearch/hermes-agent/releases"><img src="https://img.shields.io/badge/Download-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-FFD700?style=for-the-badge" alt="Download"></a>
+-  <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
+-  <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+-  <a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+-</p>
++这是 Marketing OS 唯一桌面应用源码。它直接从 Hermes Desktop 演化，复用 Hermes 原生会话、长任务、工具中间件、审批、记忆、Skill、MCP、Plugin、消息渠道和设置体系；账号经营、证据、内容、发布、指标与学习能力在同一源码树内原生增强。
+ 
+-**The native desktop app for [Hermes Agent](../../README.md) — the self-improving AI agent from [Nous Research](https://nousresearch.com).** Same agent, same skills, same memory as the CLI and gateway, in a polished native window — chat with streaming tool output, side-by-side previews, a file browser, voice, and settings, no terminal required. Available for **macOS, Windows, and Linux**.
++## 所有权原则
+ 
+-<table>
+-<tr><td><b>Chat with the full agent</b></td><td>Streaming responses, live tool activity, structured tool summaries, and the same conversation history as every other Hermes surface.</td></tr>
+-<tr><td><b>Side-by-side previews</b></td><td>Render web pages, files, and tool outputs in a right-hand pane while you keep chatting.</td></tr>
+-<tr><td><b>File browser</b></td><td>Explore and preview the working directory without leaving the app.</td></tr>
+-<tr><td><b>Voice</b></td><td>Talk to Hermes and hear it back.</td></tr>
+-<tr><td><b>Settings & onboarding</b></td><td>Manage providers, models, tools, and credentials from a real UI. First-run setup gets you to your first message in seconds.</td></tr>
+-<tr><td><b>Stays current</b></td><td>Built-in updates pull the latest agent and rebuild the app in place.</td></tr>
+-</table>
++1. Hermes 已有且更成熟的能力直接复用，不再建立 Marketing adapter、bridge 或第二套状态仓。
++2. Hermes 有缺口时修改或重写原 owner，不从外层壳反向接管 Agent。
++3. 只有 Hermes 确实没有的营销领域能力，才在 `marketing_os/` 原生 domain 中新增。
++4. 根仓库旧 `src/`、`electron/` 只作为迁移素材，不是可启动或可打包的第二个产品。
+ 
+----
++## 开发
+ 
+-## Install
+-
+-### Install with Hermes (recommended)
+-
+-Already have the Hermes CLI? Just run:
+-
+-```bash
+-hermes desktop
+-```
+-
+-It builds and launches the GUI against your existing install — same config, keys, sessions, and skills. On first launch Hermes walks you through picking a provider and model; nothing else to configure.
+-
+-### Prebuilt installers
+-
+-Prebuilt installers are built and distributed via [the Hermes Desktop website.](https://hermes-agent.nousresearch.com/).
+-
+----
+-
+-## Updating
+-
+-The app checks for updates in the background and offers a one-click update when one is ready. You can also update any time from the CLI:
++从 Marketing OS 根目录运行：
+ 
+ ```bash
+-hermes update
++npm run runtime:bootstrap
++npm run dev
+ ```
+ 
+----
+-
+-## Requirements
+-
+-The installer handles everything for you (Python 3.11+, a portable Git, ripgrep).
+-
+----
+-
+-## Development
+-
+-Want to hack on the app itself? Install workspace deps from the repo root once, then run the dev server from this directory:
++也可以在本目录运行：
+ 
+ ```bash
+-npm install          # from repo root — links apps/desktop, web, apps/shared
+-cd apps/desktop
+-npm run dev          # Vite renderer + Electron, which boots the Python backend
+-```
+-
+-Point the app at a specific source checkout, or sandbox it away from your real config:
+-
+-```bash
+-HERMES_DESKTOP_HERMES_ROOT=/path/to/clone npm run dev
+-HERMES_HOME=/tmp/throwaway npm run dev
+-npm run dev:fake-boot   # exercise the startup overlay with deterministic delays
+-```
+-
+-### Building installers
+-
+-```bash
+-npm run dist:mac     # DMG + zip
+-npm run dist:win     # NSIS + MSI
+-npm run dist:linux   # AppImage + deb + rpm
+-npm run pack         # unpacked app under release/ (no installer)
+-```
+-
+-Installers are built and uploaded to GitHub Releases manually. macOS/Windows signing & notarization happen automatically when the relevant credentials are present in the environment (`CSC_LINK` / `CSC_KEY_PASSWORD` / `APPLE_*` for macOS, `WIN_CSC_*` for Windows).
+-
+-### How it works
+-
+-The packaged app ships the Electron shell and a native React chat surface. On first launch it can install the Hermes Agent runtime into `HERMES_HOME` (`~/.hermes`, or `%LOCALAPPDATA%\hermes` on Windows) — the **same layout a CLI install uses**, so the two are interchangeable. Backend resolution first honours `HERMES_DESKTOP_HERMES_ROOT`, then a completed managed install, then a probed `hermes` on `PATH` (unless `HERMES_DESKTOP_IGNORE_EXISTING=1` is set), and finally an explicit `HERMES_DESKTOP_HERMES` command override for packagers/troubleshooting. The renderer (React, in `src/`) talks to a `hermes dashboard` backend over the `tui_gateway`/dashboard APIs and reuses the agent runtime rather than embedding `hermes --tui`. The install, backend-resolution, and self-update logic all live in `electron/main.cjs`.
+-
+-### Verification
+-
+-Run before opening a PR (lint may surface pre-existing warnings but must exit cleanly):
+-
+-```bash
+-npm run fix
++npm run dev
+ npm run typecheck
+ npm run lint
+-npm run test:desktop:all
++npm run test:desktop:platforms
++npm run build
+ ```
+ 
+-### Troubleshooting
+-
+-Boot logs land in `HERMES_HOME/logs/desktop.log` (includes backend output and recent Python tracebacks) — check it first if the app reports a boot failure.
+-
+-**macOS / Linux:**
++## 打包
+ 
+ ```bash
+-# Force a clean first-launch setup
+-rm "$HOME/.hermes/hermes-agent/.hermes-bootstrap-complete"
+-# Rebuild a broken Python venv
+-rm -rf "$HOME/.hermes/hermes-agent/venv"
+-# Reset a stuck macOS microphone prompt (macOS only)
+-tccutil reset Microphone com.nousresearch.hermes
++npm run dist:mac
++npm run dist:win
++npm run dist:linux
+ ```
+ 
+-**Windows (PowerShell):**
+-
+-```powershell
+-# Force a clean first-launch setup
+-Remove-Item "$env:LOCALAPPDATA\hermes\hermes-agent\.hermes-bootstrap-complete"
+-# Rebuild a broken Python venv
+-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\hermes\hermes-agent\venv"
+-```
+-
+-> The default Hermes home on Windows is `%LOCALAPPDATA%\hermes`. Set the `HERMES_HOME` env var if you've relocated it.
+-
+----
+-
+-## Community
+-
+-- 💬 [Discord](https://discord.gg/NousResearch)
+-- 📖 [Documentation](https://hermes-agent.nousresearch.com/docs/)
+-- 🐛 [Issues](https://github.com/NousResearch/hermes-agent/issues)
+-
+----
+-
+-## License
+-
+-MIT — see [LICENSE](../../LICENSE).
++当前安装包仍继承 Hermes 的薄安装器机制，首次运行会安装受固定 commit 约束的 Agent runtime。它尚未满足“干净电脑、断网、无全局 Python/Node/Hermes 也能启动”的最终交付门；这一点必须在发布 v0.1 前通过内嵌运行时和真实干净机验收解决，不能用结构测试冒充完成。
+ 
+-Built by [Nous Research](https://nousresearch.com).
++产品架构和删除门以根仓库 `docs/architecture/REBUILD_BASELINE.md` 与 `docs/ledgers/00-current-product-status.md` 为准。
+diff --git a/apps/desktop/electron/desktop-uninstall.cjs b/apps/desktop/electron/desktop-uninstall.cjs
+index 01b756acd..8a001bb3d 100644
+--- a/apps/desktop/electron/desktop-uninstall.cjs
++++ b/apps/desktop/electron/desktop-uninstall.cjs
+@@ -58,8 +58,8 @@ function modeRemovesUserData(mode) {
+  * Resolve the on-disk app bundle/dir to remove for the running desktop app,
+  * given the path to the running executable (`process.execPath`) and platform.
+  *
+- *   macOS:   …/Hermes.app/Contents/MacOS/Hermes  → …/Hermes.app
+- *   Windows: …\Hermes\Hermes.exe                 → …\Hermes  (install dir)
++ *   macOS:   …/Marketing OS.app/Contents/MacOS/Marketing OS → …/Marketing OS.app
++ *   Windows: …\Marketing OS\Marketing OS.exe             → …\Marketing OS
+  *   Linux:   AppImage → the APPIMAGE env path; unpacked → the *-unpacked dir
+  *
+  * Returns null when we can't confidently identify a removable bundle (e.g.
+@@ -84,9 +84,15 @@ function resolveRemovableAppPath(execPath, platform, env = {}) {
+   }
+ 
+   if (platform === 'win32') {
+-    // NSIS per-user installs Hermes.exe directly in the install dir.
++    // NSIS per-user installs the executable directly in the install dir. Keep
++    // the former Hermes names as migration compatibility for older installs.
+     const dir = p.dirname(exe)
+-    if (/[\\/]Hermes$/i.test(dir) || /[\\/]hermes-desktop$/i.test(dir)) return dir
++    if (
++      /[\\/]Marketing OS$/i.test(dir) ||
++      /[\\/]marketing-os-desktop$/i.test(dir) ||
++      /[\\/]Hermes$/i.test(dir) ||
++      /[\\/]hermes-desktop$/i.test(dir)
++    ) return dir
+     return null
+   }
+ 
+diff --git a/apps/desktop/electron/desktop-uninstall.test.cjs b/apps/desktop/electron/desktop-uninstall.test.cjs
+index 15a864b7c..2e0bf38e7 100644
+--- a/apps/desktop/electron/desktop-uninstall.test.cjs
++++ b/apps/desktop/electron/desktop-uninstall.test.cjs
+@@ -79,6 +79,14 @@ test('resolveRemovableAppPath: dev-run .app resolves (safety is shouldRemoveAppB
+ })
+ 
+ test('resolveRemovableAppPath finds the install dir on Windows', () => {
++  assert.equal(
++    resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\Programs\\Marketing OS\\Marketing OS.exe', 'win32'),
++    'C:\\Users\\x\\AppData\\Local\\Programs\\Marketing OS'
++  )
++  assert.equal(
++    resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\marketing-os-desktop\\Marketing OS.exe', 'win32'),
++    'C:\\Users\\x\\AppData\\Local\\marketing-os-desktop'
++  )
+   assert.equal(
+     resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\Programs\\Hermes\\Hermes.exe', 'win32'),
+     'C:\\Users\\x\\AppData\\Local\\Programs\\Hermes'
+diff --git a/apps/desktop/electron/product-identity.test.cjs b/apps/desktop/electron/product-identity.test.cjs
+new file mode 100644
+index 000000000..ac0ee51a2
+--- /dev/null
++++ b/apps/desktop/electron/product-identity.test.cjs
+@@ -0,0 +1,29 @@
++const assert = require('node:assert/strict')
++const fs = require('node:fs')
++const path = require('node:path')
++const test = require('node:test')
++
++const desktopRoot = path.resolve(__dirname, '..')
++
++test('all packaged desktop metadata uses the Marketing OS product identity', () => {
++  const packageJson = JSON.parse(fs.readFileSync(path.join(desktopRoot, 'package.json'), 'utf8'))
++  const build = packageJson.build
++
++  assert.equal(build.appId, 'com.marketing-os.desktop')
++  assert.equal(build.productName, 'Marketing OS')
++  assert.equal(build.executableName, 'Marketing OS')
++  assert.equal(build.win.legalTrademarks, 'Marketing OS')
++  assert.equal(build.linux.maintainer, 'Marketing OS')
++  assert.equal(build.nsis.shortcutName, 'Marketing OS')
++  assert.equal(build.nsis.uninstallDisplayName, 'Marketing OS')
++})
++
++test('the Windows identity hook cannot stamp the upstream Hermes brand', () => {
++  const stampSource = fs.readFileSync(path.join(desktopRoot, 'scripts', 'set-exe-identity.cjs'), 'utf8')
++  const afterPackSource = fs.readFileSync(path.join(desktopRoot, 'scripts', 'after-pack.cjs'), 'utf8')
++
++  assert.match(stampSource, /ProductName: 'Marketing OS'/)
++  assert.match(stampSource, /FileDescription: 'Marketing OS'/)
++  assert.doesNotMatch(stampSource, /ProductName: 'Hermes'/)
++  assert.match(afterPackSource, /productFilename \|\| 'Marketing OS'/)
++})
+diff --git a/apps/desktop/package.json b/apps/desktop/package.json
+index 359073917..70a9c3df5 100644
+--- a/apps/desktop/package.json
++++ b/apps/desktop/package.json
+@@ -37,7 +37,7 @@
+     "test:desktop:nsis": "node scripts/test-desktop.mjs nsis",
+     "test:desktop:existing": "node scripts/test-desktop.mjs existing",
+     "test:desktop:fresh": "node scripts/test-desktop.mjs fresh",
+-    "test:desktop:platforms": "node --test electron/bootstrap-platform.test.cjs electron/hardening.test.cjs electron/backend-env.test.cjs electron/legacy-provider-migration.test.cjs electron/backend-probes.test.cjs electron/backend-ready.test.cjs electron/bootstrap-runner.test.cjs electron/connection-config.test.cjs electron/dashboard-token.test.cjs electron/gateway-ws-probe.test.cjs electron/oauth-net-request.test.cjs electron/desktop-uninstall.test.cjs electron/session-windows.test.cjs electron/link-title-window.test.cjs electron/workspace-cwd.test.cjs electron/fs-read-dir.test.cjs electron/git-root.test.cjs electron/git-worktree-ops.test.cjs electron/windows-child-process.test.cjs electron/update-remote.test.cjs electron/update-count.test.cjs electron/update-rebuild.test.cjs electron/update-marker.test.cjs electron/update-relaunch.test.cjs electron/windows-user-env.test.cjs electron/wsl-clipboard-image.test.cjs electron/titlebar-overlay-width.test.cjs electron/window-state.test.cjs electron/windows-hermes-resolution.test.cjs",
++    "test:desktop:platforms": "node --test electron/product-identity.test.cjs electron/bootstrap-platform.test.cjs electron/hardening.test.cjs electron/backend-env.test.cjs electron/legacy-provider-migration.test.cjs electron/backend-probes.test.cjs electron/backend-ready.test.cjs electron/bootstrap-runner.test.cjs electron/connection-config.test.cjs electron/dashboard-token.test.cjs electron/gateway-ws-probe.test.cjs electron/oauth-net-request.test.cjs electron/desktop-uninstall.test.cjs electron/session-windows.test.cjs electron/link-title-window.test.cjs electron/workspace-cwd.test.cjs electron/fs-read-dir.test.cjs electron/git-root.test.cjs electron/git-worktree-ops.test.cjs electron/windows-child-process.test.cjs electron/update-remote.test.cjs electron/update-count.test.cjs electron/update-rebuild.test.cjs electron/update-marker.test.cjs electron/update-relaunch.test.cjs electron/windows-user-env.test.cjs electron/wsl-clipboard-image.test.cjs electron/titlebar-overlay-width.test.cjs electron/window-state.test.cjs electron/windows-hermes-resolution.test.cjs",
+     "typecheck": "tsc -p . --noEmit",
+     "lint": "eslint src/ electron/",
+     "lint:fix": "eslint src/ electron/ --fix",
+@@ -233,7 +233,7 @@
+       ]
+     },
+     "win": {
+-      "legalTrademarks": "Hermes",
++      "legalTrademarks": "Marketing OS",
+       "target": [
+         "nsis",
+         "msi"
+@@ -241,9 +241,9 @@
+       "signAndEditExecutable": false
+     },
+     "linux": {
+-      "category": "Development",
+-      "maintainer": "Nous Research <support@nousresearch.com>",
+-      "synopsis": "Native desktop shell for Hermes Agent.",
++      "category": "Office",
++      "maintainer": "Marketing OS",
++      "synopsis": "Long-term social account operations agent.",
+       "target": [
+         "AppImage",
+         "deb",
+@@ -254,8 +254,8 @@
+       "oneClick": false,
+       "allowToChangeInstallationDirectory": true,
+       "perMachine": false,
+-      "shortcutName": "Hermes",
+-      "uninstallDisplayName": "Hermes",
++      "shortcutName": "Marketing OS",
++      "uninstallDisplayName": "Marketing OS",
+       "warningsAsErrors": false
+     }
+   }
+diff --git a/apps/desktop/scripts/after-pack.cjs b/apps/desktop/scripts/after-pack.cjs
+index f81262d28..1f217d5b1 100644
+--- a/apps/desktop/scripts/after-pack.cjs
++++ b/apps/desktop/scripts/after-pack.cjs
+@@ -1,7 +1,7 @@
+ /**
+  * after-pack.cjs — electron-builder afterPack hook.
+  *
+- * Stamps the Hermes icon + identity onto the packed Windows Hermes.exe via
++ * Stamps the Marketing OS icon + identity onto the packed Windows executable via
+  * rcedit (delegated to set-exe-identity.cjs). This runs for EVERY packed build
+  * — first install, `hermes desktop`, the installer's --update rebuild, and a
+  * dev's manual `npm run pack` — so the branded exe can never silently revert
+@@ -16,7 +16,7 @@
+  * electron-builder passes a context with:
+  *   - electronPlatformName: 'win32' | 'darwin' | 'linux'
+  *   - appOutDir:            the unpacked app directory for this target
+- *   - packager.appInfo.productFilename: the exe basename (e.g. 'Hermes')
++ *   - packager.appInfo.productFilename: the exe basename (e.g. 'Marketing OS')
+  */
+ 
+ const path = require('node:path')
+@@ -28,7 +28,7 @@ exports.default = async function afterPack(context) {
+     return
+   }
+ 
+-  const productName = context.packager?.appInfo?.productFilename || 'Hermes'
++  const productName = context.packager?.appInfo?.productFilename || 'Marketing OS'
+   const exe = path.join(context.appOutDir, `${productName}.exe`)
+   const desktopRoot = path.resolve(__dirname, '..')
+ 
+@@ -36,6 +36,6 @@ exports.default = async function afterPack(context) {
+     await stampExeIdentity(exe, desktopRoot)
+   } catch (err) {
+     // Never fail the build over a cosmetic stamp.
+-    console.warn(`[after-pack] exe identity stamp failed (${err.message}); Hermes.exe keeps the stock Electron icon`)
++    console.warn(`[after-pack] exe identity stamp failed (${err.message}); Marketing OS.exe keeps the stock Electron icon`)
+   }
+ }
+diff --git a/apps/desktop/scripts/set-exe-identity.cjs b/apps/desktop/scripts/set-exe-identity.cjs
+index 129e1505b..107b1aa64 100644
+--- a/apps/desktop/scripts/set-exe-identity.cjs
++++ b/apps/desktop/scripts/set-exe-identity.cjs
+@@ -1,6 +1,6 @@
+ #!/usr/bin/env node
+-// set-exe-identity.cjs — stamp the Hermes icon + version metadata onto the
+-// built Hermes.exe using rcedit, completely decoupled from electron-builder's
++// set-exe-identity.cjs — stamp the Marketing OS icon + version metadata onto
++// the built Windows executable using rcedit, decoupled from electron-builder's
+ // signing path.
+ //
+ // WHY THIS EXISTS
+@@ -13,7 +13,7 @@
+ // try to extract winCodeSign.
+ //
+ // The cost of disabling signAndEditExecutable is that electron-builder also
+-// skips rcedit, so the unpacked Hermes.exe keeps the stock Electron icon and
++// skips rcedit, so the unpacked executable keeps the stock Electron icon and
+ // "Electron" taskbar name. This script restores the icon + identity by calling
+ // rcedit DIRECTLY. rcedit is a pure PE resource editor: no signing, no certs,
+ // no winCodeSign, no symlinks.
+@@ -28,7 +28,7 @@
+ // shipped a stock "Electron" exe. Keeping it in afterPack closes that gap.
+ //
+ // Also runnable standalone for ad-hoc re-stamping:
+-//   node scripts/set-exe-identity.cjs <path-to-Hermes.exe>
++//   node scripts/set-exe-identity.cjs <path-to-Marketing-OS.exe>
+ //
+ // Exits 0 on success, non-zero on failure when run as a CLI. As a hook,
+ // stampExeIdentity() resolves on success and rejects on failure; the caller
+@@ -38,7 +38,7 @@
+ const path = require('node:path')
+ const fs = require('node:fs')
+ 
+-// Stamp the Hermes icon + identity onto `exe`. Resolves on success, throws on
++// Stamp the Marketing OS icon + identity onto `exe`. Resolves on success, throws on
+ // failure. `desktopRoot` defaults to this script's package root so the icon and
+ // the rcedit dependency resolve regardless of cwd.
+ async function stampExeIdentity(exe, desktopRoot = path.resolve(__dirname, '..')) {
+@@ -68,14 +68,14 @@ async function stampExeIdentity(exe, desktopRoot = path.resolve(__dirname, '..')
+   await rcedit(exe, {
+     icon,
+     'version-string': {
+-      ProductName: 'Hermes',
+-      FileDescription: 'Hermes',
+-      CompanyName: 'Nous Research',
+-      LegalCopyright: 'Copyright (c) 2026 Nous Research'
++      ProductName: 'Marketing OS',
++      FileDescription: 'Marketing OS',
++      CompanyName: 'Marketing OS',
++      LegalCopyright: 'Copyright (c) 2026 Marketing OS'
+     }
+   })
+ 
+-  console.log('[set-exe-identity] done — Hermes icon + identity stamped')
++  console.log('[set-exe-identity] done — Marketing OS icon + identity stamped')
+ }
+ 
+ module.exports = { stampExeIdentity }
+diff --git a/apps/desktop/scripts/test-desktop.mjs b/apps/desktop/scripts/test-desktop.mjs
+index fdff1523f..fdfd8b610 100644
+--- a/apps/desktop/scripts/test-desktop.mjs
++++ b/apps/desktop/scripts/test-desktop.mjs
+@@ -18,10 +18,10 @@ const PLATFORM = process.platform
+ // launch via install.ps1 / install.sh, per the Phase 1 thin-installer flow).
+ const APP = (() => {
+   if (PLATFORM === 'darwin') {
+-    const appPath = path.join(RELEASE_ROOT, `mac-${ARCH}`, 'Hermes.app')
++    const appPath = path.join(RELEASE_ROOT, `mac-${ARCH}`, 'Marketing OS.app')
+     return {
+       appPath,
+-      binary: path.join(appPath, 'Contents', 'MacOS', 'Hermes'),
++      binary: path.join(appPath, 'Contents', 'MacOS', 'Marketing OS'),
+       resourcesPath: path.join(appPath, 'Contents', 'Resources'),
+       asarPath: path.join(appPath, 'Contents', 'Resources', 'app.asar'),
+       unpackedDistIndex: path.join(appPath, 'Contents', 'Resources', 'app.asar.unpacked', 'dist', 'index.html')
+@@ -31,7 +31,7 @@ const APP = (() => {
+     const unpacked = path.join(RELEASE_ROOT, 'win-unpacked')
+     return {
+       appPath: unpacked,
+-      binary: path.join(unpacked, 'Hermes.exe'),
++      binary: path.join(unpacked, 'Marketing OS.exe'),
+       resourcesPath: path.join(unpacked, 'resources'),
+       asarPath: path.join(unpacked, 'resources', 'app.asar'),
+       unpackedDistIndex: path.join(unpacked, 'resources', 'app.asar.unpacked', 'dist', 'index.html')
+@@ -41,7 +41,7 @@ const APP = (() => {
+   const unpacked = path.join(RELEASE_ROOT, 'linux-unpacked')
+   return {
+     appPath: unpacked,
+-    binary: path.join(unpacked, 'hermes'),
++    binary: path.join(unpacked, 'marketing-os'),
+     resourcesPath: path.join(unpacked, 'resources'),
+     asarPath: path.join(unpacked, 'resources', 'app.asar'),
+     unpackedDistIndex: path.join(unpacked, 'resources', 'app.asar.unpacked', 'dist', 'index.html')
+@@ -118,10 +118,10 @@ function ensurePackagedApp() {
+ 
+ function resolveDmgPath() {
+   if (!exists(RELEASE_ROOT)) {
+-    return path.join(RELEASE_ROOT, `Hermes-${PACKAGE_JSON.version}-${ARCH}.dmg`)
++    return path.join(RELEASE_ROOT, `Marketing-OS-${PACKAGE_JSON.version}-mac-${ARCH}.dmg`)
+   }
+ 
+-  const prefix = `Hermes-${PACKAGE_JSON.version}`
++  const prefix = `Marketing-OS-${PACKAGE_JSON.version}-mac-`
+   const candidates = fs
+     .readdirSync(RELEASE_ROOT)
+     .filter(name => name.endsWith('.dmg'))
+@@ -135,11 +135,11 @@ function resolveDmgPath() {
+ 
+   return candidates.length > 0
+     ? path.join(RELEASE_ROOT, candidates[0])
+-    : path.join(RELEASE_ROOT, `Hermes-${PACKAGE_JSON.version}-${ARCH}.dmg`)
++    : path.join(RELEASE_ROOT, `Marketing-OS-${PACKAGE_JSON.version}-mac-${ARCH}.dmg`)
+ }
+ 
+ function resolveNsisPath() {
+-  // electron-builder NSIS artifactName template is 'Hermes-${version}-${os}-${arch}.${ext}'
++  // electron-builder NSIS artifactName template is 'Marketing-OS-${version}-${os}-${arch}.${ext}'
+   if (!exists(RELEASE_ROOT)) return null
+   const candidates = fs
+     .readdirSync(RELEASE_ROOT)
+-- 
+2.54.0
+

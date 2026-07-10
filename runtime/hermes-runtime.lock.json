@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/NousResearch/hermes-agent.git",
   "baseline_commit": "4488fe134b1de4359f3a4f1f8368576413e6e268",
-  "product_tree": "136e3ca3d72846b43c0e8bcf68fd00bf435b5a14",
+  "product_tree": "226d83bda3781b91e2b40c5eda493cfca2a8ae0c",
   "patches": [
     {
       "file": "hermes-patches/0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch",
@@ -70,6 +70,10 @@
     {
       "file": "hermes-patches/0017-fix-web-expose-native-extraction-error-types.patch",
       "sha256": "f38de64ec7aa667323296d82755f39d8142659e64abe8ee4f737c651924c2c51"
+    },
+    {
+      "file": "hermes-patches/0018-refactor-desktop-make-Marketing-OS-the-only-product-.patch",
+      "sha256": "16bd548d4e3434278ea28b5ca8055ed14754bc7ea6ebfe07c93faeef09448989"
     }
   ]
 }
