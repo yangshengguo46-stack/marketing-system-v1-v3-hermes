@@ -1,11 +1,15 @@
 {
   "repository": "https://github.com/NousResearch/hermes-agent.git",
   "baseline_commit": "4488fe134b1de4359f3a4f1f8368576413e6e268",
-  "product_tree": "39acd04e2b7d84424ac381c0f77c647127744e24",
+  "product_tree": "8abab0742bada50f5eb7a9ba41dc4a279c251892",
   "patches": [
     {
       "file": "hermes-patches/0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch",
-      "sha256": "bc60009106c9fa0cded49e848c27fa53e32d54ebcebcd652a8b888db9972d370"
+      "sha256": "12293707d7f50f88418916d7b9248c8b7962f6684b030b038effb598cebbca90"
+    },
+    {
+      "file": "hermes-patches/0002-feat-marketing-os-establish-native-product-fork.patch",
+      "sha256": "bfcdfe54b8dc4f2c340fe21c03bbf11e635460fb171d14ba7d7b06eebbf19a57"
     }
   ]
 }

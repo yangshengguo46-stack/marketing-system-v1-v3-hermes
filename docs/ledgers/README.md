@@ -13,8 +13,9 @@
 3. 先核验开源方案；采用前记录版本/commit、许可证、数据流、秘密、失败回退和卸载路径。
 4. 不恢复已删除的旧插件、外部 Chrome/CDP、后端 Cookie、CLI 单轮 Agent 或运行时自动安装。
 5. （2026-07-10 用户纠偏）Marketing OS 是 Hermes 的产品 fork；UI、Agent loop、SessionDB、tools、gateway、cron、memory、skills、plugins 等源码均可深度改造。禁止为保持上游纯净而另造 adapter/bridge/sidecar 主链；改动仍须附回归测试、数据迁移和安全审计。
-6. 结构重塑必须服务同一纵向闭环；禁止另造第二套 Agent、数据库、浏览器身份或发布真相源。
-7. 统一使用 `designed / code / automated / dev-runtime / packaged / human-loop` 六级证据。
+6. Hermes 上游代码与 Marketing OS 既有代码都只是可拆解的材料，不是不可变边界。迁移按能力域重新组合，不按旧目录照搬；保留的是全周期经营、证据驱动、长期学习和真实回执闭环的设计哲学。
+7. 结构重塑必须服务同一纵向闭环；禁止另造第二套 Agent、数据库、浏览器身份或发布真相源。
+8. 统一使用 `designed / code / automated / dev-runtime / packaged / human-loop` 六级证据。
 
 ## 当前入口与历史台账
 

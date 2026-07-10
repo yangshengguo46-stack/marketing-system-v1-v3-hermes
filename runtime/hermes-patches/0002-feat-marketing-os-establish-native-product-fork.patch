@@ -1,0 +1,3492 @@
+From abf3ae7cdc243b1f67d3e32847fc4ef3621cab89 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 17:56:28 +0800
+Subject: [PATCH 2/2] feat(marketing-os): establish native product fork
+
+---
+ agent/prompt_builder.py                       |  25 +--
+ apps/desktop/electron/hardening.cjs           |   2 +-
+ apps/desktop/electron/main.cjs                |  52 +++--
+ apps/desktop/electron/session-windows.cjs     |   2 +-
+ .../desktop/electron/session-windows.test.cjs |  14 +-
+ apps/desktop/package.json                     |  29 +--
+ apps/desktop/src/app/chat/sidebar/index.tsx   |   9 +-
+ apps/desktop/src/app/desktop-controller.tsx   |  16 +-
+ apps/desktop/src/app/routes.test.ts           |  30 +++
+ apps/desktop/src/app/routes.ts                |   8 +-
+ .../src/app/session/hooks/use-route-resume.ts |   2 +-
+ apps/desktop/src/app/types.ts                 |   9 +-
+ apps/desktop/src/app/workbench/index.tsx      |  88 ++++++++
+ .../src/components/assistant-ui/thread.tsx    |   2 +-
+ apps/desktop/src/components/brand-mark.tsx    |  12 +-
+ apps/desktop/src/i18n/en.ts                   | 173 ++++++++--------
+ apps/desktop/src/i18n/ja.ts                   | 183 ++++++++---------
+ apps/desktop/src/i18n/runtime.test.ts         |   4 +-
+ apps/desktop/src/i18n/zh-hant.ts              | 183 ++++++++---------
+ apps/desktop/src/i18n/zh.ts                   | 193 +++++++++---------
+ apps/desktop/src/lib/chat-runtime.ts          |   2 +-
+ apps/desktop/src/lib/desktop-fs.ts            |   2 +-
+ apps/desktop/src/lib/desktop-git.ts           |   2 +-
+ apps/desktop/src/product.test.ts              |  12 ++
+ apps/desktop/src/product.ts                   |   4 +
+ apps/desktop/src/store/onboarding.ts          |  12 +-
+ apps/desktop/src/styles.css                   |   5 +-
+ marketing_os/__init__.py                      |   5 +
+ marketing_os/product.py                       |  44 ++++
+ package-lock.json                             |  10 +-
+ tests/test_marketing_os_product.py            |  23 +++
+ .../tui_gateway/test_marketing_os_product.py  |  19 ++
+ tui_gateway/server.py                         |  18 ++
+ 33 files changed, 736 insertions(+), 458 deletions(-)
+ create mode 100644 apps/desktop/src/app/routes.test.ts
+ create mode 100644 apps/desktop/src/app/workbench/index.tsx
+ create mode 100644 apps/desktop/src/product.test.ts
+ create mode 100644 apps/desktop/src/product.ts
+ create mode 100644 marketing_os/__init__.py
+ create mode 100644 marketing_os/product.py
+ create mode 100644 tests/test_marketing_os_product.py
+ create mode 100644 tests/tui_gateway/test_marketing_os_product.py
+
+diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
+index 319be7255..92fea5176 100644
+--- a/agent/prompt_builder.py
++++ b/agent/prompt_builder.py
+@@ -27,6 +27,7 @@ from agent.skill_utils import (
+     skill_matches_platform,
+ )
+ from utils import atomic_json_write
++from marketing_os.product import PRODUCT_AGENT_IDENTITY, PRODUCT_RUNTIME_GUIDANCE
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -120,25 +121,15 @@ def _strip_yaml_frontmatter(content: str) -> str:
+ # Constants
+ # =========================================================================
+ 
+-DEFAULT_AGENT_IDENTITY = (
+-    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
+-    "You are helpful, knowledgeable, and direct. You assist users with a wide "
+-    "range of tasks including answering questions, writing and editing code, "
+-    "analyzing information, creative work, and executing actions via your tools. "
+-    "You communicate clearly, admit uncertainty when appropriate, and prioritize "
+-    "being genuinely useful over being verbose unless otherwise directed below. "
+-    "Be targeted and efficient in your exploration and investigations."
+-)
++DEFAULT_AGENT_IDENTITY = PRODUCT_AGENT_IDENTITY
+ 
+ HERMES_AGENT_HELP_GUIDANCE = (
+-    "You run on Hermes Agent (by Nous Research). When the user needs help with "
+-    "Hermes itself — configuring, setting up, using, extending, or troubleshooting "
+-    "it — or when you need to understand your own features, tools, or capabilities, "
+-    "the documentation at https://hermes-agent.nousresearch.com/docs is your "
+-    "authoritative reference and always holds the latest, most up-to-date "
+-    "information. Load the `hermes-agent` skill with skill_view(name='hermes-agent') "
+-    "for additional guidance and proven workflows, but treat the docs as the source "
+-    "of truth when the two differ."
++    PRODUCT_RUNTIME_GUIDANCE
++    + " The underlying Hermes runtime remains MIT-licensed Nous Research software; "
++    "retain that attribution in technical diagnostics and license surfaces. When "
++    "debugging an inherited Hermes runtime behavior, the upstream documentation at "
++    "https://hermes-agent.nousresearch.com/docs may be used as a technical reference "
++    "but does not override Marketing OS product policy."
+ )
+ 
+ MEMORY_GUIDANCE = (
+diff --git a/apps/desktop/electron/hardening.cjs b/apps/desktop/electron/hardening.cjs
+index 574e659f9..edd45303f 100644
+--- a/apps/desktop/electron/hardening.cjs
++++ b/apps/desktop/electron/hardening.cjs
+@@ -39,7 +39,7 @@ function encryptDesktopSecret(value, safeStorageApi) {
+ 
+   if (!encryptionAvailable) {
+     throw new Error(
+-      'Secure token storage is unavailable, so Hermes Desktop cannot save remote gateway tokens. ' +
++      'Secure token storage is unavailable, so Marketing OS cannot save remote gateway tokens. ' +
+         'Set HERMES_DESKTOP_REMOTE_URL and HERMES_DESKTOP_REMOTE_TOKEN in your environment, or enable OS keychain access and try again.'
+     )
+   }
+diff --git a/apps/desktop/electron/main.cjs b/apps/desktop/electron/main.cjs
+index c873a4bc9..57bc2acf7 100644
+--- a/apps/desktop/electron/main.cjs
++++ b/apps/desktop/electron/main.cjs
+@@ -401,7 +401,7 @@ const BOOT_FAKE_STEP_MS = (() => {
+   if (!Number.isFinite(raw) || raw <= 0) return 650
+   return Math.max(120, raw)
+ })()
+-const APP_NAME = 'Hermes'
++const APP_NAME = 'Marketing OS'
+ const TITLEBAR_HEIGHT = 34
+ const MACOS_TRAFFIC_LIGHTS_HEIGHT = 14
+ const WINDOW_BUTTON_POSITION = {
+@@ -679,12 +679,12 @@ app.setName(APP_NAME)
+ // Windows toast notifications silently no-op unless an AppUserModelID is set:
+ // `new Notification().show()` returns without error and nothing appears. The
+ // AUMID must match the installed Start Menu shortcut's AUMID, which
+-// electron-builder derives from the build `appId` (com.nousresearch.hermes) —
++// electron-builder derives from the build `appId` (com.marketingos.desktop) —
+ // keep this string in sync with package.json `build.appId`. macOS/Linux don't
+ // need this, so gate it on Windows. (Fixes: desktop approval/turn notifications
+ // never firing on Windows.)
+ if (IS_WINDOWS) {
+-  app.setAppUserModelId('com.nousresearch.hermes')
++  app.setAppUserModelId('com.marketingos.desktop')
+ }
+ // Seed the native About panel with the live Hermes version. This is refreshed
+ // on every open via the explicit "About" menu handler (refreshAboutPanel), so
+@@ -5659,7 +5659,7 @@ function spawnSecondaryWindow({ sessionId, watch, newSession } = {}) {
+     height: SESSION_WINDOW_MIN_HEIGHT,
+     minWidth: SESSION_WINDOW_MIN_WIDTH,
+     minHeight: SESSION_WINDOW_MIN_HEIGHT,
+-    title: 'Hermes',
++    title: APP_NAME,
+     titleBarStyle: 'hidden',
+     titleBarOverlay: getTitleBarOverlayOptions(),
+     trafficLightPosition: IS_MAC ? WINDOW_BUTTON_POSITION : undefined,
+@@ -5709,7 +5709,7 @@ function createSessionWindow(sessionId, { watch = false } = {}) {
+   return sessionWindows.openOrFocus(sessionId, () => spawnSecondaryWindow({ sessionId, watch }))
+ }
+ 
+-// Open a fresh compact window on the new-session draft (#/). Not registry-keyed:
++// Open a fresh compact window on the new-session chat route. Not registry-keyed:
+ // like ⌘N in a browser, every press opens a new window — and a draft window that
+ // later converts to a real session must not get refocused as if it were blank.
+ function createNewSessionWindow() {
+@@ -5859,7 +5859,7 @@ function createWindow() {
+     ...computeWindowOptions(savedWindowState, screen.getAllDisplays()),
+     minWidth: WINDOW_MIN_WIDTH,
+     minHeight: WINDOW_MIN_HEIGHT,
+-    title: 'Hermes',
++    title: APP_NAME,
+     // Frameless title bar on every platform so the renderer can paint the
+     // "hide sidebar" button (and other left-side titlebar tools) flush with
+     // the top edge — matching the macOS layout where the traffic lights sit
+@@ -6470,7 +6470,7 @@ ipcMain.handle('hermes:notify', (_event, payload) => {
+   // and the body click still works.
+   const actions = Array.isArray(payload?.actions) ? payload.actions : []
+   const notification = new Notification({
+-    title: payload?.title || 'Hermes',
++    title: payload?.title || APP_NAME,
+     body: payload?.body || '',
+     silent: Boolean(payload?.silent),
+     actions: actions.map(action => ({ type: 'button', text: String(action?.text || '') }))
+@@ -6856,7 +6856,7 @@ function terminalShellEnv() {
+   env.COLORTERM = 'truecolor'
+   env.LC_CTYPE = env.LC_CTYPE || 'UTF-8'
+   env.TERM = 'xterm-256color'
+-  env.TERM_PROGRAM = 'Hermes'
++  env.TERM_PROGRAM = 'MarketingOS'
+   env.TERM_PROGRAM_VERSION = app.getVersion()
+ 
+   // Let a hermes/--tui launched in this pane know it's embedded in the desktop
+@@ -7390,18 +7390,26 @@ ipcMain.handle('hermes:vscode-theme:fetch', async (_event, id) => fetchMarketpla
+ ipcMain.handle('hermes:vscode-theme:search', async (_event, query) => searchMarketplaceThemes(String(query || ''), 20))
+ 
+ // ---------------------------------------------------------------------------
+-// hermes:// deep links (e.g. hermes://blueprint/morning-brief?time=08:00).
++// marketing-os:// deep links (for example,
++// marketing-os://blueprint/morning-brief?time=08:00).
+ // A docs/dashboard "Send to App" button opens this URL; we route it into the
+ // running app's chat composer. Three delivery paths: macOS 'open-url',
+ // Win/Linux running-app 'second-instance' (argv), Win/Linux cold-start argv.
+ // ---------------------------------------------------------------------------
+-const HERMES_PROTOCOL = 'hermes'
++const PRODUCT_PROTOCOL = 'marketing-os'
++const LEGACY_PROTOCOL = 'hermes'
++const ACCEPTED_DEEP_LINK_PROTOCOLS = [PRODUCT_PROTOCOL, LEGACY_PROTOCOL]
+ let _pendingDeepLink = null
+ let _rendererReadyForDeepLink = false
+ 
+ function _extractDeepLink(argv) {
+   if (!Array.isArray(argv)) return null
+-  return argv.find(a => typeof a === 'string' && a.startsWith(`${HERMES_PROTOCOL}://`)) || null
++  return (
++    argv.find(
++      value =>
++        typeof value === 'string' && ACCEPTED_DEEP_LINK_PROTOCOLS.some(protocol => value.startsWith(`${protocol}://`))
++    ) || null
++  )
+ }
+ 
+ function handleDeepLink(url) {
+@@ -7413,7 +7421,7 @@ function handleDeepLink(url) {
+     rememberLog(`[deeplink] ignoring malformed url: ${url}`)
+     return
+   }
+-  // hermes://blueprint/<key>?slot=val  -> host="blueprint", path="/<key>"
++  // marketing-os://blueprint/<key>?slot=val -> host="blueprint", path="/<key>"
+   const kind = parsed.hostname || ''
+   const name = decodeURIComponent((parsed.pathname || '').replace(/^\//, ''))
+   const params = {}
+@@ -7444,7 +7452,7 @@ ipcMain.handle('hermes:deep-link-ready', () => {
+     const queued = _pendingDeepLink
+     _pendingDeepLink = null
+     handleDeepLink(
+-      `${HERMES_PROTOCOL}://${queued.kind}/${encodeURIComponent(queued.name)}` +
++      `${PRODUCT_PROTOCOL}://${queued.kind}/${encodeURIComponent(queued.name)}` +
+         (Object.keys(queued.params).length ? '?' + new URLSearchParams(queued.params).toString() : '')
+     )
+   }
+@@ -7453,12 +7461,14 @@ ipcMain.handle('hermes:deep-link-ready', () => {
+ 
+ function registerDeepLinkProtocol() {
+   try {
+-    if (process.defaultApp && process.argv.length >= 2) {
+-      // Dev: register with the electron exec path + entry script so the OS can
+-      // relaunch us with the URL.
+-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL, process.execPath, [path.resolve(process.argv[1])])
+-    } else {
+-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL)
++    for (const protocol of ACCEPTED_DEEP_LINK_PROTOCOLS) {
++      if (process.defaultApp && process.argv.length >= 2) {
++        // Dev: register with the electron exec path + entry script so the OS can
++        // relaunch us with the URL.
++        app.setAsDefaultProtocolClient(protocol, process.execPath, [path.resolve(process.argv[1])])
++      } else {
++        app.setAsDefaultProtocolClient(protocol)
++      }
+     }
+   } catch (err) {
+     rememberLog(`[deeplink] protocol registration failed: ${err.message}`)
+@@ -7466,7 +7476,7 @@ function registerDeepLinkProtocol() {
+ }
+ 
+ // Single-instance lock: deep links on a running app (Win/Linux) arrive as a
+-// second-instance argv. Without the lock a second `hermes://` launch spawns a
++// second-instance argv. Without the lock a second product deep link spawns a
+ // whole new app instead of routing into the running one.
+ const _gotSingleInstanceLock = app.requestSingleInstanceLock()
+ if (!_gotSingleInstanceLock) {
+@@ -7504,7 +7514,7 @@ app.whenReady().then(() => {
+   registerPowerResumeListeners()
+   createWindow()
+ 
+-  // Win/Linux cold start: the launching hermes:// URL is in our own argv.
++  // Win/Linux cold start: the launching product URL is in our own argv.
+   const _coldStartLink = _extractDeepLink(process.argv)
+   if (_coldStartLink) handleDeepLink(_coldStartLink)
+ 
+diff --git a/apps/desktop/electron/session-windows.cjs b/apps/desktop/electron/session-windows.cjs
+index 5e2f3d4c6..9ffb7a954 100644
+--- a/apps/desktop/electron/session-windows.cjs
++++ b/apps/desktop/electron/session-windows.cjs
+@@ -44,7 +44,7 @@ function chatWindowWebPreferences(preloadPath) {
+ // just to stream into it.
+ function buildSessionWindowUrl(sessionId, { devServer, rendererIndexPath, watch, newSession } = {}) {
+   const query = `?win=secondary${newSession ? '&new=1' : ''}${watch ? '&watch=1' : ''}`
+-  const route = newSession ? '#/' : `#/${encodeURIComponent(sessionId)}`
++  const route = newSession ? '#/chat' : `#/chat/${encodeURIComponent(sessionId)}`
+ 
+   if (devServer) {
+     const base = devServer.endsWith('/') ? devServer.slice(0, -1) : devServer
+diff --git a/apps/desktop/electron/session-windows.test.cjs b/apps/desktop/electron/session-windows.test.cjs
+index 78f19b859..cad95de19 100644
+--- a/apps/desktop/electron/session-windows.test.cjs
++++ b/apps/desktop/electron/session-windows.test.cjs
+@@ -56,13 +56,13 @@ function makeFakeWindow() {
+ test('buildSessionWindowUrl puts the secondary flag before the hash route (dev server)', () => {
+   const url = buildSessionWindowUrl('abc123', { devServer: 'http://localhost:5173' })
+ 
+-  assert.equal(url, 'http://localhost:5173/?win=secondary#/abc123')
++  assert.equal(url, 'http://localhost:5173/?win=secondary#/chat/abc123')
+ })
+ 
+ test('buildSessionWindowUrl avoids a double slash when the dev server has a trailing slash', () => {
+   const url = buildSessionWindowUrl('abc123', { devServer: 'http://localhost:5173/' })
+ 
+-  assert.equal(url, 'http://localhost:5173/?win=secondary#/abc123')
++  assert.equal(url, 'http://localhost:5173/?win=secondary#/chat/abc123')
+ })
+ 
+ test('buildSessionWindowUrl encodes the session id in the hash route', () => {
+@@ -70,26 +70,26 @@ test('buildSessionWindowUrl encodes the session id in the hash route', () => {
+ 
+   // The query flag must precede the '#' or HashRouter would swallow it as the
+   // route; the id is URL-encoded so slashes/spaces survive routeSessionId().
+-  assert.equal(url, 'http://localhost:5173/?win=secondary#/a%20b%2Fc')
++  assert.equal(url, 'http://localhost:5173/?win=secondary#/chat/a%20b%2Fc')
+   assert.ok(url.indexOf('?win=secondary') < url.indexOf('#'))
+ })
+ 
+ test('buildSessionWindowUrl builds a packaged file URL with the flag before the hash', () => {
+   const url = buildSessionWindowUrl('abc', { rendererIndexPath: '/opt/app/index.html' })
+ 
+-  assert.match(url, /^file:\/\/.*index\.html\?win=secondary#\/abc$/)
++  assert.match(url, /^file:\/\/.*index\.html\?win=secondary#\/chat\/abc$/)
+ })
+ 
+ test('buildSessionWindowUrl adds the watch flag for spectator windows, before the hash', () => {
+   const url = buildSessionWindowUrl('abc', { devServer: 'http://localhost:5173', watch: true })
+ 
+-  assert.equal(url, 'http://localhost:5173/?win=secondary&watch=1#/abc')
++  assert.equal(url, 'http://localhost:5173/?win=secondary&watch=1#/chat/abc')
+ })
+ 
+-test('buildSessionWindowUrl routes new-session windows to the draft (#/)', () => {
++test('buildSessionWindowUrl routes new-session windows to the chat draft', () => {
+   const url = buildSessionWindowUrl(null, { devServer: 'http://localhost:5173', newSession: true })
+ 
+-  assert.equal(url, 'http://localhost:5173/?win=secondary&new=1#/')
++  assert.equal(url, 'http://localhost:5173/?win=secondary&new=1#/chat')
+ })
+ 
+ test('registry opens one window per session and focuses on re-open', () => {
+diff --git a/apps/desktop/package.json b/apps/desktop/package.json
+index b4e332840..467cbb8c5 100644
+--- a/apps/desktop/package.json
++++ b/apps/desktop/package.json
+@@ -1,9 +1,9 @@
+ {
+-  "name": "hermes",
+-  "productName": "Hermes",
++  "name": "marketing-os-desktop",
++  "productName": "Marketing OS",
+   "private": true,
+   "version": "0.17.0",
+-  "description": "Native desktop shell for Hermes Agent.",
++  "description": "Native desktop operating system for long-running social-media account growth.",
+   "author": "Nous Research",
+   "type": "module",
+   "main": "electron/main.cjs",
+@@ -144,18 +144,19 @@
+   },
+   "build": {
+     "electronVersion": "40.10.2",
+-    "appId": "com.nousresearch.hermes",
+-    "productName": "Hermes",
+-    "executableName": "Hermes",
++    "appId": "com.marketingos.desktop",
++    "productName": "Marketing OS",
++    "executableName": "Marketing OS",
+     "protocols": [
+       {
+-        "name": "Hermes Protocol",
++        "name": "Marketing OS Protocol",
+         "schemes": [
++          "marketing-os",
+           "hermes"
+         ]
+       }
+     ],
+-    "artifactName": "Hermes-${version}-${os}-${arch}.${ext}",
++    "artifactName": "Marketing-OS-${version}-${os}-${arch}.${ext}",
+     "icon": "assets/icon",
+     "directories": {
+       "output": "release"
+@@ -196,11 +197,11 @@
+       "entitlements": "electron/entitlements.mac.plist",
+       "entitlementsInherit": "electron/entitlements.mac.inherit.plist",
+       "extendInfo": {
+-        "CFBundleDisplayName": "Hermes",
+-        "CFBundleExecutable": "Hermes",
+-        "CFBundleName": "Hermes",
+-        "NSAudioCaptureUsageDescription": "Hermes uses audio capture for voice conversations.",
+-        "NSMicrophoneUsageDescription": "Hermes uses the microphone for voice input and voice conversations."
++        "CFBundleDisplayName": "Marketing OS",
++        "CFBundleExecutable": "Marketing OS",
++        "CFBundleName": "Marketing OS",
++        "NSAudioCaptureUsageDescription": "Marketing OS uses audio capture for voice conversations.",
++        "NSMicrophoneUsageDescription": "Marketing OS uses the microphone for voice input and voice conversations."
+       },
+       "gatekeeperAssess": false,
+       "hardenedRuntime": true,
+@@ -210,7 +211,7 @@
+       ]
+     },
+     "dmg": {
+-      "title": "Install Hermes",
++      "title": "Install Marketing OS",
+       "backgroundColor": "#f5f5f7",
+       "iconSize": 96,
+       "window": {
+diff --git a/apps/desktop/src/app/chat/sidebar/index.tsx b/apps/desktop/src/app/chat/sidebar/index.tsx
+index ca38d6590..fc273fa26 100644
+--- a/apps/desktop/src/app/chat/sidebar/index.tsx
++++ b/apps/desktop/src/app/chat/sidebar/index.tsx
+@@ -113,7 +113,7 @@ import {
+   setCurrentCwd
+ } from '@/store/session'
+ 
+-import { type AppView, ARTIFACTS_ROUTE, MESSAGING_ROUTE, SKILLS_ROUTE } from '../../routes'
++import { type AppView, ARTIFACTS_ROUTE, MESSAGING_ROUTE, SKILLS_ROUTE, WORKBENCH_ROUTE } from '../../routes'
+ import { SidebarPanelLabel } from '../../shell/sidebar-label'
+ import type { SidebarNavItem } from '../../types'
+ 
+@@ -155,6 +155,12 @@ const NON_SESSION_LOAD_STEP = 10
+ const NEW_SESSION_KBD = comboTokens('mod+n')
+ 
+ const SIDEBAR_NAV: SidebarNavItem[] = [
++  {
++    id: 'workbench',
++    label: '工作台',
++    icon: props => <Codicon name="dashboard" {...props} />,
++    route: WORKBENCH_ROUTE
++  },
+   {
+     id: 'new-session',
+     label: '',
+@@ -1197,6 +1203,7 @@ export function ChatSidebar({
+                 const isInteractive = Boolean(item.action) || Boolean(item.route)
+ 
+                 const active =
++                  (item.id === 'workbench' && currentView === 'workbench') ||
+                   (item.id === 'skills' && currentView === 'skills') ||
+                   (item.id === 'messaging' && currentView === 'messaging') ||
+                   (item.id === 'artifacts' && currentView === 'artifacts')
+diff --git a/apps/desktop/src/app/desktop-controller.tsx b/apps/desktop/src/app/desktop-controller.tsx
+index fece88874..0ed0c7ce1 100644
+--- a/apps/desktop/src/app/desktop-controller.tsx
++++ b/apps/desktop/src/app/desktop-controller.tsx
+@@ -162,6 +162,7 @@ const MessagingView = lazy(async () => ({ default: (await import('./messaging'))
+ const ProfilesView = lazy(async () => ({ default: (await import('./profiles')).ProfilesView }))
+ const SettingsView = lazy(async () => ({ default: (await import('./settings')).SettingsView }))
+ const SkillsView = lazy(async () => ({ default: (await import('./skills')).SkillsView }))
++const WorkbenchView = lazy(async () => ({ default: (await import('./workbench')).WorkbenchView }))
+ 
+ // Latest cron-job sessions surfaced in the collapsed "Cron jobs" section. The
+ // Cron sessions are written by a background scheduler tick (the desktop
+@@ -359,7 +360,7 @@ export function DesktopController() {
+     return () => unsubscribe?.()
+   }, [])
+ 
+-  // hermes:// deep links (e.g. a docs "Send to App" button for an automation blueprint).
++  // marketing-os:// deep links (for example, a "Send to App" automation blueprint).
+   // Build the equivalent /blueprint slash command from the payload and drop
+   // it into the composer — the user reviews/edits, then sends; the agent (or
+   // the shared command handler) creates the job. Signal readiness so a link
+@@ -1383,8 +1384,16 @@ export function DesktopController() {
+       )}
+       <PaneMain>
+         <Routes>
+-          <Route element={chatView} index />
+-          <Route element={chatView} path=":sessionId" />
++          <Route
++            element={
++              <Suspense fallback={null}>
++                <WorkbenchView onNewChat={() => navigate(NEW_CHAT_ROUTE)} requestGateway={requestGateway} />
++              </Suspense>
++            }
++            index
++          />
++          <Route element={chatView} path="chat" />
++          <Route element={chatView} path="chat/:sessionId" />
+           <Route
+             element={
+               <Suspense fallback={null}>
+@@ -1416,6 +1425,7 @@ export function DesktopController() {
+           <Route element={null} path="agents" />
+           <Route element={<Navigate replace to={NEW_CHAT_ROUTE} />} path="new" />
+           <Route element={<LegacySessionRedirect />} path="sessions/:sessionId" />
++          <Route element={<LegacySessionRedirect />} path=":sessionId" />
+           <Route element={<Navigate replace to={NEW_CHAT_ROUTE} />} path="*" />
+         </Routes>
+       </PaneMain>
+diff --git a/apps/desktop/src/app/routes.test.ts b/apps/desktop/src/app/routes.test.ts
+new file mode 100644
+index 000000000..e1837a4bb
+--- /dev/null
++++ b/apps/desktop/src/app/routes.test.ts
+@@ -0,0 +1,30 @@
++import { describe, expect, it } from 'vitest'
++
++import {
++  appViewForPath,
++  isNewChatRoute,
++  NEW_CHAT_ROUTE,
++  routeSessionId,
++  sessionRoute,
++  WORKBENCH_ROUTE
++} from './routes'
++
++describe('Marketing OS native routes', () => {
++  it('uses the root route for the workbench and a dedicated chat route', () => {
++    expect(WORKBENCH_ROUTE).toBe('/')
++    expect(NEW_CHAT_ROUTE).toBe('/chat')
++    expect(appViewForPath('/')).toBe('workbench')
++    expect(appViewForPath('/chat')).toBe('chat')
++    expect(isNewChatRoute('/chat')).toBe(true)
++  })
++
++  it('round-trips native session routes without confusing them with product routes', () => {
++    const sessionId = 'account plan/7'
++    const route = sessionRoute(sessionId)
++
++    expect(route).toBe('/chat/account%20plan%2F7')
++    expect(routeSessionId(route)).toBe(sessionId)
++    expect(routeSessionId('/skills')).toBeNull()
++    expect(routeSessionId('/chat/nested/path')).toBeNull()
++  })
++})
+diff --git a/apps/desktop/src/app/routes.ts b/apps/desktop/src/app/routes.ts
+index 2b655fccc..3ff2ccef4 100644
+--- a/apps/desktop/src/app/routes.ts
++++ b/apps/desktop/src/app/routes.ts
+@@ -1,5 +1,6 @@
+-export const SESSION_ROUTE_PREFIX = '/'
+-export const NEW_CHAT_ROUTE = '/'
++export const SESSION_ROUTE_PREFIX = '/chat/'
++export const NEW_CHAT_ROUTE = '/chat'
++export const WORKBENCH_ROUTE = '/'
+ export const SETTINGS_ROUTE = '/settings'
+ export const COMMAND_CENTER_ROUTE = '/command-center'
+ export const SKILLS_ROUTE = '/skills'
+@@ -19,6 +20,7 @@ export type AppView =
+   | 'profiles'
+   | 'settings'
+   | 'skills'
++  | 'workbench'
+ 
+ export type AppRouteId =
+   | 'agents'
+@@ -30,6 +32,7 @@ export type AppRouteId =
+   | 'profiles'
+   | 'settings'
+   | 'skills'
++  | 'workbench'
+ 
+ export interface AppRoute {
+   id: AppRouteId
+@@ -38,6 +41,7 @@ export interface AppRoute {
+ }
+ 
+ export const APP_ROUTES = [
++  { id: 'workbench', path: WORKBENCH_ROUTE, view: 'workbench' },
+   { id: 'new', path: NEW_CHAT_ROUTE, view: 'chat' },
+   { id: 'settings', path: SETTINGS_ROUTE, view: 'settings' },
+   { id: 'command-center', path: COMMAND_CENTER_ROUTE, view: 'command-center' },
+diff --git a/apps/desktop/src/app/session/hooks/use-route-resume.ts b/apps/desktop/src/app/session/hooks/use-route-resume.ts
+index 588f614a5..731e4a1bf 100644
+--- a/apps/desktop/src/app/session/hooks/use-route-resume.ts
++++ b/apps/desktop/src/app/session/hooks/use-route-resume.ts
+@@ -45,7 +45,7 @@ function resumeRetryDelayMs(attempt: number): number {
+ 
+ // HashRouter boot edge case: pathname briefly reads `/` before the hash is
+ // parsed. If the hash references a real session, defer; resume picks it up
+-// next tick. Without this, ctrl+R on `#/:sessionId` flashes 5 loading states.
++// next tick. Without this, ctrl+R on `#/chat/:sessionId` flashes 5 loading states.
+ function rawHashLooksLikeSession(): boolean {
+   if (typeof window === 'undefined') {
+     return false
+diff --git a/apps/desktop/src/app/types.ts b/apps/desktop/src/app/types.ts
+index 1adc2bdec..c7195d570 100644
+--- a/apps/desktop/src/app/types.ts
++++ b/apps/desktop/src/app/types.ts
+@@ -122,7 +122,14 @@ export type CommandDispatchResponse =
+   | SendCommandDispatchResponse
+   | PrefillCommandDispatchResponse
+ 
+-export type SidebarNavId = 'artifacts' | 'command-center' | 'messaging' | 'new-session' | 'settings' | 'skills'
++export type SidebarNavId =
++  | 'artifacts'
++  | 'command-center'
++  | 'messaging'
++  | 'new-session'
++  | 'settings'
++  | 'skills'
++  | 'workbench'
+ 
+ export interface SidebarNavItem {
+   id: SidebarNavId
+diff --git a/apps/desktop/src/app/workbench/index.tsx b/apps/desktop/src/app/workbench/index.tsx
+new file mode 100644
+index 000000000..b2c8d43be
+--- /dev/null
++++ b/apps/desktop/src/app/workbench/index.tsx
+@@ -0,0 +1,88 @@
++import { useEffect, useState } from 'react'
++
++import { BrandMark } from '@/components/brand-mark'
++import { Button } from '@/components/ui/button'
++import { PRODUCT_NAME, PRODUCT_TAGLINE } from '@/product'
++
++interface MarketingProductStatus {
++  product_id: string
++  product_name: string
++  runtime: string
++  agent_owner: string
++  desktop_owner: string
++  surfaces: string[]
++}
++
++interface WorkbenchViewProps {
++  onNewChat: () => void
++  requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
++}
++
++export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps) {
++  const [status, setStatus] = useState<MarketingProductStatus | null>(null)
++  const [error, setError] = useState('')
++
++  useEffect(() => {
++    let active = true
++
++    void requestGateway<MarketingProductStatus>('marketing.product.status')
++      .then(result => {
++        if (active) setStatus(result)
++      })
++      .catch(reason => {
++        if (active) setError(reason instanceof Error ? reason.message : String(reason))
++      })
++
++    return () => {
++      active = false
++    }
++  }, [requestGateway])
++
++  return (
++    <main className="h-full overflow-y-auto bg-(--ui-background) px-10 pb-16 pt-[calc(var(--titlebar-height)+2.5rem)] text-foreground">
++      <div className="mx-auto flex w-full max-w-6xl flex-col gap-10">
++        <header className="flex items-center justify-between gap-8 border-b border-(--ui-stroke-tertiary) pb-8">
++          <div className="flex min-w-0 items-center gap-4">
++            <BrandMark className="size-12 text-4xl" />
++            <div>
++              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-(--ui-text-tertiary)">
++                Native agent workspace
++              </p>
++              <h1 className="mt-1 text-3xl font-semibold tracking-[-0.04em]">{PRODUCT_NAME}</h1>
++              <p className="mt-1 text-sm text-(--ui-text-secondary)">{PRODUCT_TAGLINE}</p>
++            </div>
++          </div>
++          <Button onClick={onNewChat}>开始新对话</Button>
++        </header>
++
++        <section className="grid gap-4 md:grid-cols-3">
++          <WorkbenchSignal label="智能体" value={status ? '原生运行' : '正在连接'} detail="会话、长任务、记忆和技能由同一个内核运行" />
++          <WorkbenchSignal label="经营主线" value="账号全周期" detail="受众、定位、内容、发布、指标与复盘连续推进" />
++          <WorkbenchSignal label="产品界面" value="原生桌面" detail="工作台、对话和后台任务共享同一会话与运行时" />
++        </section>
++
++        <section className="rounded-2xl border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-7">
++          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-(--ui-text-tertiary)">Today</p>
++          <h2 className="mt-3 text-xl font-semibold">告诉 Agent 你想经营什么</h2>
++          <p className="mt-2 max-w-2xl text-sm leading-6 text-(--ui-text-secondary)">
++            不知道账号定位也可以直接开始。Marketing OS 会先了解你的能力、兴趣、可投入时间和目标受众，再形成第一轮可验证方向。
++          </p>
++          <Button className="mt-6" onClick={onNewChat} variant="outline">
++            从自然对话开始
++          </Button>
++          {error ? <p className="mt-4 text-xs text-red-400">原生 Gateway 尚未就绪：{error}</p> : null}
++        </section>
++      </div>
++    </main>
++  )
++}
++
++function WorkbenchSignal({ detail, label, value }: { detail: string; label: string; value: string }) {
++  return (
++    <article className="min-h-40 rounded-2xl border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-6">
++      <p className="text-xs text-(--ui-text-tertiary)">{label}</p>
++      <strong className="mt-5 block text-xl font-semibold tracking-[-0.03em]">{value}</strong>
++      <p className="mt-3 text-sm leading-6 text-(--ui-text-secondary)">{detail}</p>
++    </article>
++  )
++}
+diff --git a/apps/desktop/src/components/assistant-ui/thread.tsx b/apps/desktop/src/components/assistant-ui/thread.tsx
+index 706345f70..fa2e5a4e9 100644
+--- a/apps/desktop/src/components/assistant-ui/thread.tsx
++++ b/apps/desktop/src/components/assistant-ui/thread.tsx
+@@ -509,7 +509,7 @@ const StreamStallIndicator: FC = () => {
+     <StatusRow
+       className="mt-1.5"
+       data-slot="aui_stream-stall"
+-      label={compacting ? COMPACTION_LABEL : 'Hermes is thinking'}
++      label={compacting ? COMPACTION_LABEL : 'Marketing OS is thinking'}
+     >
+       <span aria-hidden="true" className="dither inline-block size-3 rounded-[2px] text-midground/80 animate-pulse" />
+       {compacting && <CompactionHint />}
+diff --git a/apps/desktop/src/components/brand-mark.tsx b/apps/desktop/src/components/brand-mark.tsx
+index 72edfe22b..43c9caff7 100644
+--- a/apps/desktop/src/components/brand-mark.tsx
++++ b/apps/desktop/src/components/brand-mark.tsx
+@@ -1,19 +1,19 @@
+ import { cn } from '@/lib/utils'
++import { PRODUCT_NAME } from '@/product'
+ 
+-const assetPath = (path: string) => `${import.meta.env.BASE_URL}${path.replace(/^\/+/, '')}`
+-
+-// Brand badge: nous-girl mark on a white tile, identical in light/dark.
+-// Fills the tile (softly rounded); size via className (default size-14).
++// Product-owned mark. Marketing OS Desktop is the fork itself, not a second
++// shell around an upstream Hermes avatar.
+ export function BrandMark({ className, ...props }: React.ComponentProps<'span'>) {
+   return (
+     <span
++      aria-label={PRODUCT_NAME}
+       className={cn(
+-        'inline-flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white',
++        'inline-flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-[28%] bg-[#ff5b55] text-[0.42em] font-black tracking-[-0.08em] text-white shadow-[0_12px_30px_rgba(255,91,85,0.24)]',
+         className
+       )}
+       {...props}
+     >
+-      <img alt="" className="size-full object-contain" src={assetPath('nous-girl.jpg')} />
++      M
+     </span>
+   )
+ }
+diff --git a/apps/desktop/src/i18n/en.ts b/apps/desktop/src/i18n/en.ts
+index f7239b83a..0c165af04 100644
+--- a/apps/desktop/src/i18n/en.ts
++++ b/apps/desktop/src/i18n/en.ts
+@@ -59,18 +59,18 @@ export const en: Translations = {
+   },
+ 
+   boot: {
+-    ready: 'Hermes Desktop is ready',
++    ready: 'Marketing OS is ready',
+     desktopBootFailedWithMessage: message => `Desktop boot failed: ${message}`,
+     steps: {
+       connectingGateway: 'Connecting live desktop gateway',
+-      loadingSettings: 'Loading Hermes settings',
++      loadingSettings: 'Loading Marketing OS settings',
+       loadingSessions: 'Loading recent sessions',
+       startingDesktopConnection: 'Starting desktop connection',
+-      startingHermesDesktop: 'Starting Hermes Desktop…'
++      startingHermesDesktop: 'Starting Marketing OS…'
+     },
+     errors: {
+-      backgroundExited: 'Hermes background process exited.',
+-      backgroundExitedDuringStartup: 'Hermes background process exited during startup.',
++      backgroundExited: 'Marketing OS background process exited.',
++      backgroundExitedDuringStartup: 'Marketing OS background process exited during startup.',
+       backendStopped: 'Backend stopped',
+       desktopBootFailed: 'Desktop boot failed',
+       gatewayConnectionLost: 'Lost connection to the gateway',
+@@ -78,7 +78,7 @@ export const en: Translations = {
+       ipcBridgeUnavailable: 'Desktop IPC bridge is unavailable.'
+     },
+     failure: {
+-      title: "Hermes couldn't start",
++      title: "Marketing OS couldn't start",
+       description:
+         "The background gateway didn't come up. Try one of the recovery steps below. Nothing here deletes your chats or settings.",
+       remoteTitle: 'Remote gateway sign-in required',
+@@ -115,8 +115,8 @@ export const en: Translations = {
+     copyDetailFailed: 'Could not copy notification detail',
+     backendOutOfDateTitle: 'Backend out of date',
+     backendOutOfDateMessage:
+-      'Your Hermes backend is older than this desktop build and may not work correctly. Update to align them.',
+-    updateHermes: 'Update Hermes',
++      'Your Marketing OS backend is older than this desktop build and may not work correctly. Update to align them.',
++    updateHermes: 'Update Marketing OS',
+     updateReadyTitle: 'Update ready',
+     updateReadyMessage: count => `${count} new change${count === 1 ? '' : 's'} available.`,
+     seeWhatsNew: "See what's new",
+@@ -124,7 +124,7 @@ export const en: Translations = {
+       elevenLabsNeedsKey: 'ElevenLabs STT needs ELEVENLABS_API_KEY.',
+       elevenLabsRejectedKey: 'ElevenLabs rejected the API key (401).',
+       methodNotAllowed:
+-        'The desktop backend rejected that request (405 Method Not Allowed). Try restarting Hermes Desktop.',
++        'The desktop backend rejected that request (405 Method Not Allowed). Try restarting Marketing OS.',
+       microphonePermission: 'Microphone permission was denied.',
+       openaiRejectedApiKey: 'OpenAI rejected the API key.',
+       openaiRejectedApiKeyWithStatus: status => `OpenAI rejected the API key (${status} invalid_api_key).`,
+@@ -154,8 +154,8 @@ export const en: Translations = {
+       approveAction: 'Approve',
+       rejectAction: 'Reject',
+       inputTitle: 'Input needed',
+-      inputBody: 'Hermes is waiting for your response.',
+-      turnDoneTitle: 'Hermes finished',
++      inputBody: 'Marketing OS is waiting for your response.',
++      turnDoneTitle: 'Marketing OS finished',
+       turnDoneBody: 'The response is ready.',
+       turnErrorTitle: 'Turn failed',
+       backgroundDoneTitle: 'Background task finished',
+@@ -293,7 +293,7 @@ export const en: Translations = {
+     exportConfig: 'Export config',
+     importConfig: 'Import config',
+     resetToDefaults: 'Reset to defaults',
+-    resetConfirm: 'Reset all settings to Hermes defaults?',
++    resetConfirm: 'Reset all settings to Marketing OS defaults?',
+     exportFailed: 'Export failed',
+     resetFailed: 'Reset failed',
+     nav: {
+@@ -315,7 +315,7 @@ export const en: Translations = {
+         'Native desktop notifications, separate from in-app toasts. These are device-local — each computer keeps its own settings.',
+       enableAll: 'Enable notifications',
+       enableAllDesc: 'Master switch. Turn this off to silence every notification below.',
+-      focusedHint: 'Completion alerts only fire while Hermes is in the background.',
++      focusedHint: 'Completion alerts only fire while Marketing OS is in the background.',
+       kinds: {
+         approval: {
+           label: 'Approval needed',
+@@ -323,11 +323,11 @@ export const en: Translations = {
+         },
+         input: {
+           label: 'Input needed',
+-          description: 'Hermes asked a question or needs a password or secret.'
++          description: 'Marketing OS asked a question or needs a password or secret.'
+         },
+         turnDone: {
+           label: 'Response ready',
+-          description: 'A turn finished while Hermes was in the background.'
++          description: 'A turn finished while Marketing OS was in the background.'
+         },
+         turnError: {
+           label: 'Turn failed',
+@@ -339,7 +339,7 @@ export const en: Translations = {
+         }
+       },
+       test: 'Send test notification',
+-      testTitle: 'Hermes',
++      testTitle: 'Marketing OS',
+       testBody: 'Notifications are working.',
+       testSent: 'Test sent. If nothing appears, check your OS notification permissions and Focus/Do Not Disturb.',
+       testUnsupported: 'This system does not support native notifications.',
+@@ -358,7 +358,7 @@ export const en: Translations = {
+       advanced: 'Advanced'
+     },
+     searchPlaceholder: {
+-      about: 'About Hermes Desktop',
++      about: 'About Marketing OS',
+       config: 'Search settings...',
+       gateway: 'Gateway connection...',
+       keys: 'Search API keys...',
+@@ -375,7 +375,7 @@ export const en: Translations = {
+       intro:
+         'These are desktop-only display preferences. Mode controls brightness; theme controls the accent palette and chat surface styling.',
+       colorMode: 'Color Mode',
+-      colorModeDesc: 'Pick a fixed mode or let Hermes follow your system setting.',
++      colorModeDesc: 'Pick a fixed mode or let Marketing OS follow your system setting.',
+       toolViewTitle: 'Tool Call Display',
+       toolViewDesc: 'Product hides raw tool payloads; Technical shows full input/output.',
+       translucencyTitle: 'Window Translucency',
+@@ -407,9 +407,9 @@ export const en: Translations = {
+       pet: {
+         title: 'Pet',
+         intro:
+-          'Adopt an animated petdex mascot that floats over the app and reacts to what Hermes is doing — running while tools execute, celebrating on success, sulking on errors.',
++          'Adopt an animated petdex mascot that floats over the app and reacts to what Marketing OS is doing — running while tools execute, celebrating on success, sulking on errors.',
+         restartHint:
+-          'Pets need a quick restart — the running app started before this feature was added. Quit and reopen Hermes, then come back here.',
++          'Pets need a quick restart — the running app started before this feature was added. Quit and reopen Marketing OS, then come back here.',
+         on: 'On',
+         off: 'Off',
+         scaleTitle: 'Size',
+@@ -445,7 +445,7 @@ export const en: Translations = {
+     fieldLabels: FIELD_LABELS,
+     fieldDescriptions: FIELD_DESCRIPTIONS,
+     about: {
+-      heading: 'Hermes Desktop',
++      heading: 'Marketing OS',
+       version: value => `Version ${value}`,
+       versionUnavailable: 'Version unavailable',
+       updates: 'Updates',
+@@ -464,7 +464,7 @@ export const en: Translations = {
+       justNowSuffix: ' · just now',
+       automaticUpdates: 'Automatic updates',
+       automaticUpdatesDesc:
+-        'Hermes checks for updates automatically in the background and lets you know when one is ready.',
++        'Marketing OS checks for updates automatically in the background and lets you know when one is ready.',
+       branchCommit: (branch, commit) => `Branch ${branch} · Commit ${commit}`,
+       never: 'never',
+       justNow: 'just now',
+@@ -477,7 +477,7 @@ export const en: Translations = {
+       noneParen: '(none)',
+       notSet: 'Not set',
+       commaSeparated: 'comma-separated values',
+-      loading: 'Loading Hermes configuration...',
++      loading: 'Loading Marketing OS configuration...',
+       emptyTitle: 'Nothing to configure',
+       emptyDesc: 'This section has no adjustable settings.',
+       failedLoad: 'Settings failed to load',
+@@ -514,7 +514,7 @@ export const en: Translations = {
+       title: 'Gateway Connection',
+       envOverride: 'env override',
+       intro:
+-        'Hermes Desktop starts its own local gateway by default. Use a remote gateway when you want this app to control an already-running Hermes backend on another machine or behind a trusted proxy. Pick a profile below to give it its own remote host.',
++        'Marketing OS starts its own local gateway by default. Use a remote gateway when you want this app to control an already-running Marketing OS backend on another machine or behind a trusted proxy. Pick a profile below to give it its own remote host.',
+       appliesTo: 'Applies to',
+       allProfiles: 'All profiles',
+       defaultConnection: 'Default connection for every profile that has no override of its own.',
+@@ -524,10 +524,10 @@ export const en: Translations = {
+       envOverrideDesc:
+         'Unset HERMES_DESKTOP_REMOTE_URL and HERMES_DESKTOP_REMOTE_TOKEN to use the saved setting below.',
+       localTitle: 'Local gateway',
+-      localDesc: 'Start a private Hermes backend on localhost. This is the default and works offline.',
++      localDesc: 'Start a private Marketing OS backend on localhost. This is the default and works offline.',
+       remoteTitle: 'Remote gateway',
+       remoteDesc:
+-        'Connect this desktop shell to a remote Hermes backend. Hosted gateways use OAuth or a username and password; self-hosted ones may use a session token.',
++        'Connect this desktop app to a remote Marketing OS runtime. Hosted gateways use OAuth or a username and password; self-hosted ones may use a session token.',
+       remoteUrlTitle: 'Remote URL',
+       remoteUrlDesc: 'Base URL for the remote dashboard backend. Path prefixes are supported, for example /hermes.',
+       probing: 'Checking how this gateway authenticates…',
+@@ -561,9 +561,9 @@ export const en: Translations = {
+       enterUrlFirst: 'Enter a remote URL first.',
+       restartingTitle: 'Gateway connection restarting',
+       savedTitle: 'Gateway settings saved',
+-      restartingMessage: 'Hermes Desktop will reconnect using the saved settings.',
++      restartingMessage: 'Marketing OS will reconnect using the saved settings.',
+       savedMessage: 'Saved for the next restart.',
+-      connectedTo: (baseUrl, version) => `Connected to ${baseUrl}${version ? ` · Hermes ${version}` : ''}`,
++      connectedTo: (baseUrl, version) => `Connected to ${baseUrl}${version ? ` · Marketing OS ${version}` : ''}`,
+       reachableTitle: 'Remote gateway reachable',
+       signedOutTitle: 'Signed out',
+       signedOutMessage: 'Cleared the remote gateway session.',
+@@ -639,7 +639,7 @@ export const en: Translations = {
+       connectAccount: 'Connect an account',
+       haveApiKey: 'Have an API key instead?',
+       intro:
+-        'Sign in with a subscription — no API key to copy. Hermes runs the browser sign-in for you, right here in the app.',
++        'Sign in with a subscription — no API key to copy. Marketing OS runs the browser sign-in for you, right here in the app.',
+       connected: 'Connected',
+       collapse: 'Collapse',
+       connectAnother: 'Connect another provider',
+@@ -800,7 +800,7 @@ export const en: Translations = {
+       placeholder: 'Search pets…',
+       loading: 'Loading petdex gallery…',
+       error: 'Could not reach the petdex gallery.',
+-      staleBackend: 'Restart Hermes to use pets — the backend predates this feature.',
++      staleBackend: 'Restart Marketing OS to use pets — the backend predates this feature.',
+       empty: 'No matching pets.',
+       turnOff: 'Turn off',
+       turnOn: 'Turn on',
+@@ -827,8 +827,8 @@ export const en: Translations = {
+       hatchComposing: 'Piecing it together…',
+       hatchSaving: 'Almost there…',
+       namePlaceholder: 'Name your pet',
+-      staleBackend: 'Update Hermes to generate pets.',
+-      backgroundHint: 'You can close this — Hermes will notify you when it’s done.',
++      staleBackend: 'Update Marketing OS to generate pets.',
++      backgroundHint: 'You can close this — Marketing OS will notify you when it’s done.',
+       slowProviderHint: 'This can take several minutes',
+       remix: 'Remix',
+       remixConfirmTitle: 'Remix this look?',
+@@ -862,7 +862,7 @@ export const en: Translations = {
+     },
+     nav: {
+       newChat: { title: 'New session', detail: 'Start a fresh session' },
+-      settings: { title: 'Settings', detail: 'Configure Hermes desktop' },
++      settings: { title: 'Settings', detail: 'Configure Marketing OS desktop' },
+       skills: { title: 'Skills & Tools', detail: 'Enable skills, toolsets, and providers' },
+       messaging: { title: 'Messaging', detail: 'Set up Telegram, Slack, Discord, and more' },
+       artifacts: { title: 'Artifacts', detail: 'Browse generated outputs' }
+@@ -884,10 +884,10 @@ export const en: Translations = {
+     noSessions: 'No sessions yet.',
+     gatewayRunning: 'Messaging gateway running',
+     gatewayStopped: 'Messaging gateway stopped',
+-    hermesActiveSessions: (version, count) => `Hermes ${version} · Active sessions ${count}`,
++    hermesActiveSessions: (version, count) => `Marketing OS ${version} · Active sessions ${count}`,
+     restartGateway: 'Restart gateway',
+     gatewayRestartFailed: 'Gateway restart failed.',
+-    updateHermes: 'Update Hermes',
++    updateHermes: 'Update Marketing OS',
+     actionRunning: 'running',
+     actionDone: 'done',
+     actionFailed: 'failed',
+@@ -1094,7 +1094,7 @@ export const en: Translations = {
+     deleteDescMid: ' and remove its ',
+     deleteDescSuffix: ' directory. This cannot be undone.',
+     deleting: 'Deleting...',
+-    createDesc: 'Profiles are independent Hermes environments: separate config, skills, and SOUL.md.',
++    createDesc: 'Profiles are independent Marketing OS environments: separate config, skills, and SOUL.md.',
+     nameLabel: 'Name',
+     cloneFrom: 'Clone from',
+     cloneFromNone: 'None (blank)',
+@@ -1183,7 +1183,7 @@ export const en: Translations = {
+     everyHourAt: minute => `Every hour at :${minute}`,
+     newCron: 'New cron',
+     emptyDescNew:
+-      'Schedule a prompt to run on a cron expression. Hermes will run it and deliver results to the destination you pick.',
++      'Schedule a prompt to run on a cron expression. Marketing OS will run it and deliver results to the destination you pick.',
+     emptyDescSearch: 'Try a broader search query.',
+     emptyTitleNew: 'No scheduled jobs yet',
+     emptyTitleSearch: 'No matches',
+@@ -1273,6 +1273,7 @@ export const en: Translations = {
+ 
+   sidebar: {
+     nav: {
++      workbench: 'Workbench',
+       'new-session': 'New session',
+       skills: 'Skills & Tools',
+       messaging: 'Messaging',
+@@ -1328,7 +1329,7 @@ export const en: Translations = {
+       copyPath: 'Copy path',
+       removeFromSidebar: 'Hide from sidebar',
+       createFailed: 'Could not create project',
+-      deleteConfirm: 'This removes the saved project from Hermes. Files, git repos, and worktrees stay untouched.',
++      deleteConfirm: 'This removes the saved project from Marketing OS. Files, git repos, and worktrees stay untouched.',
+       startWork: 'New worktree',
+       newWorktreeTitle: 'New worktree',
+       newWorktreeDesc: 'Name the branch for this worktree.',
+@@ -1392,12 +1393,12 @@ export const en: Translations = {
+   composer: {
+     message: 'Message',
+     wakingProfile: profile => `Waking up ${profile}…`,
+-    placeholderStarting: 'Starting Hermes...',
+-    placeholderReconnecting: 'Reconnecting to Hermes…',
++    placeholderStarting: 'Starting Marketing OS...',
++    placeholderReconnecting: 'Reconnecting to Marketing OS…',
+     placeholderFollowUp: 'Send follow-up',
+     newSessionPlaceholders: [
+       'What are we building?',
+-      'Give Hermes a task',
++      'Give Marketing OS a task',
+       "What's on your mind?",
+       'Describe what you need',
+       'What should we tackle?',
+@@ -1458,7 +1459,7 @@ export const en: Translations = {
+       'composer.history': 'cycle popover / history'
+     },
+     attachUrlTitle: 'Attach a URL',
+-    attachUrlDesc: 'Hermes will fetch the page and include it as context for this turn.',
++    attachUrlDesc: 'Marketing OS will fetch the page and include it as context for this turn.',
+     urlPlaceholder: 'https://example.com/post',
+     urlHintPre: 'Include the full URL, e.g. ',
+     attach: 'Attach',
+@@ -1563,7 +1564,7 @@ export const en: Translations = {
+       createPr: 'Create PR',
+       openPr: 'Open PR',
+       ghMissing: 'Install the GitHub CLI (gh) and sign in to open PRs',
+-      agentShip: 'Ask Hermes to open PR',
++      agentShip: 'Ask Marketing OS to open PR',
+       agentShipPrompt:
+         'Review the current changes, commit them with a clear conventional-commit message, push the branch, and open a pull request.',
+       newBranch: 'New branch',
+@@ -1581,9 +1582,9 @@ export const en: Translations = {
+       fetch: 'Downloading…',
+       pull: 'Almost there…',
+       pydeps: 'Finishing up…',
+-      update: 'Updating Hermes…',
++      update: 'Updating Marketing OS…',
+       rebuild: 'Rebuilding the desktop app…',
+-      restart: 'Restarting Hermes…',
++      restart: 'Restarting Marketing OS…',
+       done: 'Update complete',
+       manual: 'Update from your terminal',
+       guiSkew: 'Update the desktop app',
+@@ -1593,33 +1594,33 @@ export const en: Translations = {
+     checkFailedTitle: 'Couldn’t check for updates',
+     tryAgain: 'Try again',
+     notAvailableTitle: 'Update not available',
+-    unsupportedMessage: 'This version of Hermes can’t update itself from inside the app.',
++    unsupportedMessage: 'This version of Marketing OS can’t update itself from inside the app.',
+     connectionRetry: 'Check your connection and try again.',
+     latestBody: 'You’re running the latest version.',
+     latestBodyBackend: 'The backend is running the latest version.',
+     allSetTitle: 'You’re all set',
+     availableTitle: 'New update available',
+-    availableBody: 'A new version of Hermes is ready to install.',
++    availableBody: 'A new version of Marketing OS is ready to install.',
+     availableTitleBackend: 'Backend update available',
+-    availableBodyBackend: 'A newer version of the connected Hermes backend is ready to install.',
++    availableBodyBackend: 'A newer version of the connected Marketing OS backend is ready to install.',
+     availableBodyNoChangelog: 'A newer version is ready. Release notes aren’t available for this install type.',
+     updateNow: 'Update now',
+     maybeLater: 'Maybe later',
+     moreChanges: count => `+ ${count} more change${count === 1 ? '' : 's'} included.`,
+     manualTitle: 'Update from your terminal',
+-    manualBody: 'You installed Hermes from the command line, so updates run there too. Paste this into your terminal:',
+-    manualPickedUp: 'Hermes will pick up the new version next time you launch it.',
++    manualBody: 'You installed Marketing OS from the command line, so updates run there too. Paste this into your terminal:',
++    manualPickedUp: 'Marketing OS will pick up the new version next time you launch it.',
+     guiSkewTitle: 'Update the desktop app',
+     guiSkewBody:
+-      'The backend was updated, but this desktop app package wasn’t changed. Update or reinstall the Hermes desktop app (your AppImage / .deb / .rpm) to match.',
++      'The backend was updated, but this desktop app package wasn’t changed. Update or reinstall the Marketing OS desktop app (your AppImage / .deb / .rpm) to match.',
+     copy: 'Copy',
+     copied: 'Copied',
+     done: 'Done',
+     applyingBody:
+-      'The Hermes updater takes over in its own window and reopens Hermes automatically when it’s done. Please don’t reopen Hermes yourself while it’s updating.',
++      'The Marketing OS updater takes over in its own window and reopens Marketing OS automatically when it’s done. Please don’t reopen Marketing OS yourself while it’s updating.',
+     applyingBodyBackend:
+-      'The remote backend is applying the update and will restart. Hermes reconnects automatically when it’s back.',
+-    applyingClose: 'This window will close while the update runs, then Hermes reopens on its own.',
++      'The remote backend is applying the update and will restart. Marketing OS reconnects automatically when it’s back.',
++    applyingClose: 'This window will close while the update runs, then Marketing OS reopens on its own.',
+     errorTitle: 'Update didn’t finish',
+     errorBody: 'No worries — nothing was lost. You can try again now.',
+     notNow: 'Not now',
+@@ -1641,7 +1642,7 @@ export const en: Translations = {
+       skipped: 'Skipped',
+       failed: 'Failed'
+     },
+-    oneTimeTitle: 'Hermes needs a one-time install',
++    oneTimeTitle: 'Marketing OS needs a one-time install',
+     unsupportedDesc: platform =>
+       `Automated first-launch install isn’t available on ${platform} yet. Open Terminal and run the command below, then relaunch this app. Subsequent launches will skip this step.`,
+     installCommand: 'Install command',
+@@ -1650,12 +1651,12 @@ export const en: Translations = {
+     installTo: 'Will install to',
+     retryAfterRun: 'I’ve run it -- retry',
+     failedTitle: 'Installation failed',
+-    settingUpTitle: 'Setting up Hermes Agent',
++    settingUpTitle: 'Setting up Marketing OS Agent',
+     finishingTitle: 'Finishing up',
+     failedDesc:
+-      'One of the install steps failed. On Windows, this can happen if another Hermes CLI or desktop instance is running. Stop any running Hermes instances, then retry. Check the details below or the desktop log for the full transcript.',
++      'One of the install steps failed. On Windows, this can happen if another Marketing OS CLI or desktop instance is running. Stop any running Marketing OS instances, then retry. Check the details below or the desktop log for the full transcript.',
+     activeDesc:
+-      'This is a one-time setup. The Hermes installer is downloading dependencies and configuring your machine. Subsequent launches will skip this step.',
++      'This is a one-time setup. The Marketing OS installer is downloading dependencies and configuring your machine. Subsequent launches will skip this step.',
+     progress: (completed, total) => `${completed} of ${total} steps complete`,
+     currentStage: stage => ` -- now: ${stage}`,
+     fetchingManifest: 'Fetching installer manifest...',
+@@ -1673,10 +1674,10 @@ export const en: Translations = {
+   },
+ 
+   onboarding: {
+-    headerTitle: "Let's get you setup with Hermes Agent",
++    headerTitle: "Let's get you setup with Marketing OS Agent",
+     headerDesc: 'Connect a model provider to start chatting. Most options take one click.',
+-    preparingInstall: 'Hermes is finishing install. This usually takes under a minute on first run.',
+-    starting: 'Starting Hermes…',
++    preparingInstall: 'Marketing OS is finishing install. This usually takes under a minute on first run.',
++    starting: 'Starting Marketing OS…',
+     lookingUpProviders: 'Looking up providers...',
+     collapse: 'Collapse',
+     otherProviders: 'Other providers',
+@@ -1684,7 +1685,7 @@ export const en: Translations = {
+     chooseLater: "I'll choose a provider later",
+     recommended: 'Recommended',
+     connected: 'Connected',
+-    featuredPitch: 'One subscription, 300+ frontier models — the recommended way to run Hermes',
++    featuredPitch: 'One subscription, 300+ frontier models — the recommended way to run Marketing OS',
+     openRouterPitch: 'One key, hundreds of models — a solid default',
+     apiKeyOptions: {
+       openrouter: {
+@@ -1696,7 +1697,7 @@ export const en: Translations = {
+       xai: { short: 'Grok models', description: 'Direct access to xAI Grok models.' },
+       local: {
+         short: 'self-hosted',
+-        description: 'Point Hermes at a local or self-hosted OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, etc).'
++        description: 'Point Marketing OS at a local or self-hosted OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, etc).'
+       }
+     },
+     backToSignIn: 'Back to sign in',
+@@ -1709,8 +1710,8 @@ export const en: Translations = {
+     update: 'Update',
+     flowSubtitles: {
+       pkce: 'Opens your browser to sign in, then continues here',
+-      device_code: 'Opens a verification page in your browser — Hermes connects automatically',
+-      loopback: 'Opens your browser to sign in — Hermes connects automatically',
++      device_code: 'Opens a verification page in your browser — Marketing OS connects automatically',
++      loopback: 'Opens your browser to sign in — Marketing OS connects automatically',
+       external: 'Sign in once in your terminal, then come back to chat'
+     },
+     startingSignIn: provider => `Starting sign-in for ${provider}...`,
+@@ -1721,12 +1722,12 @@ export const en: Translations = {
+     pickDifferentProvider: 'Pick a different provider',
+     signInWith: provider => `Sign in with ${provider}`,
+     openedBrowser: provider => `We opened ${provider} in your browser.`,
+-    authorizeThere: 'Authorize Hermes there.',
++    authorizeThere: 'Authorize Marketing OS there.',
+     copyAuthCode: 'Copy the authorization code and paste it below.',
+     pasteAuthCode: 'Paste authorization code',
+     reopenAuthPage: 'Re-open authorization page',
+     autoBrowser: provider =>
+-      `We opened ${provider} in your browser. Authorize Hermes there and you'll be connected automatically — nothing to copy or paste.`,
++      `We opened ${provider} in your browser. Authorize Marketing OS there and you'll be connected automatically — nothing to copy or paste.`,
+     reopenSignInPage: 'Re-open sign-in page',
+     waitingAuthorize: 'Waiting for you to authorize...',
+     externalPending: provider =>
+@@ -1815,7 +1816,7 @@ export const en: Translations = {
+       update: 'update',
+       updateInProgress: 'Update in progress',
+       commitsBehind: (count, branch) => `${count} commit${count === 1 ? '' : 's'} behind ${branch}`,
+-      desktopVersion: version => `Hermes Desktop v${version}`,
++      desktopVersion: version => `Marketing OS v${version}`,
+       backendVersion: version => `Backend v${version}`,
+       clientLabel: version => `client v${version}`,
+       backendLabel: version => `backend v${version}`,
+@@ -1832,7 +1833,7 @@ export const en: Translations = {
+       gatewayConnecting: 'connecting',
+       gatewayOffline: 'offline',
+       gatewayRestarting: 'restarting…',
+-      gatewayTitle: 'Hermes inference gateway status',
++      gatewayTitle: 'Marketing OS inference gateway status',
+       agents: 'Agents',
+       closeAgents: 'Close agents',
+       openAgents: 'Open agents',
+@@ -1916,7 +1917,7 @@ export const en: Translations = {
+     binaryTitle: 'This looks like a binary file',
+     binaryBody: label => `Previewing ${label} may show unreadable text.`,
+     largeTitle: 'This file is large',
+-    largeBody: (label, size) => `${label} is ${size}. Hermes will only show the first 512 KB.`,
++    largeBody: (label, size) => `${label} is ${size}. Marketing OS will only show the first 512 KB.`,
+     previewAnyway: 'Preview anyway',
+     truncated: 'Showing first 512 KB.',
+     noInlineTitle: 'No inline preview',
+@@ -1955,26 +1956,26 @@ export const en: Translations = {
+       serverNotFound: 'Server not found',
+       failedToLoad: 'Preview failed to load',
+       tryAgain: 'Try again',
+-      restarting: 'Hermes is restarting...',
+-      askRestart: 'Ask Hermes to restart the server',
+-      lookingRestart: taskId => `Hermes is looking for a preview server to restart (${taskId})`,
++      restarting: 'Marketing OS is restarting...',
++      askRestart: 'Ask Marketing OS to restart the server',
++      lookingRestart: taskId => `Marketing OS is looking for a preview server to restart (${taskId})`,
+       restartingTitle: 'Restarting preview server',
+-      restartingMessage: 'Hermes is working in the background. Watch the preview console for progress.',
++      restartingMessage: 'Marketing OS is working in the background. Watch the preview console for progress.',
+       startRestartFailed: message => `Could not start server restart: ${message}`,
+       restartFailed: 'Server restart failed',
+       hideConsole: 'Hide preview console',
+       showConsole: 'Show preview console',
+       hideDevTools: 'Hide preview DevTools',
+       openDevTools: 'Open preview DevTools',
+-      finishedRestarting: message => `Hermes finished restarting the preview server${message ? `: ${message}` : ''}`,
++      finishedRestarting: message => `Marketing OS finished restarting the preview server${message ? `: ${message}` : ''}`,
+       failedRestarting: message => `Server restart failed: ${message}`,
+       unknownError: 'unknown error',
+       restartedTitle: 'Preview server restarted',
+       reloadingNow: 'Reloading the preview now.',
+       restartFailedTitle: 'Preview restart failed',
+-      restartFailedMessage: 'Hermes could not restart the server.',
++      restartFailedMessage: 'Marketing OS could not restart the server.',
+       stillWorking:
+-        'Hermes is still working, but no restart result has arrived yet. The server command may be running in the foreground.',
++        'Marketing OS is still working, but no restart result has arrived yet. The server command may be running in the foreground.',
+       workspaceReloading: 'Workspace changed, reloading preview',
+       fileChanged: url => `File changed, reloading preview: ${url}`,
+       filesChanged: (count, url) => `${count} file changes, reloading preview: ${url}`,
+@@ -1992,7 +1993,7 @@ export const en: Translations = {
+     thread: {
+       loadingSession: 'Loading session',
+       showEarlier: 'Show earlier messages',
+-      loadingResponse: 'Hermes is loading a response',
++      loadingResponse: 'Marketing OS is loading a response',
+       resumeWhenBackgroundDone: count =>
+         count === 1
+           ? 'Will resume when the background task finishes'
+@@ -2025,7 +2026,7 @@ export const en: Translations = {
+       attachingFile: 'Attaching…'
+     },
+     approval: {
+-      gatewayDisconnected: 'Hermes gateway is not connected',
++      gatewayDisconnected: 'Marketing OS gateway is not connected',
+       sendFailed: 'Could not send approval response',
+       run: 'Run',
+       command: 'Command',
+@@ -2036,12 +2037,12 @@ export const en: Translations = {
+       reject: 'Reject',
+       alwaysTitle: 'Always allow this command?',
+       alwaysDescription: pattern =>
+-        `This adds the “${pattern}” pattern to your permanent allowlist (~/.hermes/config.yaml). Hermes won’t ask again for commands like this — in this session or any future one.`,
++        `This adds the “${pattern}” pattern to your permanent allowlist (~/.hermes/config.yaml). Marketing OS won’t ask again for commands like this — in this session or any future one.`,
+       alwaysAllow: 'Always allow'
+     },
+     clarify: {
+       notReady: 'Clarify request is not ready yet',
+-      gatewayDisconnected: 'Hermes gateway is not connected',
++      gatewayDisconnected: 'Marketing OS gateway is not connected',
+       sendFailed: 'Could not send clarify response',
+       loadingQuestion: 'Loading question…',
+       other: 'Other (type your answer)',
+@@ -2137,14 +2138,14 @@ export const en: Translations = {
+   },
+ 
+   prompts: {
+-    gatewayDisconnected: 'Hermes gateway is not connected',
++    gatewayDisconnected: 'Marketing OS gateway is not connected',
+     sudoSendFailed: 'Could not send sudo password',
+     secretSendFailed: 'Could not send secret',
+     sudoTitle: 'Administrator password',
+-    sudoDesc: 'Hermes needs your sudo password to run a privileged command. It is sent only to your local agent.',
++    sudoDesc: 'Marketing OS needs your sudo password to run a privileged command. It is sent only to your local agent.',
+     sudoPlaceholder: 'sudo password',
+     secretTitle: 'Secret required',
+-    secretDesc: 'Hermes needs a credential to continue.',
++    secretDesc: 'Marketing OS needs a credential to continue.',
+     secretPlaceholder: 'secret value'
+   },
+ 
+@@ -2196,8 +2197,8 @@ export const en: Translations = {
+     sessionExportFailed: 'Could not export session',
+     imageSaved: 'Image saved',
+     downloadStarted: 'Download started',
+-    restartToUseSaveImage: 'Restart Hermes Desktop to use Save Image.',
+-    restartToSaveImages: 'Restart Hermes Desktop to save images',
++    restartToUseSaveImage: 'Restart Marketing OS to use Save Image.',
++    restartToSaveImages: 'Restart Marketing OS to save images',
+     imageDownloadFailed: 'Image download failed',
+     openImage: 'Open image',
+     downloadImage: 'Download image',
+diff --git a/apps/desktop/src/i18n/ja.ts b/apps/desktop/src/i18n/ja.ts
+index e407c4548..606b21eae 100644
+--- a/apps/desktop/src/i18n/ja.ts
++++ b/apps/desktop/src/i18n/ja.ts
+@@ -59,18 +59,18 @@ export const ja = defineLocale({
+   },
+ 
+   boot: {
+-    ready: 'Hermes Desktop の準備ができました',
++    ready: 'Marketing OS の準備ができました',
+     desktopBootFailedWithMessage: message => `デスクトップの起動に失敗しました: ${message}`,
+     steps: {
+       connectingGateway: 'ライブデスクトップゲートウェイに接続中',
+-      loadingSettings: 'Hermes の設定を読み込み中',
++      loadingSettings: 'Marketing OS の設定を読み込み中',
+       loadingSessions: '最近のセッションを読み込み中',
+       startingDesktopConnection: 'デスクトップ接続を開始中',
+-      startingHermesDesktop: 'Hermes Desktop を起動中…'
++      startingHermesDesktop: 'Marketing OS を起動中…'
+     },
+     errors: {
+-      backgroundExited: 'Hermes バックグラウンドプロセスが終了しました。',
+-      backgroundExitedDuringStartup: '起動中に Hermes バックグラウンドプロセスが終了しました。',
++      backgroundExited: 'Marketing OS バックグラウンドプロセスが終了しました。',
++      backgroundExitedDuringStartup: '起動中に Marketing OS バックグラウンドプロセスが終了しました。',
+       backendStopped: 'バックエンドが停止しました',
+       desktopBootFailed: 'デスクトップの起動に失敗しました',
+       gatewayConnectionLost: 'ゲートウェイへの接続が切断されました',
+@@ -78,7 +78,7 @@ export const ja = defineLocale({
+       ipcBridgeUnavailable: 'デスクトップ IPC ブリッジが利用できません。'
+     },
+     failure: {
+-      title: 'Hermes を起動できませんでした',
++      title: 'Marketing OS を起動できませんでした',
+       description:
+         'バックグラウンドゲートウェイが起動しませんでした。以下の回復手順をお試しください。チャットや設定は削除されません。',
+       remoteTitle: 'リモートゲートウェイへのサインインが必要です',
+@@ -116,8 +116,8 @@ export const ja = defineLocale({
+     copyDetailFailed: '通知の詳細をコピーできませんでした',
+     backendOutOfDateTitle: 'バックエンドが古いです',
+     backendOutOfDateMessage:
+-      'Hermes バックエンドがこのデスクトップビルドより古く、正常に動作しない場合があります。更新して揃えてください。',
+-    updateHermes: 'Hermes を更新',
++      'Marketing OS バックエンドがこのデスクトップビルドより古く、正常に動作しない場合があります。更新して揃えてください。',
++    updateHermes: 'Marketing OS を更新',
+     updateReadyTitle: '更新の準備ができました',
+     updateReadyMessage: count => `${count} 件の新しい変更が利用可能です。`,
+     seeWhatsNew: '新機能を見る',
+@@ -125,7 +125,7 @@ export const ja = defineLocale({
+       elevenLabsNeedsKey: 'ElevenLabs STT には ELEVENLABS_API_KEY が必要です。',
+       elevenLabsRejectedKey: 'ElevenLabs が API キーを拒否しました (401)。',
+       methodNotAllowed:
+-        'デスクトップバックエンドがそのリクエストを拒否しました (405 Method Not Allowed)。Hermes Desktop を再起動してください。',
++        'デスクトップバックエンドがそのリクエストを拒否しました (405 Method Not Allowed)。Marketing OS を再起動してください。',
+       microphonePermission: 'マイクのアクセス許可が拒否されました。',
+       openaiRejectedApiKey: 'OpenAI が API キーを拒否しました。',
+       openaiRejectedApiKeyWithStatus: status => `OpenAI が API キーを拒否しました (${status} invalid_api_key)。`,
+@@ -155,8 +155,8 @@ export const ja = defineLocale({
+       approveAction: '承認',
+       rejectAction: '拒否',
+       inputTitle: '入力が必要です',
+-      inputBody: 'Hermes が応答を待っています。',
+-      turnDoneTitle: 'Hermes が完了しました',
++      inputBody: 'Marketing OS が応答を待っています。',
++      turnDoneTitle: 'Marketing OS が完了しました',
+       turnDoneBody: '応答の準備ができました。',
+       turnErrorTitle: 'ターンが失敗しました',
+       backgroundDoneTitle: 'バックグラウンドタスクが完了しました',
+@@ -199,7 +199,7 @@ export const ja = defineLocale({
+     exportConfig: '設定を書き出す',
+     importConfig: '設定を読み込む',
+     resetToDefaults: 'デフォルトに戻す',
+-    resetConfirm: 'すべての設定を Hermes のデフォルトに戻しますか？',
++    resetConfirm: 'すべての設定を Marketing OS のデフォルトに戻しますか？',
+     exportFailed: '書き出しに失敗しました',
+     resetFailed: 'リセットに失敗しました',
+     nav: {
+@@ -220,7 +220,7 @@ export const ja = defineLocale({
+       intro: 'アプリ内トーストとは別の、ネイティブのデスクトップ通知です。設定は端末ごとに保存されます。',
+       enableAll: '通知を有効にする',
+       enableAllDesc: 'マスタースイッチ。オフにすると以下のすべての通知を無効にします。',
+-      focusedHint: '完了通知は Hermes がバックグラウンドにあるときのみ表示されます。',
++      focusedHint: '完了通知は Marketing OS がバックグラウンドにあるときのみ表示されます。',
+       kinds: {
+         approval: {
+           label: '承認が必要',
+@@ -228,11 +228,11 @@ export const ja = defineLocale({
+         },
+         input: {
+           label: '入力が必要',
+-          description: 'Hermes が質問したか、パスワードやシークレットを必要としています。'
++          description: 'Marketing OS が質問したか、パスワードやシークレットを必要としています。'
+         },
+         turnDone: {
+           label: '応答完了',
+-          description: 'Hermes がバックグラウンドのときにターンが完了しました。'
++          description: 'Marketing OS がバックグラウンドのときにターンが完了しました。'
+         },
+         turnError: {
+           label: 'ターン失敗',
+@@ -244,7 +244,7 @@ export const ja = defineLocale({
+         }
+       },
+       test: 'テスト通知を送信',
+-      testTitle: 'Hermes',
++      testTitle: 'Marketing OS',
+       testBody: '通知は正常に動作しています。',
+       testSent:
+         'テストを送信しました。表示されない場合は、OS の通知許可と集中モード／おやすみモードを確認してください。',
+@@ -264,7 +264,7 @@ export const ja = defineLocale({
+       advanced: '詳細'
+     },
+     searchPlaceholder: {
+-      about: 'Hermes Desktop について',
++      about: 'Marketing OS について',
+       config: '設定を検索…',
+       gateway: 'ゲートウェイ接続…',
+       keys: 'API キーを検索…',
+@@ -281,7 +281,7 @@ export const ja = defineLocale({
+       intro:
+         'デスクトップ専用の表示設定です。モードは明るさ、テーマはアクセントカラーとチャット面のスタイルを制御します。',
+       colorMode: 'カラーモード',
+-      colorModeDesc: '固定モードを選ぶか、Hermes をシステム設定に合わせます。',
++      colorModeDesc: '固定モードを選ぶか、Marketing OS をシステム設定に合わせます。',
+       toolViewTitle: 'ツール呼び出しの表示',
+       toolViewDesc: 'プロダクト表示は生のツールペイロードを隠し、テクニカル表示は入出力をすべて表示します。',
+       translucencyTitle: 'ウィンドウの透過',
+@@ -314,9 +314,9 @@ export const ja = defineLocale({
+       pet: {
+         title: 'ペット',
+         intro:
+-          'アプリ上に浮かぶ petdex のアニメーションマスコットを採用しましょう。ツール実行中は走り、成功すると喜び、エラーでしょんぼりと、Hermes の状態に反応します。',
++          'アプリ上に浮かぶ petdex のアニメーションマスコットを採用しましょう。ツール実行中は走り、成功すると喜び、エラーでしょんぼりと、Marketing OS の状態に反応します。',
+         restartHint:
+-          'ペット機能には再起動が必要です。この機能が追加される前に起動したアプリが動作中です。Hermes を終了して再度開き、このページに戻ってください。',
++          'ペット機能には再起動が必要です。この機能が追加される前に起動したアプリが動作中です。Marketing OS を終了して再度開き、このページに戻ってください。',
+         scaleTitle: 'サイズ',
+         scaleDesc: '浮遊マスコットの大きさを変更します。すべての画面に即時反映されます。',
+         on: 'オン',
+@@ -510,10 +510,10 @@ export const ja = defineLocale({
+         showReasoning: 'バックエンドが推論内容を提供したときに表示します。'
+       },
+       timezone:
+-        'Hermes がローカル時刻のコンテキストを必要とするときに使用します。空欄ならシステムのタイムゾーンを使います。',
++        'Marketing OS がローカル時刻のコンテキストを必要とするときに使用します。空欄ならシステムのタイムゾーンを使います。',
+       agent: {
+         imageInputMode: '画像添付をモデルへ送る方法を制御します。',
+-        maxTurns: 'Hermes が 1 回の実行を停止するまでのツール呼び出しターン上限です。'
++        maxTurns: 'Marketing OS が 1 回の実行を停止するまでのツール呼び出しターン上限です。'
+       },
+       terminal: {
+         cwd: 'ツールとターミナル作業のデフォルトプロジェクトフォルダーです。',
+@@ -523,9 +523,9 @@ export const ja = defineLocale({
+       codeExecution: {
+         mode: 'コード実行を現在のプロジェクトにどれだけ厳密に制限するかを設定します。'
+       },
+-      fileReadMaxChars: 'Hermes が 1 回のファイル読み取りで取得できる最大文字数です。',
++      fileReadMaxChars: 'Marketing OS が 1 回のファイル読み取りで取得できる最大文字数です。',
+       approvals: {
+-        mode: '明示的な承認が必要なコマンドを Hermes がどう扱うかを設定します。',
++        mode: '明示的な承認が必要なコマンドを Marketing OS がどう扱うかを設定します。',
+         timeout: '承認プロンプトがタイムアウトするまで待つ時間です。'
+       },
+       security: {
+@@ -555,11 +555,11 @@ export const ja = defineLocale({
+       },
+       updates: {
+         nonInteractiveLocalChanges:
+-          'アプリから Hermes 自身を更新するとき、ローカルのソース変更を保持するか破棄するかを選びます。ターミナル更新では常に確認されます。'
++          'アプリから Marketing OS 自身を更新するとき、ローカルのソース変更を保持するか破棄するかを選びます。ターミナル更新では常に確認されます。'
+       }
+     }),
+     about: {
+-      heading: 'Hermes Desktop',
++      heading: 'Marketing OS',
+       version: value => `バージョン ${value}`,
+       versionUnavailable: 'バージョンを取得できません',
+       updates: '更新',
+@@ -577,7 +577,7 @@ export const ja = defineLocale({
+       lastChecked: age => `前回確認: ${age}`,
+       justNowSuffix: ' · たった今',
+       automaticUpdates: '自動更新',
+-      automaticUpdatesDesc: 'Hermes はバックグラウンドで自動的に更新を確認し、利用可能になったら通知します。',
++      automaticUpdatesDesc: 'Marketing OS はバックグラウンドで自動的に更新を確認し、利用可能になったら通知します。',
+       branchCommit: (branch, commit) => `ブランチ ${branch} · コミット ${commit}`,
+       never: '未確認',
+       justNow: 'たった今',
+@@ -590,7 +590,7 @@ export const ja = defineLocale({
+       noneParen: '(なし)',
+       notSet: '未設定',
+       commaSeparated: 'カンマ区切りの値',
+-      loading: 'Hermes の設定を読み込み中...',
++      loading: 'Marketing OS の設定を読み込み中...',
+       emptyTitle: '設定項目がありません',
+       emptyDesc: 'このセクションには調整できる設定がありません。',
+       failedLoad: '設定の読み込みに失敗しました',
+@@ -627,7 +627,7 @@ export const ja = defineLocale({
+       title: 'ゲートウェイ接続',
+       envOverride: 'env オーバーライド',
+       intro:
+-        'Hermes Desktop はデフォルトで独自のローカルゲートウェイを起動します。別のマシンや信頼できるプロキシの背後で既に動作している Hermes バックエンドをこのアプリで制御する場合は、リモートゲートウェイを使用してください。以下でプロファイルを選択して、それぞれのリモートホストを設定します。',
++        'Marketing OS はデフォルトで独自のローカルゲートウェイを起動します。別のマシンや信頼できるプロキシの背後で既に動作している Marketing OS バックエンドをこのアプリで制御する場合は、リモートゲートウェイを使用してください。以下でプロファイルを選択して、それぞれのリモートホストを設定します。',
+       appliesTo: '適用対象',
+       allProfiles: 'すべてのプロファイル',
+       defaultConnection: '独自のオーバーライドがないすべてのプロファイルのデフォルト接続。',
+@@ -638,10 +638,10 @@ export const ja = defineLocale({
+         '保存された設定を使用するには HERMES_DESKTOP_REMOTE_URL と HERMES_DESKTOP_REMOTE_TOKEN の設定を解除してください。',
+       localTitle: 'ローカルゲートウェイ',
+       localDesc:
+-        'ローカルホストでプライベートな Hermes バックエンドを起動します。これがデフォルトで、オフラインでも動作します。',
++        'ローカルホストでプライベートな Marketing OS バックエンドを起動します。これがデフォルトで、オフラインでも動作します。',
+       remoteTitle: 'リモートゲートウェイ',
+       remoteDesc:
+-        'このデスクトップシェルをリモートの Hermes バックエンドに接続します。ホスト型ゲートウェイは OAuth またはユーザー名とパスワードを使用します。自己ホスト型はセッショントークンを使用する場合があります。',
++        'このデスクトップシェルをリモートの Marketing OS バックエンドに接続します。ホスト型ゲートウェイは OAuth またはユーザー名とパスワードを使用します。自己ホスト型はセッショントークンを使用する場合があります。',
+       remoteUrlTitle: 'リモート URL',
+       remoteUrlDesc:
+         'リモートダッシュボードバックエンドのベース URL。/hermes などのパスプレフィックスもサポートしています。',
+@@ -680,9 +680,9 @@ export const ja = defineLocale({
+       enterUrlFirst: '最初にリモート URL を入力してください。',
+       restartingTitle: 'ゲートウェイ接続を再起動中',
+       savedTitle: 'ゲートウェイ設定を保存しました',
+-      restartingMessage: 'Hermes Desktop は保存された設定を使用して再接続します。',
++      restartingMessage: 'Marketing OS は保存された設定を使用して再接続します。',
+       savedMessage: '次回起動時に保存されます。',
+-      connectedTo: (baseUrl, version) => `${baseUrl}${version ? ` · Hermes ${version}` : ''} に接続しました`,
++      connectedTo: (baseUrl, version) => `${baseUrl}${version ? ` · Marketing OS ${version}` : ''} に接続しました`,
+       reachableTitle: 'リモートゲートウェイに到達可能',
+       signedOutTitle: 'サインアウトしました',
+       signedOutMessage: 'リモートゲートウェイセッションをクリアしました。',
+@@ -756,7 +756,7 @@ export const ja = defineLocale({
+       connectAccount: 'アカウントを接続',
+       haveApiKey: 'API キーをお持ちですか？',
+       intro:
+-        'サブスクリプションでサインインします。API キーのコピーは不要です。Hermes がアプリ内でブラウザーサインインを代行します。',
++        'サブスクリプションでサインインします。API キーのコピーは不要です。Marketing OS がアプリ内でブラウザーサインインを代行します。',
+       connected: '接続済み',
+       collapse: '折りたたむ',
+       connectAnother: '別のプロバイダーを接続',
+@@ -912,7 +912,7 @@ export const ja = defineLocale({
+       placeholder: 'ペットを検索…',
+       loading: 'petdex ギャラリーを読み込み中…',
+       error: 'petdex ギャラリーに接続できません。',
+-      staleBackend: 'ペット機能を使うには Hermes を再起動してください。',
++      staleBackend: 'ペット機能を使うには Marketing OS を再起動してください。',
+       empty: '一致するペットがありません。',
+       turnOff: 'オフ',
+       turnOn: 'オン',
+@@ -939,8 +939,8 @@ export const ja = defineLocale({
+       hatchComposing: 'まとめています…',
+       hatchSaving: 'もうすぐです…',
+       namePlaceholder: 'ペットに名前を付ける',
+-      staleBackend: 'ペットを生成するには Hermes を更新してください。',
+-      backgroundHint: 'このウィンドウは閉じても大丈夫です。完了したら Hermes が通知します。',
++      staleBackend: 'ペットを生成するには Marketing OS を更新してください。',
++      backgroundHint: 'このウィンドウは閉じても大丈夫です。完了したら Marketing OS が通知します。',
+       slowProviderHint: '数分かかることがあります',
+       remix: 'リミックス',
+       remixConfirmTitle: 'この見た目でリミックスしますか？',
+@@ -973,7 +973,7 @@ export const ja = defineLocale({
+     },
+     nav: {
+       newChat: { title: '新しいセッション', detail: '新しいセッションを開始' },
+-      settings: { title: '設定', detail: 'Hermes デスクトップを設定' },
++      settings: { title: '設定', detail: 'Marketing OS デスクトップを設定' },
+       skills: { title: 'スキルとツール', detail: 'スキル、ツールセット、プロバイダーを有効化' },
+       messaging: { title: 'メッセージング', detail: 'Telegram、Slack、Discord などを設定' },
+       artifacts: { title: 'アーティファクト', detail: '生成された出力を閲覧' }
+@@ -995,10 +995,10 @@ export const ja = defineLocale({
+     noSessions: 'セッションはまだありません。',
+     gatewayRunning: 'メッセージングゲートウェイが実行中',
+     gatewayStopped: 'メッセージングゲートウェイが停止中',
+-    hermesActiveSessions: (version, count) => `Hermes ${version} · アクティブセッション ${count}`,
++    hermesActiveSessions: (version, count) => `Marketing OS ${version} · アクティブセッション ${count}`,
+     restartGateway: 'ゲートウェイを再起動',
+     gatewayRestartFailed: 'ゲートウェイの再起動に失敗しました。',
+-    updateHermes: 'Hermes を更新',
++    updateHermes: 'Marketing OS を更新',
+     actionRunning: '実行中',
+     actionDone: '完了',
+     actionFailed: '失敗',
+@@ -1213,7 +1213,7 @@ export const ja = defineLocale({
+     deleteDescMid: ' が削除され、その ',
+     deleteDescSuffix: ' ディレクトリが削除されます。この操作は元に戻せません。',
+     deleting: '削除中...',
+-    createDesc: 'プロファイルは独立した Hermes 環境です：設定、スキル、SOUL.md が別々になります。',
++    createDesc: 'プロファイルは独立した Marketing OS 環境です：設定、スキル、SOUL.md が別々になります。',
+     nameLabel: '名前',
+     cloneFrom: '複製元',
+     cloneFromNone: 'なし（空）',
+@@ -1302,7 +1302,7 @@ export const ja = defineLocale({
+     everyHourAt: minute => `毎時 :${minute} に`,
+     newCron: '新しい Cron',
+     emptyDescNew:
+-      'Cron 式でプロンプトを実行するスケジュールを設定します。Hermes が実行して、選択した宛先に結果を送信します。',
++      'Cron 式でプロンプトを実行するスケジュールを設定します。Marketing OS が実行して、選択した宛先に結果を送信します。',
+     emptyDescSearch: '検索キーワードを広げてください。',
+     emptyTitleNew: 'スケジュールされたジョブがまだありません',
+     emptyTitleSearch: '一致なし',
+@@ -1393,6 +1393,7 @@ export const ja = defineLocale({
+ 
+   sidebar: {
+     nav: {
++      workbench: 'ワークベンチ',
+       'new-session': '新しいセッション',
+       skills: 'スキルとツール',
+       messaging: 'メッセージング',
+@@ -1449,7 +1450,7 @@ export const ja = defineLocale({
+       removeFromSidebar: 'サイドバーから削除',
+       createFailed: 'プロジェクトを作成できませんでした',
+       deleteConfirm:
+-        'Hermes から保存済みプロジェクトを削除します。ファイル・git リポジトリ・ワークツリーはそのまま残ります。',
++        'Marketing OS から保存済みプロジェクトを削除します。ファイル・git リポジトリ・ワークツリーはそのまま残ります。',
+       startWork: '新しいワークツリー',
+       newWorktreeTitle: '新しいワークツリー',
+       newWorktreeDesc: 'このワークツリーのブランチ名を入力してください。',
+@@ -1510,12 +1511,12 @@ export const ja = defineLocale({
+   composer: {
+     message: 'メッセージ',
+     wakingProfile: profile => `${profile} を起動中…`,
+-    placeholderStarting: 'Hermes を起動中...',
+-    placeholderReconnecting: 'Hermes に再接続中…',
++    placeholderStarting: 'Marketing OS を起動中...',
++    placeholderReconnecting: 'Marketing OS に再接続中…',
+     placeholderFollowUp: 'フォローアップを送信',
+     newSessionPlaceholders: [
+       '何を作りますか？',
+-      'Hermes にタスクを与える',
++      'Marketing OS にタスクを与える',
+       '何か考えていることはありますか？',
+       '必要なことを説明してください',
+       '何に取り組みますか？',
+@@ -1575,7 +1576,7 @@ export const ja = defineLocale({
+       'composer.history': 'ポップオーバー / 履歴を切り替え'
+     },
+     attachUrlTitle: 'URL を添付',
+-    attachUrlDesc: 'Hermes がページを取得し、このターンのコンテキストとして含めます。',
++    attachUrlDesc: 'Marketing OS がページを取得し、このターンのコンテキストとして含めます。',
+     urlPlaceholder: 'https://example.com/post',
+     urlHintPre: '完全な URL を入力してください。例: ',
+     attach: '添付',
+@@ -1681,7 +1682,7 @@ export const ja = defineLocale({
+       createPr: 'PR を作成',
+       openPr: 'PR を開く',
+       ghMissing: 'PR を開くには GitHub CLI (gh) をインストールしてサインインしてください',
+-      agentShip: 'Hermes にコミットと PR を任せる',
++      agentShip: 'Marketing OS にコミットと PR を任せる',
+       agentShipPrompt:
+         '現在の変更を確認し、分かりやすい Conventional Commits 形式でコミットし、ブランチをプッシュして、プルリクエストを作成してください。',
+       newBranch: '新しいブランチ',
+@@ -1699,9 +1700,9 @@ export const ja = defineLocale({
+       fetch: 'ダウンロード中…',
+       pull: 'もうすぐ完了…',
+       pydeps: '仕上げ中…',
+-      update: 'Hermes を更新中…',
++      update: 'Marketing OS を更新中…',
+       rebuild: 'デスクトップアプリを再ビルド中…',
+-      restart: 'Hermes を再起動中…',
++      restart: 'Marketing OS を再起動中…',
+       done: '更新が完了しました',
+       manual: 'ターミナルから更新',
+       guiSkew: 'デスクトップアプリを更新してください',
+@@ -1711,15 +1712,15 @@ export const ja = defineLocale({
+     checkFailedTitle: '更新を確認できませんでした',
+     tryAgain: '再試行',
+     notAvailableTitle: '更新は利用できません',
+-    unsupportedMessage: 'このバージョンの Hermes はアプリ内から自分を更新できません。',
++    unsupportedMessage: 'このバージョンの Marketing OS はアプリ内から自分を更新できません。',
+     connectionRetry: '接続を確認してもう一度試してください。',
+     latestBody: '最新バージョンを実行しています。',
+     latestBodyBackend: 'バックエンドは最新バージョンを実行しています。',
+     allSetTitle: '準備完了',
+     availableTitle: '新しい更新が利用可能',
+-    availableBody: '新しいバージョンの Hermes をインストールする準備ができています。',
++    availableBody: '新しいバージョンの Marketing OS をインストールする準備ができています。',
+     availableTitleBackend: 'バックエンドの更新があります',
+-    availableBodyBackend: '接続中の Hermes バックエンドの新しいバージョンをインストールできます。',
++    availableBodyBackend: '接続中の Marketing OS バックエンドの新しいバージョンをインストールできます。',
+     availableBodyNoChangelog:
+       '新しいバージョンを利用できます。このインストール形式ではリリースノートは表示できません。',
+     updateNow: '今すぐ更新',
+@@ -1727,18 +1728,18 @@ export const ja = defineLocale({
+     moreChanges: count => `さらに ${count} 件の変更が含まれています。`,
+     manualTitle: 'ターミナルから更新',
+     manualBody:
+-      'Hermes をコマンドラインからインストールしたため、更新もそこで実行されます。これをターミナルに貼り付けてください:',
+-    manualPickedUp: 'Hermes は次回起動時に新しいバージョンを読み込みます。',
++      'Marketing OS をコマンドラインからインストールしたため、更新もそこで実行されます。これをターミナルに貼り付けてください:',
++    manualPickedUp: 'Marketing OS は次回起動時に新しいバージョンを読み込みます。',
+     guiSkewTitle: 'デスクトップアプリを更新してください',
+     guiSkewBody:
+-      'バックエンドは更新されましたが、このデスクトップアプリのパッケージは変更されていません。一致させるために Hermes デスクトップアプリ（AppImage / .deb / .rpm）を更新または再インストールしてください。',
++      'バックエンドは更新されましたが、このデスクトップアプリのパッケージは変更されていません。一致させるために Marketing OS デスクトップアプリ（AppImage / .deb / .rpm）を更新または再インストールしてください。',
+     copy: 'コピー',
+     copied: 'コピーしました',
+     done: '完了',
+     applyingBody:
+-      'Hermes アップデーターが独自のウィンドウで引き継ぎ、完了後に自動的に Hermes を再度開きます。更新中はご自分で Hermes を開き直さないでください。',
+-    applyingBodyBackend: 'リモートバックエンドが更新を適用して再起動します。復帰すると Hermes が自動的に再接続します。',
+-    applyingClose: 'このウィンドウは更新中に閉じ、その後 Hermes が自動的に再度開きます。',
++      'Marketing OS アップデーターが独自のウィンドウで引き継ぎ、完了後に自動的に Marketing OS を再度開きます。更新中はご自分で Marketing OS を開き直さないでください。',
++    applyingBodyBackend: 'リモートバックエンドが更新を適用して再起動します。復帰すると Marketing OS が自動的に再接続します。',
++    applyingClose: 'このウィンドウは更新中に閉じ、その後 Marketing OS が自動的に再度開きます。',
+     errorTitle: '更新が完了しませんでした',
+     errorBody: 'ご安心ください。何も失われていません。今すぐ再試行できます。',
+     notNow: '今は後で',
+@@ -1761,7 +1762,7 @@ export const ja = defineLocale({
+       skipped: 'スキップ',
+       failed: '失敗'
+     },
+-    oneTimeTitle: 'Hermes には一度限りのインストールが必要です',
++    oneTimeTitle: 'Marketing OS には一度限りのインストールが必要です',
+     unsupportedDesc: platform =>
+       `${platform} では自動の初回インストールはまだ利用できません。ターミナルを開いて以下のコマンドを実行し、このアプリを再起動してください。以降の起動ではこの手順はスキップされます。`,
+     installCommand: 'インストールコマンド',
+@@ -1770,12 +1771,12 @@ export const ja = defineLocale({
+     installTo: 'インストール先',
+     retryAfterRun: '実行しました — 再試行',
+     failedTitle: 'インストールに失敗しました',
+-    settingUpTitle: 'Hermes Agent を設定中',
++    settingUpTitle: 'Marketing OS Agent を設定中',
+     finishingTitle: '仕上げ中',
+     failedDesc:
+-      'インストール手順のいずれかが失敗しました。Windows では、別の Hermes CLI またはデスクトップインスタンスが実行中の場合に発生することがあります。実行中の Hermes インスタンスをすべて停止してから再試行してください。詳細は以下またはデスクトップログで確認できます。',
++      'インストール手順のいずれかが失敗しました。Windows では、別の Marketing OS CLI またはデスクトップインスタンスが実行中の場合に発生することがあります。実行中の Marketing OS インスタンスをすべて停止してから再試行してください。詳細は以下またはデスクトップログで確認できます。',
+     activeDesc:
+-      'これは一回限りのセットアップです。Hermes インストーラーが依存関係をダウンロードしてマシンを設定しています。以降の起動ではこの手順はスキップされます。',
++      'これは一回限りのセットアップです。Marketing OS インストーラーが依存関係をダウンロードしてマシンを設定しています。以降の起動ではこの手順はスキップされます。',
+     progress: (completed, total) => `${total} ステップ中 ${completed} 完了`,
+     currentStage: stage => ` — 現在: ${stage}`,
+     fetchingManifest: 'インストーラーマニフェストを取得中...',
+@@ -1793,10 +1794,10 @@ export const ja = defineLocale({
+   },
+ 
+   onboarding: {
+-    headerTitle: 'Hermes Agent のセットアップをしましょう',
++    headerTitle: 'Marketing OS Agent のセットアップをしましょう',
+     headerDesc: 'チャットを始めるにはモデルプロバイダーを接続してください。ほとんどのオプションはワンクリックです。',
+-    preparingInstall: 'Hermes はインストールを完了中です。初回実行では通常 1 分以内に完了します。',
+-    starting: 'Hermes を起動中…',
++    preparingInstall: 'Marketing OS はインストールを完了中です。初回実行では通常 1 分以内に完了します。',
++    starting: 'Marketing OS を起動中…',
+     lookingUpProviders: 'プロバイダーを検索中...',
+     collapse: '折りたたむ',
+     otherProviders: 'その他のプロバイダー',
+@@ -1804,7 +1805,7 @@ export const ja = defineLocale({
+     chooseLater: '後でプロバイダーを選択します',
+     recommended: '推奨',
+     connected: '接続済み',
+-    featuredPitch: '1 つのサブスクリプションで 300 以上の最先端モデル — Hermes を実行するための推奨方法',
++    featuredPitch: '1 つのサブスクリプションで 300 以上の最先端モデル — Marketing OS を実行するための推奨方法',
+     openRouterPitch: '1 つのキーで数百のモデル — 堅実なデフォルト',
+     apiKeyOptions: {
+       openrouter: {
+@@ -1817,7 +1818,7 @@ export const ja = defineLocale({
+       local: {
+         short: 'セルフホスト',
+         description:
+-          'ローカルまたはセルフホストの OpenAI 互換エンドポイント（vLLM、llama.cpp、Ollama など）に Hermes を接続。'
++          'ローカルまたはセルフホストの OpenAI 互換エンドポイント（vLLM、llama.cpp、Ollama など）に Marketing OS を接続。'
+       }
+     },
+     backToSignIn: 'サインインに戻る',
+@@ -1829,8 +1830,8 @@ export const ja = defineLocale({
+     update: '更新',
+     flowSubtitles: {
+       pkce: 'ブラウザーを開いてサインインし、ここに戻ります',
+-      device_code: 'ブラウザーで確認ページを開きます — Hermes が自動接続します',
+-      loopback: 'サインインのためブラウザーを開きます — Hermes が自動接続します',
++      device_code: 'ブラウザーで確認ページを開きます — Marketing OS が自動接続します',
++      loopback: 'サインインのためブラウザーを開きます — Marketing OS が自動接続します',
+       external: 'ターミナルで一度サインインして、チャットに戻ります'
+     },
+     startingSignIn: provider => `${provider} のサインインを開始中...`,
+@@ -1841,12 +1842,12 @@ export const ja = defineLocale({
+     pickDifferentProvider: '別のプロバイダーを選択',
+     signInWith: provider => `${provider} でサインイン`,
+     openedBrowser: provider => `${provider} をブラウザーで開きました。`,
+-    authorizeThere: 'そこで Hermes を承認してください。',
++    authorizeThere: 'そこで Marketing OS を承認してください。',
+     copyAuthCode: '認証コードをコピーして以下に貼り付けてください。',
+     pasteAuthCode: '認証コードを貼り付け',
+     reopenAuthPage: '認証ページを再度開く',
+     autoBrowser: provider =>
+-      `${provider} をブラウザーで開きました。Hermes をそこで承認すれば自動接続されます。コピーや貼り付けは不要です。`,
++      `${provider} をブラウザーで開きました。Marketing OS をそこで承認すれば自動接続されます。コピーや貼り付けは不要です。`,
+     reopenSignInPage: 'サインインページを再度開く',
+     waitingAuthorize: '承認を待っています...',
+     externalPending: provider =>
+@@ -1935,7 +1936,7 @@ export const ja = defineLocale({
+       update: '更新',
+       updateInProgress: '更新中',
+       commitsBehind: (count, branch) => `${branch} より ${count} コミット遅れています`,
+-      desktopVersion: version => `Hermes Desktop v${version}`,
++      desktopVersion: version => `Marketing OS v${version}`,
+       backendVersion: version => `バックエンド v${version}`,
+       clientLabel: version => `クライアント v${version}`,
+       backendLabel: version => `バックエンド v${version}`,
+@@ -1952,7 +1953,7 @@ export const ja = defineLocale({
+       gatewayConnecting: '接続中',
+       gatewayOffline: 'オフライン',
+       gatewayRestarting: '再起動中…',
+-      gatewayTitle: 'Hermes 推論ゲートウェイのステータス',
++      gatewayTitle: 'Marketing OS 推論ゲートウェイのステータス',
+       agents: 'エージェント',
+       closeAgents: 'エージェントを閉じる',
+       openAgents: 'エージェントを開く',
+@@ -2036,7 +2037,7 @@ export const ja = defineLocale({
+     binaryTitle: 'これはバイナリファイルのようです',
+     binaryBody: label => `${label} をプレビューすると読み取り不能なテキストが表示される場合があります。`,
+     largeTitle: 'このファイルは大きいです',
+-    largeBody: (label, size) => `${label} は ${size} です。Hermes は最初の 512 KB のみを表示します。`,
++    largeBody: (label, size) => `${label} は ${size} です。Marketing OS は最初の 512 KB のみを表示します。`,
+     previewAnyway: 'とにかくプレビュー',
+     truncated: '最初の 512 KB を表示しています。',
+     noInlineTitle: 'インラインプレビューなし',
+@@ -2075,11 +2076,11 @@ export const ja = defineLocale({
+       serverNotFound: 'サーバーが見つかりません',
+       failedToLoad: 'プレビューの読み込みに失敗しました',
+       tryAgain: '再試行',
+-      restarting: 'Hermes を再起動中...',
+-      askRestart: 'Hermes にサーバーの再起動を依頼',
+-      lookingRestart: taskId => `Hermes は再起動するプレビューサーバーを検索中です (${taskId})`,
++      restarting: 'Marketing OS を再起動中...',
++      askRestart: 'Marketing OS にサーバーの再起動を依頼',
++      lookingRestart: taskId => `Marketing OS は再起動するプレビューサーバーを検索中です (${taskId})`,
+       restartingTitle: 'プレビューサーバーを再起動中',
+-      restartingMessage: 'Hermes はバックグラウンドで作業中です。進捗はプレビューコンソールで確認してください。',
++      restartingMessage: 'Marketing OS はバックグラウンドで作業中です。進捗はプレビューコンソールで確認してください。',
+       startRestartFailed: message => `サーバー再起動を開始できませんでした: ${message}`,
+       restartFailed: 'サーバーの再起動に失敗しました',
+       hideConsole: 'プレビューコンソールを非表示',
+@@ -2087,15 +2088,15 @@ export const ja = defineLocale({
+       hideDevTools: 'プレビュー DevTools を非表示',
+       openDevTools: 'プレビュー DevTools を開く',
+       finishedRestarting: message =>
+-        `Hermes がプレビューサーバーの再起動を完了しました${message ? `: ${message}` : ''}`,
++        `Marketing OS がプレビューサーバーの再起動を完了しました${message ? `: ${message}` : ''}`,
+       failedRestarting: message => `サーバーの再起動に失敗しました: ${message}`,
+       unknownError: '不明なエラー',
+       restartedTitle: 'プレビューサーバーが再起動しました',
+       reloadingNow: 'プレビューを再読み込み中です。',
+       restartFailedTitle: 'プレビューの再起動に失敗しました',
+-      restartFailedMessage: 'Hermes がサーバーを再起動できませんでした。',
++      restartFailedMessage: 'Marketing OS がサーバーを再起動できませんでした。',
+       stillWorking:
+-        'Hermes はまだ作業中ですが、再起動の結果がまだ届いていません。サーバーコマンドがフォアグラウンドで実行されている可能性があります。',
++        'Marketing OS はまだ作業中ですが、再起動の結果がまだ届いていません。サーバーコマンドがフォアグラウンドで実行されている可能性があります。',
+       workspaceReloading: 'ワークスペースが変更され、プレビューを再読み込み中',
+       fileChanged: url => `ファイルが変更され、プレビューを再読み込み中: ${url}`,
+       filesChanged: (count, url) => `${count} 件のファイルが変更され、プレビューを再読み込み中: ${url}`,
+@@ -2113,7 +2114,7 @@ export const ja = defineLocale({
+     thread: {
+       loadingSession: 'セッションを読み込み中',
+       showEarlier: '以前のメッセージを表示',
+-      loadingResponse: 'Hermes が応答を読み込み中',
++      loadingResponse: 'Marketing OS が応答を読み込み中',
+       resumeWhenBackgroundDone: count =>
+         count === 1
+           ? 'バックグラウンドタスクの完了後に再開します'
+@@ -2144,7 +2145,7 @@ export const ja = defineLocale({
+       attachingFile: '添付中…'
+     },
+     approval: {
+-      gatewayDisconnected: 'Hermes ゲートウェイが接続されていません',
++      gatewayDisconnected: 'Marketing OS ゲートウェイが接続されていません',
+       sendFailed: '承認応答を送信できませんでした',
+       run: '実行',
+       command: 'コマンド',
+@@ -2155,12 +2156,12 @@ export const ja = defineLocale({
+       reject: '拒否',
+       alwaysTitle: 'このコマンドを常に許可しますか？',
+       alwaysDescription: pattern =>
+-        `これにより "${pattern}" パターンが永続的な許可リスト (~/.hermes/config.yaml) に追加されます。Hermes はこのセッションや将来のセッションで、このようなコマンドについて再度尋ねません。`,
++        `これにより "${pattern}" パターンが永続的な許可リスト (~/.hermes/config.yaml) に追加されます。Marketing OS はこのセッションや将来のセッションで、このようなコマンドについて再度尋ねません。`,
+       alwaysAllow: '常に許可'
+     },
+     clarify: {
+       notReady: '明確化リクエストはまだ準備できていません',
+-      gatewayDisconnected: 'Hermes ゲートウェイが接続されていません',
++      gatewayDisconnected: 'Marketing OS ゲートウェイが接続されていません',
+       sendFailed: '明確化応答を送信できませんでした',
+       loadingQuestion: '質問を読み込み中…',
+       other: 'その他（回答を入力）',
+@@ -2272,15 +2273,15 @@ export const ja = defineLocale({
+   },
+ 
+   prompts: {
+-    gatewayDisconnected: 'Hermes ゲートウェイが接続されていません',
++    gatewayDisconnected: 'Marketing OS ゲートウェイが接続されていません',
+     sudoSendFailed: 'sudo パスワードを送信できませんでした',
+     secretSendFailed: 'シークレットを送信できませんでした',
+     sudoTitle: '管理者パスワード',
+     sudoDesc:
+-      'Hermes は特権コマンドを実行するために sudo パスワードが必要です。ローカルエージェントにのみ送信されます。',
++      'Marketing OS は特権コマンドを実行するために sudo パスワードが必要です。ローカルエージェントにのみ送信されます。',
+     sudoPlaceholder: 'sudo パスワード',
+     secretTitle: 'シークレットが必要です',
+-    secretDesc: 'Hermes は続行するための認証情報が必要です。',
++    secretDesc: 'Marketing OS は続行するための認証情報が必要です。',
+     secretPlaceholder: 'シークレット値'
+   },
+ 
+@@ -2333,8 +2334,8 @@ export const ja = defineLocale({
+     sessionExportFailed: 'セッションをエクスポートできませんでした',
+     imageSaved: '画像を保存しました',
+     downloadStarted: 'ダウンロードを開始しました',
+-    restartToUseSaveImage: '画像を保存するには Hermes Desktop を再起動してください。',
+-    restartToSaveImages: '画像を保存するには Hermes Desktop を再起動してください',
++    restartToUseSaveImage: '画像を保存するには Marketing OS を再起動してください。',
++    restartToSaveImages: '画像を保存するには Marketing OS を再起動してください',
+     imageDownloadFailed: '画像のダウンロードに失敗しました',
+     openImage: '画像を開く',
+     downloadImage: '画像をダウンロード',
+diff --git a/apps/desktop/src/i18n/runtime.test.ts b/apps/desktop/src/i18n/runtime.test.ts
+index 499fc1de6..bc34c6637 100644
+--- a/apps/desktop/src/i18n/runtime.test.ts
++++ b/apps/desktop/src/i18n/runtime.test.ts
+@@ -18,7 +18,7 @@ describe('desktop i18n runtime translator', () => {
+   it('translates string paths for the active runtime locale', () => {
+     setRuntimeI18nLocale('zh')
+ 
+-    expect(translateNow('boot.ready')).toBe('Hermes 桌面版已就绪')
++    expect(translateNow('boot.ready')).toBe('Marketing OS 桌面版已就绪')
+     expect(translateNow('notifications.voice.noSpeechDetected')).toBe('没有检测到语音')
+     expect(translateNow('composer.lookupNoMatches')).toBe('没有匹配项。')
+     expect(translateNow('assistant.tool.statusRecovered')).toBe('已恢复')
+@@ -61,7 +61,7 @@ describe('desktop i18n runtime translator', () => {
+       boot.ready = undefined
+       setRuntimeI18nLocale('ja')
+ 
+-      expect(translateNow('boot.ready')).toBe('Hermes Desktop is ready')
++      expect(translateNow('boot.ready')).toBe('Marketing OS is ready')
+     } finally {
+       boot.ready = originalReady
+     }
+diff --git a/apps/desktop/src/i18n/zh-hant.ts b/apps/desktop/src/i18n/zh-hant.ts
+index e7d607a07..59dc89e94 100644
+--- a/apps/desktop/src/i18n/zh-hant.ts
++++ b/apps/desktop/src/i18n/zh-hant.ts
+@@ -59,18 +59,18 @@ export const zhHant = defineLocale({
+   },
+ 
+   boot: {
+-    ready: 'Hermes Desktop 已就緒',
++    ready: 'Marketing OS 已就緒',
+     desktopBootFailedWithMessage: message => `桌面啟動失敗：${message}`,
+     steps: {
+       connectingGateway: '正在連線桌面閘道',
+-      loadingSettings: '正在載入 Hermes 設定',
++      loadingSettings: '正在載入 Marketing OS 設定',
+       loadingSessions: '正在載入最近工作階段',
+       startingDesktopConnection: '正在啟動桌面連線',
+-      startingHermesDesktop: '正在啟動 Hermes Desktop…'
++      startingHermesDesktop: '正在啟動 Marketing OS…'
+     },
+     errors: {
+-      backgroundExited: 'Hermes 背景程序已結束。',
+-      backgroundExitedDuringStartup: 'Hermes 背景程序在啟動期間結束。',
++      backgroundExited: 'Marketing OS 背景程序已結束。',
++      backgroundExitedDuringStartup: 'Marketing OS 背景程序在啟動期間結束。',
+       backendStopped: '後端已停止',
+       desktopBootFailed: '桌面啟動失敗',
+       gatewayConnectionLost: '與閘道的連線已中斷',
+@@ -78,7 +78,7 @@ export const zhHant = defineLocale({
+       ipcBridgeUnavailable: '桌面 IPC 橋接器不可用。'
+     },
+     failure: {
+-      title: 'Hermes 無法啟動',
++      title: 'Marketing OS 無法啟動',
+       description: '背景閘道未啟動。請嘗試下面的復原步驟。這裡的操作不會刪除您的聊天或設定。',
+       remoteTitle: '需要重新登入遠端閘道',
+       remoteDescription: '您的遠端閘道工作階段已過期。請重新登入以重新連線。這裡的操作不會刪除您的聊天或設定。',
+@@ -112,15 +112,15 @@ export const zhHant = defineLocale({
+     copyDetail: '複製詳情',
+     copyDetailFailed: '無法複製通知詳情',
+     backendOutOfDateTitle: '後端版本過舊',
+-    backendOutOfDateMessage: '您的 Hermes 後端早於目前的桌面版本，可能無法正常運作。請更新以保持一致。',
+-    updateHermes: '更新 Hermes',
++    backendOutOfDateMessage: '您的 Marketing OS 後端早於目前的桌面版本，可能無法正常運作。請更新以保持一致。',
++    updateHermes: '更新 Marketing OS',
+     updateReadyTitle: '有可用更新',
+     updateReadyMessage: count => `有 ${count} 項新變更可用。`,
+     seeWhatsNew: '查看新增內容',
+     errors: {
+       elevenLabsNeedsKey: 'ElevenLabs STT 需要 ELEVENLABS_API_KEY。',
+       elevenLabsRejectedKey: 'ElevenLabs 拒絕了該 API 金鑰 (401)。',
+-      methodNotAllowed: '桌面後端拒絕了該請求 (405 Method Not Allowed)。請嘗試重新啟動 Hermes Desktop。',
++      methodNotAllowed: '桌面後端拒絕了該請求 (405 Method Not Allowed)。請嘗試重新啟動 Marketing OS。',
+       microphonePermission: '麥克風權限已被拒絕。',
+       openaiRejectedApiKey: 'OpenAI 拒絕了該 API 金鑰。',
+       openaiRejectedApiKeyWithStatus: status => `OpenAI 拒絕了該 API 金鑰 (${status} invalid_api_key)。`,
+@@ -150,8 +150,8 @@ export const zhHant = defineLocale({
+       approveAction: '核准',
+       rejectAction: '拒絕',
+       inputTitle: '需要輸入',
+-      inputBody: 'Hermes 正在等待你的回應。',
+-      turnDoneTitle: 'Hermes 已完成',
++      inputBody: 'Marketing OS 正在等待你的回應。',
++      turnDoneTitle: 'Marketing OS 已完成',
+       turnDoneBody: '回覆已就緒。',
+       turnErrorTitle: '本輪失敗',
+       backgroundDoneTitle: '背景工作已完成',
+@@ -193,7 +193,7 @@ export const zhHant = defineLocale({
+     exportConfig: '匯出設定',
+     importConfig: '匯入設定',
+     resetToDefaults: '恢復預設值',
+-    resetConfirm: '要將所有設定恢復為 Hermes 預設值嗎？',
++    resetConfirm: '要將所有設定恢復為 Marketing OS 預設值嗎？',
+     exportFailed: '匯出失敗',
+     resetFailed: '重設失敗',
+     nav: {
+@@ -214,7 +214,7 @@ export const zhHant = defineLocale({
+       intro: '原生桌面通知，與應用程式內提示不同。設定會依裝置保存，每台電腦各自獨立。',
+       enableAll: '啟用通知',
+       enableAllDesc: '總開關。關閉後會靜音下方所有通知。',
+-      focusedHint: '完成提醒僅在 Hermes 位於背景時觸發。',
++      focusedHint: '完成提醒僅在 Marketing OS 位於背景時觸發。',
+       kinds: {
+         approval: {
+           label: '需要核准',
+@@ -222,11 +222,11 @@ export const zhHant = defineLocale({
+         },
+         input: {
+           label: '需要輸入',
+-          description: 'Hermes 提出了問題，或需要密碼或密鑰。'
++          description: 'Marketing OS 提出了問題，或需要密碼或密鑰。'
+         },
+         turnDone: {
+           label: '回覆就緒',
+-          description: 'Hermes 在背景時完成了一輪對話。'
++          description: 'Marketing OS 在背景時完成了一輪對話。'
+         },
+         turnError: {
+           label: '本輪失敗',
+@@ -238,7 +238,7 @@ export const zhHant = defineLocale({
+         }
+       },
+       test: '傳送測試通知',
+-      testTitle: 'Hermes',
++      testTitle: 'Marketing OS',
+       testBody: '通知運作正常。',
+       testSent: '測試已傳送。若沒有出現，請檢查系統通知權限與專注模式／勿擾模式。',
+       testUnsupported: '此系統不支援原生通知。',
+@@ -257,7 +257,7 @@ export const zhHant = defineLocale({
+       advanced: '進階'
+     },
+     searchPlaceholder: {
+-      about: '關於 Hermes Desktop',
++      about: '關於 Marketing OS',
+       config: '搜尋設定…',
+       gateway: '閘道連線…',
+       keys: '搜尋 API 金鑰…',
+@@ -273,7 +273,7 @@ export const zhHant = defineLocale({
+       title: '外觀',
+       intro: '這些是僅限桌面端的顯示偏好。模式控制亮度；主題控制強調色與聊天介面樣式。',
+       colorMode: '色彩模式',
+-      colorModeDesc: '選擇固定模式，或讓 Hermes 跟隨系統設定。',
++      colorModeDesc: '選擇固定模式，或讓 Marketing OS 跟隨系統設定。',
+       toolViewTitle: '工具呼叫顯示',
+       toolViewDesc: '產品模式會隱藏原始工具 payload；技術模式會顯示完整輸入/輸出。',
+       translucencyTitle: '視窗透明',
+@@ -304,8 +304,8 @@ export const zhHant = defineLocale({
+       pet: {
+         title: '寵物',
+         intro:
+-          '領養一隻懸浮在應用上的 petdex 動畫寵物，它會根據 Hermes 的狀態做出反應——工具執行時奔跑、成功時歡呼、出錯時沮喪。',
+-        restartHint: '寵物功能需要重新啟動——目前執行的應用在此功能加入前啟動。請結束並重新開啟 Hermes，然後回到此處。',
++          '領養一隻懸浮在應用上的 petdex 動畫寵物，它會根據 Marketing OS 的狀態做出反應——工具執行時奔跑、成功時歡呼、出錯時沮喪。',
++        restartHint: '寵物功能需要重新啟動——目前執行的應用在此功能加入前啟動。請結束並重新開啟 Marketing OS，然後回到此處。',
+         scaleTitle: '大小',
+         scaleDesc: '調整懸浮寵物的大小，所有介面即時生效。',
+         on: '開啟',
+@@ -498,10 +498,10 @@ export const zhHant = defineLocale({
+         personality: '新工作階段的預設助手風格。',
+         showReasoning: '後端提供推理內容時顯示該區塊。'
+       },
+-      timezone: 'Hermes 需要本機時間上下文時使用。留空則使用系統時區。',
++      timezone: 'Marketing OS 需要本機時間上下文時使用。留空則使用系統時區。',
+       agent: {
+         imageInputMode: '控制圖片附件如何傳送給模型。',
+-        maxTurns: 'Hermes 停止一次執行前的工具呼叫輪次上限。'
++        maxTurns: 'Marketing OS 停止一次執行前的工具呼叫輪次上限。'
+       },
+       terminal: {
+         cwd: '工具與終端機操作的預設專案資料夾。',
+@@ -511,9 +511,9 @@ export const zhHant = defineLocale({
+       codeExecution: {
+         mode: '程式碼執行被限制在目前專案中的嚴格程度。'
+       },
+-      fileReadMaxChars: 'Hermes 單次檔案讀取可讀取的最大字元數。',
++      fileReadMaxChars: 'Marketing OS 單次檔案讀取可讀取的最大字元數。',
+       approvals: {
+-        mode: 'Hermes 如何處理需要明確批准的指令。',
++        mode: 'Marketing OS 如何處理需要明確批准的指令。',
+         timeout: '批准提示逾時前等待的時間。'
+       },
+       security: {
+@@ -543,11 +543,11 @@ export const zhHant = defineLocale({
+       },
+       updates: {
+         nonInteractiveLocalChanges:
+-          'Hermes 從應用程式內更新自身時，保留本機原始碼變更（stash）或丟棄（discard）。終端機更新一律會詢問。'
++          'Marketing OS 從應用程式內更新自身時，保留本機原始碼變更（stash）或丟棄（discard）。終端機更新一律會詢問。'
+       }
+     }),
+     about: {
+-      heading: 'Hermes Desktop',
++      heading: 'Marketing OS',
+       version: value => `版本 ${value}`,
+       versionUnavailable: '版本不可用',
+       updates: '更新',
+@@ -565,7 +565,7 @@ export const zhHant = defineLocale({
+       lastChecked: age => `上次檢查：${age}`,
+       justNowSuffix: ' · 剛剛',
+       automaticUpdates: '自動更新',
+-      automaticUpdatesDesc: 'Hermes 會在背景自動檢查更新，並在有可用更新時通知你。',
++      automaticUpdatesDesc: 'Marketing OS 會在背景自動檢查更新，並在有可用更新時通知你。',
+       branchCommit: (branch, commit) => `分支 ${branch} · 提交 ${commit}`,
+       never: '從未',
+       justNow: '剛剛',
+@@ -578,7 +578,7 @@ export const zhHant = defineLocale({
+       noneParen: '(無)',
+       notSet: '未設定',
+       commaSeparated: '逗號分隔的值',
+-      loading: '正在載入 Hermes 設定...',
++      loading: '正在載入 Marketing OS 設定...',
+       emptyTitle: '無可設定項目',
+       emptyDesc: '此區段沒有可調整的設定。',
+       failedLoad: '設定載入失敗',
+@@ -615,7 +615,7 @@ export const zhHant = defineLocale({
+       title: '閘道連線',
+       envOverride: '環境變數覆寫',
+       intro:
+-        'Hermes Desktop 預設會啟動自己的本機閘道。如果您希望此應用程式控制另一台機器或可信代理後面已執行的 Hermes 後端，請使用遠端閘道。在下方按設定檔指定各自的遠端主機。',
++        'Marketing OS 預設會啟動自己的本機閘道。如果您希望此應用程式控制另一台機器或可信代理後面已執行的 Marketing OS 後端，請使用遠端閘道。在下方按設定檔指定各自的遠端主機。',
+       appliesTo: '套用至',
+       allProfiles: '全部設定檔',
+       defaultConnection: '預設連線適用於所有沒有自訂覆寫的設定檔。',
+@@ -623,10 +623,10 @@ export const zhHant = defineLocale({
+       envOverrideTitle: '環境變數正在控制此桌面工作階段。',
+       envOverrideDesc: '取消設定 HERMES_DESKTOP_REMOTE_URL 和 HERMES_DESKTOP_REMOTE_TOKEN 後才會使用下方儲存的設定。',
+       localTitle: '本機閘道',
+-      localDesc: '在 localhost 啟動私有 Hermes 後端。這是預設方式，可離線使用。',
++      localDesc: '在 localhost 啟動私有 Marketing OS 後端。這是預設方式，可離線使用。',
+       remoteTitle: '遠端閘道',
+       remoteDesc:
+-        '將此桌面殼層連線至遠端 Hermes 後端。託管閘道使用 OAuth 或帳號密碼；自託管閘道也可使用工作階段 Token。',
++        '將此桌面應用程式連線至遠端 Marketing OS 執行環境。託管閘道使用 OAuth 或帳號密碼；自託管閘道也可使用工作階段 Token。',
+       remoteUrlTitle: '遠端 URL',
+       remoteUrlDesc: '遠端儀表板後端的基礎 URL。支援路徑前綴，例如 /hermes。',
+       probing: '正在檢查此閘道的驗證方式…',
+@@ -659,9 +659,9 @@ export const zhHant = defineLocale({
+       enterUrlFirst: '請先輸入遠端 URL。',
+       restartingTitle: '閘道連線正在重新啟動',
+       savedTitle: '閘道設定已儲存',
+-      restartingMessage: 'Hermes Desktop 將使用已儲存的設定重新連線。',
++      restartingMessage: 'Marketing OS 將使用已儲存的設定重新連線。',
+       savedMessage: '已儲存，下次重新啟動後生效。',
+-      connectedTo: (baseUrl, version) => `已連線至 ${baseUrl}${version ? ` · Hermes ${version}` : ''}`,
++      connectedTo: (baseUrl, version) => `已連線至 ${baseUrl}${version ? ` · Marketing OS ${version}` : ''}`,
+       reachableTitle: '遠端閘道可連線',
+       signedOutTitle: '已登出',
+       signedOutMessage: '已清除遠端閘道工作階段。',
+@@ -732,7 +732,7 @@ export const zhHant = defineLocale({
+     providers: {
+       connectAccount: '連結帳號',
+       haveApiKey: '改用 API 金鑰？',
+-      intro: '使用訂閱登入，無需複製 API 金鑰。Hermes 會在應用程式中為您完成瀏覽器登入。',
++      intro: '使用訂閱登入，無需複製 API 金鑰。Marketing OS 會在應用程式中為您完成瀏覽器登入。',
+       connected: '已連線',
+       collapse: '收合',
+       connectAnother: '連結其他提供方',
+@@ -884,7 +884,7 @@ export const zhHant = defineLocale({
+       placeholder: '搜尋寵物…',
+       loading: '正在載入 petdex 畫廊…',
+       error: '無法連線至 petdex 畫廊。',
+-      staleBackend: '請重新啟動 Hermes 以使用寵物功能。',
++      staleBackend: '請重新啟動 Marketing OS 以使用寵物功能。',
+       empty: '沒有符合的寵物。',
+       turnOff: '關閉',
+       turnOn: '開啟',
+@@ -911,8 +911,8 @@ export const zhHant = defineLocale({
+       hatchComposing: '正在拼合……',
+       hatchSaving: '快好了……',
+       namePlaceholder: '為寵物命名',
+-      staleBackend: '請更新 Hermes 以生成寵物。',
+-      backgroundHint: '你可以關閉此視窗——完成後 Hermes 會通知你。',
++      staleBackend: '請更新 Marketing OS 以生成寵物。',
++      backgroundHint: '你可以關閉此視窗——完成後 Marketing OS 會通知你。',
+       slowProviderHint: '這可能需要幾分鐘',
+       remix: '混合生成',
+       remixConfirmTitle: '以此造型混合生成？',
+@@ -945,7 +945,7 @@ export const zhHant = defineLocale({
+     },
+     nav: {
+       newChat: { title: '新工作階段', detail: '開始新的工作階段' },
+-      settings: { title: '設定', detail: '設定 Hermes 桌面端' },
++      settings: { title: '設定', detail: '設定 Marketing OS 桌面端' },
+       skills: { title: '技能與工具', detail: '啟用技能、工具集和提供方' },
+       messaging: { title: '訊息平台', detail: '設定 Telegram、Slack、Discord 等' },
+       artifacts: { title: '成品', detail: '瀏覽產生的輸出' }
+@@ -967,10 +967,10 @@ export const zhHant = defineLocale({
+     noSessions: '暫無工作階段。',
+     gatewayRunning: '訊息閘道執行中',
+     gatewayStopped: '訊息閘道已停止',
+-    hermesActiveSessions: (version, count) => `Hermes ${version} · 活躍工作階段 ${count}`,
++    hermesActiveSessions: (version, count) => `Marketing OS ${version} · 活躍工作階段 ${count}`,
+     restartGateway: '重新啟動閘道',
+     gatewayRestartFailed: '閘道重新啟動失敗。',
+-    updateHermes: '更新 Hermes',
++    updateHermes: '更新 Marketing OS',
+     actionRunning: '執行中',
+     actionDone: '完成',
+     actionFailed: '失敗',
+@@ -1168,7 +1168,7 @@ export const zhHant = defineLocale({
+     deleteDescMid: ' 並移除其 ',
+     deleteDescSuffix: ' 目錄。此操作無法復原。',
+     deleting: '刪除中…',
+-    createDesc: '設定檔是獨立的 Hermes 環境：各自擁有獨立的設定、技能和 SOUL.md。',
++    createDesc: '設定檔是獨立的 Marketing OS 環境：各自擁有獨立的設定、技能和 SOUL.md。',
+     nameLabel: '名稱',
+     cloneFrom: '複製來源',
+     cloneFromNone: '無（空白）',
+@@ -1256,7 +1256,7 @@ export const zhHant = defineLocale({
+     topOfHour: '每個整點',
+     everyHourAt: minute => `每小時的 :${minute}`,
+     newCron: '新排程工作',
+-    emptyDescNew: '按 cron 表達式排程一個提示詞。Hermes 會執行它，並將結果傳送至您選擇的目的地。',
++    emptyDescNew: '按 cron 表達式排程一個提示詞。Marketing OS 會執行它，並將結果傳送至您選擇的目的地。',
+     emptyDescSearch: '請嘗試更廣泛的搜尋詞。',
+     emptyTitleNew: '暫無排程工作',
+     emptyTitleSearch: '無相符項目',
+@@ -1346,6 +1346,7 @@ export const zhHant = defineLocale({
+ 
+   sidebar: {
+     nav: {
++      workbench: '工作台',
+       'new-session': '新工作階段',
+       skills: '技能與工具',
+       messaging: '訊息平台',
+@@ -1401,7 +1402,7 @@ export const zhHant = defineLocale({
+       copyPath: '複製路徑',
+       removeFromSidebar: '從側邊欄移除',
+       createFailed: '無法建立專案',
+-      deleteConfirm: '這會從 Hermes 中移除已儲存的專案。檔案、git 儲存庫和工作樹維持不變。',
++      deleteConfirm: '這會從 Marketing OS 中移除已儲存的專案。檔案、git 儲存庫和工作樹維持不變。',
+       startWork: '新增工作樹',
+       newWorktreeTitle: '新增工作樹',
+       newWorktreeDesc: '為這個工作樹命名分支。',
+@@ -1461,12 +1462,12 @@ export const zhHant = defineLocale({
+   composer: {
+     message: '訊息',
+     wakingProfile: profile => `正在喚醒 ${profile}…`,
+-    placeholderStarting: '正在啟動 Hermes...',
+-    placeholderReconnecting: '正在重新連線至 Hermes…',
++    placeholderStarting: '正在啟動 Marketing OS...',
++    placeholderReconnecting: '正在重新連線至 Marketing OS…',
+     placeholderFollowUp: '傳送後續訊息',
+     newSessionPlaceholders: [
+       '我們要建立什麼？',
+-      '給 Hermes 一個任務',
++      '給 Marketing OS 一個任務',
+       '您在想什麼？',
+       '描述您需要什麼',
+       '我們該處理什麼？',
+@@ -1526,7 +1527,7 @@ export const zhHant = defineLocale({
+       'composer.history': '循環彈出視窗 / 歷史記錄'
+     },
+     attachUrlTitle: '附加 URL',
+-    attachUrlDesc: 'Hermes 將擷取該頁面並作為此回合的脈絡。',
++    attachUrlDesc: 'Marketing OS 將擷取該頁面並作為此回合的脈絡。',
+     urlPlaceholder: 'https://example.com/post',
+     urlHintPre: '請輸入完整 URL，例如 ',
+     attach: '附加',
+@@ -1631,7 +1632,7 @@ export const zhHant = defineLocale({
+       createPr: '建立 PR',
+       openPr: '開啟 PR',
+       ghMissing: '安裝 GitHub CLI (gh) 並登入後可開啟 PR',
+-      agentShip: '讓 Hermes 提交並開 PR',
++      agentShip: '讓 Marketing OS 提交並開 PR',
+       agentShipPrompt: '檢查目前的變更，使用清晰的約定式提交訊息提交，推送分支，並開啟一個拉取請求。',
+       newBranch: '新增分支',
+       branchOffFrom: base => `從 ${base} 建立新分支`,
+@@ -1648,9 +1649,9 @@ export const zhHant = defineLocale({
+       fetch: '下載中…',
+       pull: '快完成了…',
+       pydeps: '收尾中…',
+-      update: '正在更新 Hermes…',
++      update: '正在更新 Marketing OS…',
+       rebuild: '正在重新建置桌面應用程式…',
+-      restart: '正在重新啟動 Hermes…',
++      restart: '正在重新啟動 Marketing OS…',
+       done: '更新完成',
+       manual: '從終端機更新',
+       guiSkew: '請更新桌面應用程式',
+@@ -1660,32 +1661,32 @@ export const zhHant = defineLocale({
+     checkFailedTitle: '無法檢查更新',
+     tryAgain: '重試',
+     notAvailableTitle: '更新不可用',
+-    unsupportedMessage: '此版本的 Hermes 無法在應用程式內自行更新。',
++    unsupportedMessage: '此版本的 Marketing OS 無法在應用程式內自行更新。',
+     connectionRetry: '請檢查網路連線後重試。',
+     latestBody: '您正在執行最新版本。',
+     latestBodyBackend: '後端正在執行最新版本。',
+     allSetTitle: '已是最新版本',
+     availableTitle: '有可用更新',
+-    availableBody: '新版 Hermes 已可安裝。',
++    availableBody: '新版 Marketing OS 已可安裝。',
+     availableTitleBackend: '後端有可用更新',
+-    availableBodyBackend: '已連接的 Hermes 後端有新版本可安裝。',
++    availableBodyBackend: '已連接的 Marketing OS 後端有新版本可安裝。',
+     availableBodyNoChangelog: '已有新版本可用。此安裝方式無法顯示更新日誌。',
+     updateNow: '立即更新',
+     maybeLater: '稍後再說',
+     moreChanges: count => `另有 ${count} 項變更。`,
+     manualTitle: '從終端機更新',
+-    manualBody: '您是從命令列安裝的 Hermes，因此更新也需要在那裡執行。請將此指令貼到終端機：',
+-    manualPickedUp: '下次啟動 Hermes 時會使用新版本。',
++    manualBody: '您是從命令列安裝的 Marketing OS，因此更新也需要在那裡執行。請將此指令貼到終端機：',
++    manualPickedUp: '下次啟動 Marketing OS 時會使用新版本。',
+     guiSkewTitle: '請更新桌面應用程式',
+     guiSkewBody:
+-      '後端已更新，但此桌面應用程式套件未變更。請更新或重新安裝 Hermes 桌面應用程式（你的 AppImage / .deb / .rpm）以保持一致。',
++      '後端已更新，但此桌面應用程式套件未變更。請更新或重新安裝 Marketing OS 桌面應用程式（你的 AppImage / .deb / .rpm）以保持一致。',
+     copy: '複製',
+     copied: '已複製',
+     done: '完成',
+     applyingBody:
+-      'Hermes 更新程式會在自己的視窗中接管，並在完成後自動重新開啟 Hermes。更新期間請勿自行重新開啟 Hermes。',
+-    applyingBodyBackend: '遠端後端正在套用更新並將重新啟動。恢復後 Hermes 會自動重新連線。',
+-    applyingClose: '此視窗會在更新期間關閉，隨後 Hermes 會自動重新開啟。',
++      'Marketing OS 更新程式會在自己的視窗中接管，並在完成後自動重新開啟 Marketing OS。更新期間請勿自行重新開啟 Marketing OS。',
++    applyingBodyBackend: '遠端後端正在套用更新並將重新啟動。恢復後 Marketing OS 會自動重新連線。',
++    applyingClose: '此視窗會在更新期間關閉，隨後 Marketing OS 會自動重新開啟。',
+     errorTitle: '更新未完成',
+     errorBody: '沒有資料遺失。您可以現在重試。',
+     notNow: '暫不',
+@@ -1707,7 +1708,7 @@ export const zhHant = defineLocale({
+       skipped: '已略過',
+       failed: '失敗'
+     },
+-    oneTimeTitle: 'Hermes 需要一次性安裝',
++    oneTimeTitle: 'Marketing OS 需要一次性安裝',
+     unsupportedDesc: platform =>
+       `${platform} 暫不支援自動首次啟動安裝。請開啟終端機並執行下面的指令，然後重新啟動此應用程式。之後啟動會略過此步驟。`,
+     installCommand: '安裝指令',
+@@ -1716,11 +1717,11 @@ export const zhHant = defineLocale({
+     installTo: '將安裝至',
+     retryAfterRun: '我已執行 -- 重試',
+     failedTitle: '安裝失敗',
+-    settingUpTitle: '正在設定 Hermes Agent',
++    settingUpTitle: '正在設定 Marketing OS Agent',
+     finishingTitle: '正在收尾',
+     failedDesc:
+-      '某個安裝步驟失敗。在 Windows 上，如果另一個 Hermes CLI 或桌面執行個體正在執行，可能會出現這種情況。請停止正在執行的 Hermes 執行個體後重試。可查看下方的詳細資訊或 desktop 記錄中的完整記錄。',
+-    activeDesc: '這是一次性設定。Hermes 安裝程式正在下載相依套件並設定您的電腦。之後啟動會略過此步驟。',
++      '某個安裝步驟失敗。在 Windows 上，如果另一個 Marketing OS CLI 或桌面執行個體正在執行，可能會出現這種情況。請停止正在執行的 Marketing OS 執行個體後重試。可查看下方的詳細資訊或 desktop 記錄中的完整記錄。',
++    activeDesc: '這是一次性設定。Marketing OS 安裝程式正在下載相依套件並設定您的電腦。之後啟動會略過此步驟。',
+     progress: (completed, total) => `${completed}/${total} 個步驟已完成`,
+     currentStage: stage => ` -- 目前：${stage}`,
+     fetchingManifest: '正在取得安裝程式 manifest...',
+@@ -1738,10 +1739,10 @@ export const zhHant = defineLocale({
+   },
+ 
+   onboarding: {
+-    headerTitle: '開始設定 Hermes Agent',
++    headerTitle: '開始設定 Marketing OS Agent',
+     headerDesc: '連線模型提供方即可開始聊天。大多數選項只需一次點擊。',
+-    preparingInstall: 'Hermes 正在完成安裝。首次執行通常不到一分鐘。',
+-    starting: '正在啟動 Hermes…',
++    preparingInstall: 'Marketing OS 正在完成安裝。首次執行通常不到一分鐘。',
++    starting: '正在啟動 Marketing OS…',
+     lookingUpProviders: '正在查詢提供方...',
+     collapse: '收合',
+     otherProviders: '其他提供方',
+@@ -1749,7 +1750,7 @@ export const zhHant = defineLocale({
+     chooseLater: '稍後再選擇提供方',
+     recommended: '建議',
+     connected: '已連線',
+-    featuredPitch: '一個訂閱，300+ 前沿模型 — 執行 Hermes 的建議方式',
++    featuredPitch: '一個訂閱，300+ 前沿模型 — 執行 Marketing OS 的建議方式',
+     openRouterPitch: '一個金鑰，數百個模型 — 穩定的預設選擇',
+     apiKeyOptions: {
+       openrouter: { short: '一個金鑰，多個模型', description: '用一個金鑰存取數百個模型。適合新安裝的預設選擇。' },
+@@ -1758,7 +1759,7 @@ export const zhHant = defineLocale({
+       xai: { short: 'Grok 模型', description: '直接存取 xAI Grok 模型。' },
+       local: {
+         short: '自託管',
+-        description: '將 Hermes 指向本機或自託管的 OpenAI 相容端點（vLLM、llama.cpp、Ollama 等）。'
++        description: '將 Marketing OS 指向本機或自託管的 OpenAI 相容端點（vLLM、llama.cpp、Ollama 等）。'
+       }
+     },
+     backToSignIn: '返回登入',
+@@ -1770,8 +1771,8 @@ export const zhHant = defineLocale({
+     update: '更新',
+     flowSubtitles: {
+       pkce: '開啟瀏覽器登入，然後回到這裡繼續',
+-      device_code: '在瀏覽器中開啟驗證頁面 — Hermes 會自動連線',
+-      loopback: '開啟瀏覽器登入 — Hermes 會自動連線',
++      device_code: '在瀏覽器中開啟驗證頁面 — Marketing OS 會自動連線',
++      loopback: '開啟瀏覽器登入 — Marketing OS 會自動連線',
+       external: '先在終端機登入一次，然後回來繼續聊天'
+     },
+     startingSignIn: provider => `正在為 ${provider} 啟動登入...`,
+@@ -1782,11 +1783,11 @@ export const zhHant = defineLocale({
+     pickDifferentProvider: '選擇其他提供方',
+     signInWith: provider => `使用 ${provider} 登入`,
+     openedBrowser: provider => `已在瀏覽器中開啟 ${provider}。`,
+-    authorizeThere: '請在那裡授權 Hermes。',
++    authorizeThere: '請在那裡授權 Marketing OS。',
+     copyAuthCode: '複製授權碼並貼到下方。',
+     pasteAuthCode: '貼上授權碼',
+     reopenAuthPage: '重新開啟授權頁面',
+-    autoBrowser: provider => `已在瀏覽器中開啟 ${provider}。請在那裡授權 Hermes，連線會自動完成，無需複製或貼上。`,
++    autoBrowser: provider => `已在瀏覽器中開啟 ${provider}。請在那裡授權 Marketing OS，連線會自動完成，無需複製或貼上。`,
+     reopenSignInPage: '重新開啟登入頁面',
+     waitingAuthorize: '等待您授權...',
+     externalPending: provider => `${provider} 透過自己的 CLI 登入。請在終端機執行此指令，然後回來選擇「我已登入」：`,
+@@ -1874,7 +1875,7 @@ export const zhHant = defineLocale({
+       update: '更新',
+       updateInProgress: '更新中',
+       commitsBehind: (count, branch) => `落後 ${branch} ${count} 個提交`,
+-      desktopVersion: version => `Hermes Desktop v${version}`,
++      desktopVersion: version => `Marketing OS v${version}`,
+       backendVersion: version => `後端 v${version}`,
+       clientLabel: version => `用戶端 v${version}`,
+       backendLabel: version => `後端 v${version}`,
+@@ -1891,7 +1892,7 @@ export const zhHant = defineLocale({
+       gatewayConnecting: '連線中',
+       gatewayOffline: '離線',
+       gatewayRestarting: '重新啟動中…',
+-      gatewayTitle: 'Hermes 推論閘道狀態',
++      gatewayTitle: 'Marketing OS 推論閘道狀態',
+       agents: '代理',
+       closeAgents: '關閉代理',
+       openAgents: '開啟代理',
+@@ -1975,7 +1976,7 @@ export const zhHant = defineLocale({
+     binaryTitle: '這看起來像二進位檔案',
+     binaryBody: label => `預覽 ${label} 可能會顯示無法讀取的文字。`,
+     largeTitle: '此檔案較大',
+-    largeBody: (label, size) => `${label} 大小為 ${size}。Hermes 只會顯示前 512 KB。`,
++    largeBody: (label, size) => `${label} 大小為 ${size}。Marketing OS 只會顯示前 512 KB。`,
+     previewAnyway: '仍然預覽',
+     truncated: '顯示前 512 KB。',
+     noInlineTitle: '沒有行內預覽',
+@@ -2013,25 +2014,25 @@ export const zhHant = defineLocale({
+       serverNotFound: '找不到伺服器',
+       failedToLoad: '預覽載入失敗',
+       tryAgain: '重試',
+-      restarting: 'Hermes 正在重新啟動...',
+-      askRestart: '請 Hermes 重新啟動伺服器',
+-      lookingRestart: taskId => `Hermes 正在尋找要重新啟動的預覽伺服器 (${taskId})`,
++      restarting: 'Marketing OS 正在重新啟動...',
++      askRestart: '請 Marketing OS 重新啟動伺服器',
++      lookingRestart: taskId => `Marketing OS 正在尋找要重新啟動的預覽伺服器 (${taskId})`,
+       restartingTitle: '正在重新啟動預覽伺服器',
+-      restartingMessage: 'Hermes 正在背景執行。可在預覽主控台查看進度。',
++      restartingMessage: 'Marketing OS 正在背景執行。可在預覽主控台查看進度。',
+       startRestartFailed: message => `無法啟動伺服器重新啟動：${message}`,
+       restartFailed: '伺服器重新啟動失敗',
+       hideConsole: '隱藏預覽主控台',
+       showConsole: '顯示預覽主控台',
+       hideDevTools: '隱藏預覽 DevTools',
+       openDevTools: '開啟預覽 DevTools',
+-      finishedRestarting: message => `Hermes 已完成預覽伺服器重新啟動${message ? `：${message}` : ''}`,
++      finishedRestarting: message => `Marketing OS 已完成預覽伺服器重新啟動${message ? `：${message}` : ''}`,
+       failedRestarting: message => `伺服器重新啟動失敗：${message}`,
+       unknownError: '未知錯誤',
+       restartedTitle: '預覽伺服器已重新啟動',
+       reloadingNow: '正在重新載入預覽。',
+       restartFailedTitle: '預覽重新啟動失敗',
+-      restartFailedMessage: 'Hermes 無法重新啟動伺服器。',
+-      stillWorking: 'Hermes 仍在執行，但尚未收到重新啟動結果。伺服器指令可能正在前台執行。',
++      restartFailedMessage: 'Marketing OS 無法重新啟動伺服器。',
++      stillWorking: 'Marketing OS 仍在執行，但尚未收到重新啟動結果。伺服器指令可能正在前台執行。',
+       workspaceReloading: '工作區已變更，正在重新載入預覽',
+       fileChanged: url => `檔案已變更，正在重新載入預覽：${url}`,
+       filesChanged: (count, url) => `${count} 個檔案變更，正在重新載入預覽：${url}`,
+@@ -2049,7 +2050,7 @@ export const zhHant = defineLocale({
+     thread: {
+       loadingSession: '正在載入工作階段',
+       showEarlier: '顯示較早的訊息',
+-      loadingResponse: 'Hermes 正在載入回覆',
++      loadingResponse: 'Marketing OS 正在載入回覆',
+       resumeWhenBackgroundDone: count =>
+         count === 1 ? '背景工作完成後將自動繼續' : `${count} 個背景工作完成後將自動繼續`,
+       thinking: '思考中',
+@@ -2078,7 +2079,7 @@ export const zhHant = defineLocale({
+       attachingFile: '正在附加…'
+     },
+     approval: {
+-      gatewayDisconnected: 'Hermes 閘道未連線',
++      gatewayDisconnected: 'Marketing OS 閘道未連線',
+       sendFailed: '無法傳送核准回應',
+       run: '執行',
+       command: '指令',
+@@ -2089,12 +2090,12 @@ export const zhHant = defineLocale({
+       reject: '拒絕',
+       alwaysTitle: '一律允許此指令？',
+       alwaysDescription: pattern =>
+-        `這會將「${pattern}」模式加入永久允許清單（~/.hermes/config.yaml）。Hermes 對類似指令將不再詢問，包括目前工作階段和未來工作階段。`,
++        `這會將「${pattern}」模式加入永久允許清單（~/.hermes/config.yaml）。Marketing OS 對類似指令將不再詢問，包括目前工作階段和未來工作階段。`,
+       alwaysAllow: '一律允許'
+     },
+     clarify: {
+       notReady: '澄清請求尚未就緒',
+-      gatewayDisconnected: 'Hermes 閘道未連線',
++      gatewayDisconnected: 'Marketing OS 閘道未連線',
+       sendFailed: '無法傳送澄清回應',
+       loadingQuestion: '正在載入問題…',
+       other: '其他（輸入您的答案）',
+@@ -2182,14 +2183,14 @@ export const zhHant = defineLocale({
+   },
+ 
+   prompts: {
+-    gatewayDisconnected: 'Hermes 閘道未連線',
++    gatewayDisconnected: 'Marketing OS 閘道未連線',
+     sudoSendFailed: '無法傳送 sudo 密碼',
+     secretSendFailed: '無法傳送密鑰',
+     sudoTitle: '管理員密碼',
+-    sudoDesc: 'Hermes 需要您的 sudo 密碼來執行特權指令。它只會傳送給您的本機代理。',
++    sudoDesc: 'Marketing OS 需要您的 sudo 密碼來執行特權指令。它只會傳送給您的本機代理。',
+     sudoPlaceholder: 'sudo 密碼',
+     secretTitle: '需要密鑰',
+-    secretDesc: 'Hermes 需要一個憑證才能繼續。',
++    secretDesc: 'Marketing OS 需要一個憑證才能繼續。',
+     secretPlaceholder: '密鑰值'
+   },
+ 
+@@ -2239,8 +2240,8 @@ export const zhHant = defineLocale({
+     sessionExportFailed: '無法匯出工作階段',
+     imageSaved: '圖片已儲存',
+     downloadStarted: '下載已開始',
+-    restartToUseSaveImage: '重新啟動 Hermes Desktop 後可使用儲存圖片。',
+-    restartToSaveImages: '重新啟動 Hermes Desktop 以儲存圖片',
++    restartToUseSaveImage: '重新啟動 Marketing OS 後可使用儲存圖片。',
++    restartToSaveImages: '重新啟動 Marketing OS 以儲存圖片',
+     imageDownloadFailed: '圖片下載失敗',
+     openImage: '開啟圖片',
+     downloadImage: '下載圖片',
+diff --git a/apps/desktop/src/i18n/zh.ts b/apps/desktop/src/i18n/zh.ts
+index aa0257977..88d9e50e2 100644
+--- a/apps/desktop/src/i18n/zh.ts
++++ b/apps/desktop/src/i18n/zh.ts
+@@ -59,18 +59,18 @@ export const zh: Translations = {
+   },
+ 
+   boot: {
+-    ready: 'Hermes 桌面版已就绪',
++    ready: 'Marketing OS 桌面版已就绪',
+     desktopBootFailedWithMessage: message => `桌面启动失败：${message}`,
+     steps: {
+       connectingGateway: '正在连接桌面网关',
+-      loadingSettings: '正在加载 Hermes 设置',
++      loadingSettings: '正在加载 Marketing OS 设置',
+       loadingSessions: '正在加载最近会话',
+       startingDesktopConnection: '正在启动桌面连接',
+-      startingHermesDesktop: '正在启动 Hermes 桌面版…'
++      startingHermesDesktop: '正在启动 Marketing OS 桌面版…'
+     },
+     errors: {
+-      backgroundExited: 'Hermes 后台进程已退出。',
+-      backgroundExitedDuringStartup: 'Hermes 后台进程在启动期间退出。',
++      backgroundExited: 'Marketing OS 后台进程已退出。',
++      backgroundExitedDuringStartup: 'Marketing OS 后台进程在启动期间退出。',
+       backendStopped: '后端已停止',
+       desktopBootFailed: '桌面启动失败',
+       gatewayConnectionLost: '与网关的连接已断开',
+@@ -78,7 +78,7 @@ export const zh: Translations = {
+       ipcBridgeUnavailable: '桌面 IPC 桥不可用。'
+     },
+     failure: {
+-      title: 'Hermes 无法启动',
++      title: 'Marketing OS 无法启动',
+       description: '后台网关没有启动。请尝试下面的恢复步骤；这里不会删除你的对话或设置。',
+       remoteTitle: '需要重新登录远程网关',
+       remoteDescription: '你的远程网关会话已过期。请重新登录以恢复连接。这些操作不会删除你的对话或设置。',
+@@ -112,15 +112,15 @@ export const zh: Translations = {
+     copyDetail: '复制详情',
+     copyDetailFailed: '无法复制通知详情',
+     backendOutOfDateTitle: '后端版本过旧',
+-    backendOutOfDateMessage: '你的 Hermes 后端早于当前桌面构建，可能无法正常工作。请更新以保持一致。',
+-    updateHermes: '更新 Hermes',
++    backendOutOfDateMessage: '你的 Marketing OS 后端早于当前桌面构建，可能无法正常工作。请更新以保持一致。',
++    updateHermes: '更新 Marketing OS',
+     updateReadyTitle: '有可用更新',
+     updateReadyMessage: count => `有 ${count} 项新更改可用。`,
+     seeWhatsNew: '查看更新内容',
+     errors: {
+       elevenLabsNeedsKey: 'ElevenLabs STT 需要 ELEVENLABS_API_KEY。',
+       elevenLabsRejectedKey: 'ElevenLabs 拒绝了该 API key (401)。',
+-      methodNotAllowed: '桌面后端拒绝了该请求 (405 Method Not Allowed)。请尝试重启 Hermes Desktop。',
++      methodNotAllowed: '桌面后端拒绝了该请求 (405 Method Not Allowed)。请尝试重启 Marketing OS。',
+       microphonePermission: '麦克风权限已被拒绝。',
+       openaiRejectedApiKey: 'OpenAI 拒绝了该 API key。',
+       openaiRejectedApiKeyWithStatus: status => `OpenAI 拒绝了该 API key (${status} invalid_api_key)。`,
+@@ -150,8 +150,8 @@ export const zh: Translations = {
+       approveAction: '批准',
+       rejectAction: '拒绝',
+       inputTitle: '需要输入',
+-      inputBody: 'Hermes 正在等待你的回应。',
+-      turnDoneTitle: 'Hermes 已完成',
++      inputBody: 'Marketing OS 正在等待你的回应。',
++      turnDoneTitle: 'Marketing OS 已完成',
+       turnDoneBody: '回复已就绪。',
+       turnErrorTitle: '本轮失败',
+       backgroundDoneTitle: '后台任务已完成',
+@@ -284,7 +284,7 @@ export const zh: Translations = {
+     exportConfig: '导出配置',
+     importConfig: '导入配置',
+     resetToDefaults: '恢复默认',
+-    resetConfirm: '将所有设置恢复为 Hermes 默认值？',
++    resetConfirm: '将所有设置恢复为 Marketing OS 默认值？',
+     exportFailed: '导出失败',
+     resetFailed: '重置失败',
+     nav: {
+@@ -305,7 +305,7 @@ export const zh: Translations = {
+       intro: '原生桌面通知，区别于应用内提示。设置按设备保存，每台电脑各自独立。',
+       enableAll: '启用通知',
+       enableAllDesc: '总开关。关闭后将静音下方所有通知。',
+-      focusedHint: '完成提醒仅在 Hermes 处于后台时触发。',
++      focusedHint: '完成提醒仅在 Marketing OS 处于后台时触发。',
+       kinds: {
+         approval: {
+           label: '需要批准',
+@@ -313,11 +313,11 @@ export const zh: Translations = {
+         },
+         input: {
+           label: '需要输入',
+-          description: 'Hermes 提出了问题，或需要密码或密钥。'
++          description: 'Marketing OS 提出了问题，或需要密码或密钥。'
+         },
+         turnDone: {
+           label: '回复就绪',
+-          description: 'Hermes 在后台时完成了一轮对话。'
++          description: 'Marketing OS 在后台时完成了一轮对话。'
+         },
+         turnError: {
+           label: '本轮失败',
+@@ -329,7 +329,7 @@ export const zh: Translations = {
+         }
+       },
+       test: '发送测试通知',
+-      testTitle: 'Hermes',
++      testTitle: 'Marketing OS',
+       testBody: '通知工作正常。',
+       testSent: '测试已发送。如果没有出现，请检查系统通知权限和专注模式／勿扰模式。',
+       testUnsupported: '此系统不支持原生通知。',
+@@ -348,7 +348,7 @@ export const zh: Translations = {
+       advanced: '高级'
+     },
+     searchPlaceholder: {
+-      about: '关于 Hermes Desktop',
++      about: '关于 Marketing OS',
+       config: '搜索设置…',
+       gateway: '网关连接…',
+       keys: '搜索 API 密钥…',
+@@ -364,7 +364,7 @@ export const zh: Translations = {
+       title: '外观',
+       intro: '这些是仅桌面端的显示偏好。模式控制明暗；主题控制强调色与对话界面样式。',
+       colorMode: '颜色模式',
+-      colorModeDesc: '选择固定模式，或让 Hermes 跟随系统设置。',
++      colorModeDesc: '选择固定模式，或让 Marketing OS 跟随系统设置。',
+       toolViewTitle: '工具调用显示',
+       toolViewDesc: '产品模式隐藏原始工具数据；技术模式显示完整输入/输出。',
+       translucencyTitle: '窗口透明',
+@@ -395,8 +395,8 @@ export const zh: Translations = {
+       pet: {
+         title: '宠物',
+         intro:
+-          '领养一只悬浮在应用上的 petdex 动画宠物，它会根据 Hermes 的状态做出反应——工具执行时奔跑、成功时欢呼、出错时沮丧。',
+-        restartHint: '宠物功能需要重启——当前运行的应用在此功能加入前启动。请退出并重新打开 Hermes，然后回到此处。',
++          '领养一只悬浮在应用上的 petdex 动画宠物，它会根据 Marketing OS 的状态做出反应——工具执行时奔跑、成功时欢呼、出错时沮丧。',
++        restartHint: '宠物功能需要重启——当前运行的应用在此功能加入前启动。请退出并重新打开 Marketing OS，然后回到此处。',
+         scaleTitle: '大小',
+         scaleDesc: '调整悬浮宠物的大小，所有界面即时生效。',
+         on: '开启',
+@@ -589,10 +589,10 @@ export const zh: Translations = {
+         personality: '新会话的默认助手风格。',
+         showReasoning: '当后端提供推理内容时予以显示。'
+       },
+-      timezone: '当 Hermes 需要本地时间上下文时使用。留空则使用系统时区。',
++      timezone: '当 Marketing OS 需要本地时间上下文时使用。留空则使用系统时区。',
+       agent: {
+         imageInputMode: '控制图片附件如何发送给模型。',
+-        maxTurns: 'Hermes 停止一次运行前工具调用轮次的上限。'
++        maxTurns: 'Marketing OS 停止一次运行前工具调用轮次的上限。'
+       },
+       terminal: {
+         cwd: '工具与终端操作的默认项目目录。',
+@@ -602,9 +602,9 @@ export const zh: Translations = {
+       codeExecution: {
+         mode: '代码执行被限定到当前项目的严格程度。'
+       },
+-      fileReadMaxChars: 'Hermes 单次文件读取可读取的最大字符数。',
++      fileReadMaxChars: 'Marketing OS 单次文件读取可读取的最大字符数。',
+       approvals: {
+-        mode: 'Hermes 如何处理需要显式审批的命令。',
++        mode: 'Marketing OS 如何处理需要显式审批的命令。',
+         timeout: '审批提示在超时前等待的时长。'
+       },
+       security: {
+@@ -634,11 +634,11 @@ export const zh: Translations = {
+       },
+       updates: {
+         nonInteractiveLocalChanges:
+-          'Hermes 从应用内更新时（无终端提示），保留本地源码修改（暂存）或丢弃（放弃）。通过终端更新时始终会询问。'
++          'Marketing OS 从应用内更新时（无终端提示），保留本地源码修改（暂存）或丢弃（放弃）。通过终端更新时始终会询问。'
+       }
+     }),
+     about: {
+-      heading: 'Hermes Desktop',
++      heading: 'Marketing OS',
+       version: value => `版本 ${value}`,
+       versionUnavailable: '版本不可用',
+       updates: '更新',
+@@ -656,7 +656,7 @@ export const zh: Translations = {
+       lastChecked: age => `上次检查:${age}`,
+       justNowSuffix: ' · 刚刚',
+       automaticUpdates: '自动更新',
+-      automaticUpdatesDesc: 'Hermes 会在后台自动检查更新，并在有可用更新时通知你。',
++      automaticUpdatesDesc: 'Marketing OS 会在后台自动检查更新，并在有可用更新时通知你。',
+       branchCommit: (branch, commit) => `分支 ${branch} · 提交 ${commit}`,
+       never: '从未',
+       justNow: '刚刚',
+@@ -669,7 +669,7 @@ export const zh: Translations = {
+       noneParen: '(无)',
+       notSet: '未设置',
+       commaSeparated: '逗号分隔的值',
+-      loading: '正在加载 Hermes 配置...',
++      loading: '正在加载 Marketing OS 配置...',
+       emptyTitle: '无可配置项',
+       emptyDesc: '此分区没有可调整的设置。',
+       failedLoad: '设置加载失败',
+@@ -706,7 +706,7 @@ export const zh: Translations = {
+       title: '网关连接',
+       envOverride: '环境变量覆盖',
+       intro:
+-        'Hermes Desktop 默认会启动自己的本地网关。当你希望此应用控制另一台机器上或可信代理后的现有 Hermes 后端时，可以使用远程网关。下面可按 profile 指定各自的远程主机。',
++        'Marketing OS 默认会启动自己的本地网关。当你希望此应用控制另一台机器上或可信代理后的现有 Marketing OS 后端时，可以使用远程网关。下面可按 profile 指定各自的远程主机。',
+       appliesTo: '应用于',
+       allProfiles: '所有 profile',
+       defaultConnection: '默认连接会用于所有没有自定义覆盖的 profile。',
+@@ -714,10 +714,10 @@ export const zh: Translations = {
+       envOverrideTitle: '环境变量正在控制此桌面会话。',
+       envOverrideDesc: '取消设置 HERMES_DESKTOP_REMOTE_URL 和 HERMES_DESKTOP_REMOTE_TOKEN 后才会使用下面保存的设置。',
+       localTitle: '本地网关',
+-      localDesc: '在 localhost 启动私有 Hermes 后端。这是默认方式，并且可离线工作。',
++      localDesc: '在 localhost 启动私有 Marketing OS 后端。这是默认方式，并且可离线工作。',
+       remoteTitle: '远程网关',
+       remoteDesc:
+-        '将此桌面外壳连接到远程 Hermes 后端。托管网关使用 OAuth 或用户名密码；自托管网关也可能使用会话 token。',
++        '将此桌面应用连接到远程 Marketing OS 运行时。托管网关使用 OAuth 或用户名密码；自托管网关也可能使用会话 token。',
+       remoteUrlTitle: '远程 URL',
+       remoteUrlDesc: '远程 dashboard 后端的基础 URL。支持路径前缀，例如 /hermes。',
+       probing: '正在检查此网关的认证方式…',
+@@ -750,9 +750,9 @@ export const zh: Translations = {
+       enterUrlFirst: '请先输入远程 URL。',
+       restartingTitle: '网关连接正在重启',
+       savedTitle: '网关设置已保存',
+-      restartingMessage: 'Hermes Desktop 将使用已保存设置重新连接。',
++      restartingMessage: 'Marketing OS 将使用已保存设置重新连接。',
+       savedMessage: '已保存，下一次重启生效。',
+-      connectedTo: (baseUrl, version) => `已连接到 ${baseUrl}${version ? ` · Hermes ${version}` : ''}`,
++      connectedTo: (baseUrl, version) => `已连接到 ${baseUrl}${version ? ` · Marketing OS ${version}` : ''}`,
+       reachableTitle: '远程网关可访问',
+       signedOutTitle: '已退出登录',
+       signedOutMessage: '已清除远程网关会话。',
+@@ -827,7 +827,7 @@ export const zh: Translations = {
+     providers: {
+       connectAccount: '连接账号',
+       haveApiKey: '改用 API 密钥？',
+-      intro: '使用订阅登录，无需复制 API 密钥。Hermes 会在应用中为你完成浏览器登录。',
++      intro: '使用订阅登录，无需复制 API 密钥。Marketing OS 会在应用中为你完成浏览器登录。',
+       connected: '已连接',
+       collapse: '收起',
+       connectAnother: '连接其他提供方',
+@@ -984,7 +984,7 @@ export const zh: Translations = {
+       placeholder: '搜索宠物…',
+       loading: '正在加载 petdex 画廊…',
+       error: '无法连接到 petdex 画廊。',
+-      staleBackend: '请重启 Hermes 以使用宠物功能——当前后端版本过旧。',
++      staleBackend: '请重启 Marketing OS 以使用宠物功能——当前后端版本过旧。',
+       empty: '没有匹配的宠物。',
+       turnOff: '关闭',
+       turnOn: '开启',
+@@ -1011,8 +1011,8 @@ export const zh: Translations = {
+       hatchComposing: '正在拼合……',
+       hatchSaving: '马上就好……',
+       namePlaceholder: '给宠物起个名字',
+-      staleBackend: '请更新 Hermes 以生成宠物。',
+-      backgroundHint: '你可以关闭此窗口——完成后 Hermes 会通知你。',
++      staleBackend: '请更新 Marketing OS 以生成宠物。',
++      backgroundHint: '你可以关闭此窗口——完成后 Marketing OS 会通知你。',
+       slowProviderHint: '这可能需要几分钟',
+       remix: '混合生成',
+       remixConfirmTitle: '以此造型混合生成？',
+@@ -1045,7 +1045,7 @@ export const zh: Translations = {
+     },
+     nav: {
+       newChat: { title: '新建会话', detail: '开始一个新会话' },
+-      settings: { title: '设置', detail: '配置 Hermes 桌面端' },
++      settings: { title: '设置', detail: '配置 Marketing OS 桌面端' },
+       skills: { title: '技能与工具', detail: '启用技能、工具集与提供方' },
+       messaging: { title: '消息平台', detail: '配置 Telegram、Slack、Discord 等' },
+       artifacts: { title: '产物', detail: '浏览生成的输出' }
+@@ -1067,10 +1067,10 @@ export const zh: Translations = {
+     noSessions: '暂无会话。',
+     gatewayRunning: '消息网关运行中',
+     gatewayStopped: '消息网关已停止',
+-    hermesActiveSessions: (version, count) => `Hermes ${version} · 活跃会话 ${count}`,
++    hermesActiveSessions: (version, count) => `Marketing OS ${version} · 活跃会话 ${count}`,
+     restartGateway: '重启网关',
+     gatewayRestartFailed: '网关重启失败。',
+-    updateHermes: '更新 Hermes',
++    updateHermes: '更新 Marketing OS',
+     actionRunning: '运行中',
+     actionDone: '完成',
+     actionFailed: '失败',
+@@ -1209,10 +1209,10 @@ export const zh: Translations = {
+       slack: '创建 Slack 应用，启用 Socket Mode，安装到你的工作区，然后复制 bot 令牌和 app 级令牌。',
+       mattermost: '在你的 Mattermost 服务器上，创建机器人账户或个人访问令牌，然后在此粘贴服务器 URL 和令牌。',
+       matrix: '用机器人账户登录你的 homeserver，然后复制访问令牌、用户 ID 和 homeserver URL。',
+-      signal: '在可访问的位置运行 signal-cli REST 桥接，然后把 Hermes 指向该 URL 和已注册的电话号码。',
+-      whatsapp: '启动 Hermes 自带的 WhatsApp 桥接，首次运行时扫描二维码，然后启用该平台。',
++      signal: '在可访问的位置运行 signal-cli REST 桥接，然后把 Marketing OS 指向该 URL 和已注册的电话号码。',
++      whatsapp: '启动 Marketing OS 自带的 WhatsApp 桥接，首次运行时扫描二维码，然后启用该平台。',
+       bluebubbles:
+-        '在装有 iMessage 的 Mac 上运行 BlueBubbles Server，暴露其 API，然后用服务器密码把 Hermes 指向该 URL。',
++        '在装有 iMessage 的 Mac 上运行 BlueBubbles Server，暴露其 API，然后用服务器密码把 Marketing OS 指向该 URL。',
+       homeassistant: '在 Home Assistant 中打开你的个人资料并创建长期访问令牌。把它连同你的 HA URL 一起粘贴到这里。',
+       email: '使用专用邮箱。对于 Gmail/Workspace,创建应用专用密码并使用 imap.gmail.com / smtp.gmail.com。',
+       sms: '从 Twilio 控制台获取你的 Account SID 和 Auth Token，以及一个可发送短信的电话号码。',
+@@ -1221,10 +1221,10 @@ export const zh: Translations = {
+       wecom: '在企业微信中添加群机器人，复制其 webhook key 作为 WECOM_BOT_ID。仅可发送——双向请用企业微信 (应用) 选项。',
+       wecom_callback: '设置一个企业微信自建应用，暴露其回调 URL，并提供 corp ID、secret、agent ID 和 AES key。',
+       weixin:
+-        '运行 `hermes gateway setup`，选择 Weixin，然后使用个人微信账号扫描并确认二维码。Hermes 会通过腾讯 iLink Bot API 连接并保存凭据。',
++        '运行 `hermes gateway setup`，选择 Weixin，然后使用个人微信账号扫描并确认二维码。Marketing OS 会通过腾讯 iLink Bot API 连接并保存凭据。',
+       qqbot: '在 QQ 开放平台 (q.qq.com) 注册一个应用，复制 App ID 和 Client Secret。',
+       api_server:
+-        '把 Hermes 暴露为兼容 OpenAI 的 API。设置一个鉴权密钥，然后把 Open WebUI / LobeChat 等指向 host:port。',
++        '把 Marketing OS 暴露为兼容 OpenAI 的 API。设置一个鉴权密钥，然后把 Open WebUI / LobeChat 等指向 host:port。',
+       webhook: '运行一个 HTTP 服务器，供其他工具 (GitHub、GitLab、自定义应用)POST。用 secret 验证签名。'
+     }
+   },
+@@ -1275,7 +1275,7 @@ export const zh: Translations = {
+     deleteDescMid: ' 并移除其 ',
+     deleteDescSuffix: ' 目录。此操作无法撤销。',
+     deleting: '删除中…',
+-    createDesc: '配置档案是相互独立的 Hermes 环境：各自拥有独立的配置、技能和 SOUL.md。',
++    createDesc: '配置档案是相互独立的 Marketing OS 环境：各自拥有独立的配置、技能和 SOUL.md。',
+     nameLabel: '名称',
+     cloneFrom: '克隆来源',
+     cloneFromNone: '无（空白）',
+@@ -1363,7 +1363,7 @@ export const zh: Translations = {
+     topOfHour: '每个整点',
+     everyHourAt: minute => `每小时的 :${minute}`,
+     newCron: '新建定时任务',
+-    emptyDescNew: '按 cron 表达式排程一个提示词。Hermes 会运行它，并把结果发送到你选择的目的地。',
++    emptyDescNew: '按 cron 表达式排程一个提示词。Marketing OS 会运行它，并把结果发送到你选择的目的地。',
+     emptyDescSearch: '尝试更宽泛的搜索词。',
+     emptyTitleNew: '暂无排程任务',
+     emptyTitleSearch: '无匹配项',
+@@ -1453,6 +1453,7 @@ export const zh: Translations = {
+ 
+   sidebar: {
+     nav: {
++      workbench: '工作台',
+       'new-session': '新建会话',
+       skills: '技能与工具',
+       messaging: '消息平台',
+@@ -1508,7 +1509,7 @@ export const zh: Translations = {
+       copyPath: '复制路径',
+       removeFromSidebar: '从侧边栏移除',
+       createFailed: '无法创建项目',
+-      deleteConfirm: '这会从 Hermes 中移除已保存的项目。文件、git 仓库和工作树保持不变。',
++      deleteConfirm: '这会从 Marketing OS 中移除已保存的项目。文件、git 仓库和工作树保持不变。',
+       startWork: '新建工作树',
+       newWorktreeTitle: '新建工作树',
+       newWorktreeDesc: '为这个工作树命名分支。',
+@@ -1571,12 +1572,12 @@ export const zh: Translations = {
+   composer: {
+     message: '消息',
+     wakingProfile: profile => `正在唤醒 ${profile}…`,
+-    placeholderStarting: '正在启动 Hermes…',
+-    placeholderReconnecting: '正在重新连接 Hermes…',
++    placeholderStarting: '正在启动 Marketing OS…',
++    placeholderReconnecting: '正在重新连接 Marketing OS…',
+     placeholderFollowUp: '发送后续消息',
+     newSessionPlaceholders: [
+       '我们要构建什么？',
+-      '给 Hermes 一个任务',
++      '给 Marketing OS 一个任务',
+       '你在想什么？',
+       '描述你需要什么',
+       '我们该处理什么？',
+@@ -1637,7 +1638,7 @@ export const zh: Translations = {
+       'composer.history': '循环弹窗 / 历史'
+     },
+     attachUrlTitle: '附加 URL',
+-    attachUrlDesc: 'Hermes 将抓取该页面并作为本回合的上下文。',
++    attachUrlDesc: 'Marketing OS 将抓取该页面并作为本回合的上下文。',
+     urlPlaceholder: 'https://example.com/post',
+     urlHintPre: '请包含完整 URL，例如 ',
+     attach: '附加',
+@@ -1742,7 +1743,7 @@ export const zh: Translations = {
+       createPr: '创建 PR',
+       openPr: '打开 PR',
+       ghMissing: '安装 GitHub CLI (gh) 并登录后可打开 PR',
+-      agentShip: '让 Hermes 提交并开 PR',
++      agentShip: '让 Marketing OS 提交并开 PR',
+       agentShipPrompt: '检查当前更改，使用清晰的约定式提交信息提交，推送分支，并开启一个拉取请求。',
+       newBranch: '新建分支',
+       branchOffFrom: base => `从 ${base} 新建分支`,
+@@ -1759,9 +1760,9 @@ export const zh: Translations = {
+       fetch: '下载中…',
+       pull: '马上完成…',
+       pydeps: '收尾中…',
+-      update: '正在更新 Hermes…',
++      update: '正在更新 Marketing OS…',
+       rebuild: '正在重新构建桌面应用…',
+-      restart: '正在重启 Hermes…',
++      restart: '正在重启 Marketing OS…',
+       done: '更新完成',
+       manual: '从终端更新',
+       guiSkew: '请更新桌面应用',
+@@ -1771,32 +1772,32 @@ export const zh: Translations = {
+     checkFailedTitle: '无法检查更新',
+     tryAgain: '重试',
+     notAvailableTitle: '更新不可用',
+-    unsupportedMessage: '此版本的 Hermes 无法在应用内自行更新。',
++    unsupportedMessage: '此版本的 Marketing OS 无法在应用内自行更新。',
+     connectionRetry: '请检查网络连接后重试。',
+     latestBody: '你正在运行最新版本。',
+     latestBodyBackend: '后端正在运行最新版本。',
+     allSetTitle: '已是最新',
+     availableTitle: '有可用更新',
+-    availableBody: '新版 Hermes 已可安装。',
++    availableBody: '新版 Marketing OS 已可安装。',
+     availableTitleBackend: '后端有可用更新',
+-    availableBodyBackend: '已连接的 Hermes 后端有新版本可安装。',
++    availableBodyBackend: '已连接的 Marketing OS 后端有新版本可安装。',
+     availableBodyNoChangelog: '已有新版本可用。此安装方式无法显示更新日志。',
+     updateNow: '立即更新',
+     maybeLater: '稍后再说',
+     moreChanges: count => `另有 ${count} 项更改。`,
+     manualTitle: '从终端更新',
+-    manualBody: '你是从命令行安装的 Hermes，因此更新也需要在那里运行。请将此命令粘贴到终端：',
+-    manualPickedUp: '下次启动 Hermes 时会使用新版本。',
++    manualBody: '你是从命令行安装的 Marketing OS，因此更新也需要在那里运行。请将此命令粘贴到终端：',
++    manualPickedUp: '下次启动 Marketing OS 时会使用新版本。',
+     guiSkewTitle: '请更新桌面应用',
+     guiSkewBody:
+-      '后端已更新，但此桌面应用包未更改。请更新或重新安装 Hermes 桌面应用（你的 AppImage / .deb / .rpm）以保持一致。',
++      '后端已更新，但此桌面应用包未更改。请更新或重新安装 Marketing OS 桌面应用（你的 AppImage / .deb / .rpm）以保持一致。',
+     copy: '复制',
+     copied: '已复制',
+     done: '完成',
+     applyingBody:
+-      'Hermes 更新器会在自己的窗口中接管，并在完成后自动重新打开 Hermes。更新期间请不要自行重新打开 Hermes。',
+-    applyingBodyBackend: '远程后端正在应用更新并将重启。恢复后 Hermes 会自动重新连接。',
+-    applyingClose: '此窗口会在更新期间关闭，随后 Hermes 会自动重新打开。',
++      'Marketing OS 更新器会在自己的窗口中接管，并在完成后自动重新打开 Marketing OS。更新期间请不要自行重新打开 Marketing OS。',
++    applyingBodyBackend: '远程后端正在应用更新并将重启。恢复后 Marketing OS 会自动重新连接。',
++    applyingClose: '此窗口会在更新期间关闭，随后 Marketing OS 会自动重新打开。',
+     errorTitle: '更新未完成',
+     errorBody: '没有数据丢失。你可以现在重试。',
+     notNow: '暂不',
+@@ -1818,7 +1819,7 @@ export const zh: Translations = {
+       skipped: '已跳过',
+       failed: '失败'
+     },
+-    oneTimeTitle: 'Hermes 需要一次性安装',
++    oneTimeTitle: 'Marketing OS 需要一次性安装',
+     unsupportedDesc: platform =>
+       `${platform} 暂不支持自动首次启动安装。请打开终端并运行下面的命令，然后重新启动此应用。之后启动会跳过此步骤。`,
+     installCommand: '安装命令',
+@@ -1827,11 +1828,11 @@ export const zh: Translations = {
+     installTo: '将安装到',
+     retryAfterRun: '我已运行 -- 重试',
+     failedTitle: '安装失败',
+-    settingUpTitle: '正在设置 Hermes Agent',
++    settingUpTitle: '正在设置 Marketing OS Agent',
+     finishingTitle: '正在收尾',
+     failedDesc:
+-      '某个安装步骤失败。在 Windows 上，如果另一个 Hermes CLI 或桌面实例正在运行，可能会出现这种情况。请停止正在运行的 Hermes 实例后重试。可查看下面的详情或 desktop 日志中的完整记录。',
+-    activeDesc: '这是一次性设置。Hermes 安装器正在下载依赖并配置你的机器。之后启动会跳过此步骤。',
++      '某个安装步骤失败。在 Windows 上，如果另一个 Marketing OS CLI 或桌面实例正在运行，可能会出现这种情况。请停止正在运行的 Marketing OS 实例后重试。可查看下面的详情或 desktop 日志中的完整记录。',
++    activeDesc: '这是一次性设置。Marketing OS 安装器正在下载依赖并配置你的机器。之后启动会跳过此步骤。',
+     progress: (completed, total) => `${completed}/${total} 个步骤已完成`,
+     currentStage: stage => ` -- 当前：${stage}`,
+     fetchingManifest: '正在获取安装器 manifest...',
+@@ -1849,10 +1850,10 @@ export const zh: Translations = {
+   },
+ 
+   onboarding: {
+-    headerTitle: '开始设置 Hermes Agent',
++    headerTitle: '开始设置 Marketing OS Agent',
+     headerDesc: '连接模型提供方即可开始对话。大多数选项只需一次点击。',
+-    preparingInstall: 'Hermes 正在完成安装。首次运行通常不到一分钟。',
+-    starting: '正在启动 Hermes…',
++    preparingInstall: 'Marketing OS 正在完成安装。首次运行通常不到一分钟。',
++    starting: '正在启动 Marketing OS…',
+     lookingUpProviders: '正在查找提供方...',
+     collapse: '收起',
+     otherProviders: '其他提供方',
+@@ -1860,7 +1861,7 @@ export const zh: Translations = {
+     chooseLater: '稍后再选择提供方',
+     recommended: '推荐',
+     connected: '已连接',
+-    featuredPitch: '一个订阅，300+ 前沿模型 — 运行 Hermes 的推荐方式',
++    featuredPitch: '一个订阅，300+ 前沿模型 — 运行 Marketing OS 的推荐方式',
+     openRouterPitch: '一个密钥，数百个模型 — 稳妥的默认选择',
+     apiKeyOptions: {
+       openrouter: { short: '一个密钥，多个模型', description: '用一个密钥访问数百个模型。适合新安装的默认选择。' },
+@@ -1869,7 +1870,7 @@ export const zh: Translations = {
+       xai: { short: 'Grok 模型', description: '直接访问 xAI Grok 模型。' },
+       local: {
+         short: '自托管',
+-        description: '将 Hermes 指向本地或自托管的 OpenAI 兼容端点 (vLLM、llama.cpp、Ollama 等)。'
++        description: '将 Marketing OS 指向本地或自托管的 OpenAI 兼容端点 (vLLM、llama.cpp、Ollama 等)。'
+       }
+     },
+     backToSignIn: '返回登录',
+@@ -1882,8 +1883,8 @@ export const zh: Translations = {
+     update: '更新',
+     flowSubtitles: {
+       pkce: '打开浏览器登录，然后回到这里继续',
+-      device_code: '在浏览器中打开验证页面 — Hermes 会自动连接',
+-      loopback: '打开浏览器登录 — Hermes 会自动连接',
++      device_code: '在浏览器中打开验证页面 — Marketing OS 会自动连接',
++      loopback: '打开浏览器登录 — Marketing OS 会自动连接',
+       external: '先在终端登录一次，然后回来继续对话'
+     },
+     startingSignIn: provider => `正在为 ${provider} 启动登录...`,
+@@ -1894,11 +1895,11 @@ export const zh: Translations = {
+     pickDifferentProvider: '选择其他提供方',
+     signInWith: provider => `使用 ${provider} 登录`,
+     openedBrowser: provider => `已在浏览器中打开 ${provider}。`,
+-    authorizeThere: '请在那里授权 Hermes。',
++    authorizeThere: '请在那里授权 Marketing OS。',
+     copyAuthCode: '复制授权码并粘贴到下面。',
+     pasteAuthCode: '粘贴授权码',
+     reopenAuthPage: '重新打开授权页面',
+-    autoBrowser: provider => `已在浏览器中打开 ${provider}。请在那里授权 Hermes，连接会自动完成，无需复制或粘贴。`,
++    autoBrowser: provider => `已在浏览器中打开 ${provider}。请在那里授权 Marketing OS，连接会自动完成，无需复制或粘贴。`,
+     reopenSignInPage: '重新打开登录页面',
+     waitingAuthorize: '等待你授权...',
+     externalPending: provider => `${provider} 通过自己的 CLI 登录。请在终端运行此命令，然后回来选择“我已登录”：`,
+@@ -1986,7 +1987,7 @@ export const zh: Translations = {
+       update: '更新',
+       updateInProgress: '正在更新',
+       commitsBehind: (count, branch) => `落后 ${branch} ${count} 个提交`,
+-      desktopVersion: version => `Hermes Desktop v${version}`,
++      desktopVersion: version => `Marketing OS v${version}`,
+       backendVersion: version => `后端 v${version}`,
+       clientLabel: version => `客户端 v${version}`,
+       backendLabel: version => `后端 v${version}`,
+@@ -2003,7 +2004,7 @@ export const zh: Translations = {
+       gatewayConnecting: '连接中',
+       gatewayOffline: '离线',
+       gatewayRestarting: '重启中…',
+-      gatewayTitle: 'Hermes 推理网关状态',
++      gatewayTitle: 'Marketing OS 推理网关状态',
+       agents: '代理',
+       closeAgents: '关闭代理',
+       openAgents: '打开代理',
+@@ -2087,7 +2088,7 @@ export const zh: Translations = {
+     binaryTitle: '这看起来像二进制文件',
+     binaryBody: label => `预览 ${label} 可能会显示不可读文本。`,
+     largeTitle: '此文件较大',
+-    largeBody: (label, size) => `${label} 大小为 ${size}。Hermes 只会显示前 512 KB。`,
++    largeBody: (label, size) => `${label} 大小为 ${size}。Marketing OS 只会显示前 512 KB。`,
+     previewAnyway: '仍然预览',
+     truncated: '显示前 512 KB。',
+     noInlineTitle: '没有内联预览',
+@@ -2125,25 +2126,25 @@ export const zh: Translations = {
+       serverNotFound: '未找到服务器',
+       failedToLoad: '预览加载失败',
+       tryAgain: '重试',
+-      restarting: 'Hermes 正在重启...',
+-      askRestart: '让 Hermes 重启服务器',
+-      lookingRestart: taskId => `Hermes 正在查找要重启的预览服务器 (${taskId})`,
++      restarting: 'Marketing OS 正在重启...',
++      askRestart: '让 Marketing OS 重启服务器',
++      lookingRestart: taskId => `Marketing OS 正在查找要重启的预览服务器 (${taskId})`,
+       restartingTitle: '正在重启预览服务器',
+-      restartingMessage: 'Hermes 正在后台工作。可在预览控制台查看进度。',
++      restartingMessage: 'Marketing OS 正在后台工作。可在预览控制台查看进度。',
+       startRestartFailed: message => `无法启动服务器重启：${message}`,
+       restartFailed: '服务器重启失败',
+       hideConsole: '隐藏预览控制台',
+       showConsole: '显示预览控制台',
+       hideDevTools: '隐藏预览 DevTools',
+       openDevTools: '打开预览 DevTools',
+-      finishedRestarting: message => `Hermes 已完成预览服务器重启${message ? `: ${message}` : ''}`,
++      finishedRestarting: message => `Marketing OS 已完成预览服务器重启${message ? `: ${message}` : ''}`,
+       failedRestarting: message => `服务器重启失败：${message}`,
+       unknownError: '未知错误',
+       restartedTitle: '预览服务器已重启',
+       reloadingNow: '正在重新加载预览。',
+       restartFailedTitle: '预览重启失败',
+-      restartFailedMessage: 'Hermes 无法重启服务器。',
+-      stillWorking: 'Hermes 仍在工作，但还没有收到重启结果。服务器命令可能正在前台运行。',
++      restartFailedMessage: 'Marketing OS 无法重启服务器。',
++      stillWorking: 'Marketing OS 仍在工作，但还没有收到重启结果。服务器命令可能正在前台运行。',
+       workspaceReloading: '工作区已变更，正在重新加载预览',
+       fileChanged: url => `文件已变更，正在重新加载预览：${url}`,
+       filesChanged: (count, url) => `${count} 个文件变更，正在重新加载预览：${url}`,
+@@ -2161,7 +2162,7 @@ export const zh: Translations = {
+     thread: {
+       loadingSession: '正在加载会话',
+       showEarlier: '显示更早的消息',
+-      loadingResponse: 'Hermes 正在加载回复',
++      loadingResponse: 'Marketing OS 正在加载回复',
+       resumeWhenBackgroundDone: count =>
+         count === 1 ? '后台任务完成后将自动继续' : `${count} 个后台任务完成后将自动继续`,
+       thinking: '思考中',
+@@ -2191,7 +2192,7 @@ export const zh: Translations = {
+       attachingFile: '正在附加…'
+     },
+     approval: {
+-      gatewayDisconnected: 'Hermes 网关未连接',
++      gatewayDisconnected: 'Marketing OS 网关未连接',
+       sendFailed: '无法发送审批响应',
+       run: '运行',
+       command: '命令',
+@@ -2202,12 +2203,12 @@ export const zh: Translations = {
+       reject: '拒绝',
+       alwaysTitle: '始终允许此命令？',
+       alwaysDescription: pattern =>
+-        `这会将“${pattern}”模式加入永久允许列表 (~/.hermes/config.yaml)。Hermes 对类似命令将不再询问，包括当前会话和未来会话。`,
++        `这会将“${pattern}”模式加入永久允许列表 (~/.hermes/config.yaml)。Marketing OS 对类似命令将不再询问，包括当前会话和未来会话。`,
+       alwaysAllow: '始终允许'
+     },
+     clarify: {
+       notReady: '澄清请求尚未就绪',
+-      gatewayDisconnected: 'Hermes 网关未连接',
++      gatewayDisconnected: 'Marketing OS 网关未连接',
+       sendFailed: '无法发送澄清响应',
+       loadingQuestion: '正在加载问题…',
+       other: '其他 (输入你的答案)',
+@@ -2291,14 +2292,14 @@ export const zh: Translations = {
+   },
+ 
+   prompts: {
+-    gatewayDisconnected: 'Hermes 网关未连接',
++    gatewayDisconnected: 'Marketing OS 网关未连接',
+     sudoSendFailed: '无法发送 sudo 密码',
+     secretSendFailed: '无法发送密钥',
+     sudoTitle: '管理员密码',
+-    sudoDesc: 'Hermes 需要你的 sudo 密码来运行特权命令。它只会发送给你的本地 agent。',
++    sudoDesc: 'Marketing OS 需要你的 sudo 密码来运行特权命令。它只会发送给你的本地 agent。',
+     sudoPlaceholder: 'sudo 密码',
+     secretTitle: '需要密钥',
+-    secretDesc: 'Hermes 需要一个凭据才能继续。',
++    secretDesc: 'Marketing OS 需要一个凭据才能继续。',
+     secretPlaceholder: '密钥值'
+   },
+ 
+@@ -2348,8 +2349,8 @@ export const zh: Translations = {
+     sessionExportFailed: '无法导出会话',
+     imageSaved: '图片已保存',
+     downloadStarted: '下载已开始',
+-    restartToUseSaveImage: '重启 Hermes 桌面版后可使用保存图片。',
+-    restartToSaveImages: '重启 Hermes 桌面版以保存图片',
++    restartToUseSaveImage: '重启 Marketing OS 桌面版后可使用保存图片。',
++    restartToSaveImages: '重启 Marketing OS 桌面版以保存图片',
+     imageDownloadFailed: '图片下载失败',
+     openImage: '打开图片',
+     downloadImage: '下载图片',
+diff --git a/apps/desktop/src/lib/chat-runtime.ts b/apps/desktop/src/lib/chat-runtime.ts
+index 9cd0c923d..126b62b95 100644
+--- a/apps/desktop/src/lib/chat-runtime.ts
++++ b/apps/desktop/src/lib/chat-runtime.ts
+@@ -119,7 +119,7 @@ export function coerceGatewayText(value: unknown): string {
+ /**
+  * Normalize a reasoning/thinking text payload from the gateway.
+  *
+- * Only the leading status prefix (e.g. "Hermes is thinking...") and the
++ * Only the leading status prefix (e.g. "Marketing OS is thinking...") and the
+  * obvious placeholder echoes are stripped. We deliberately do NOT trim
+  * the delta — reasoning streams as small chunks (often individual tokens
+  * with leading or trailing spaces), and trimming each chunk before
+diff --git a/apps/desktop/src/lib/desktop-fs.ts b/apps/desktop/src/lib/desktop-fs.ts
+index d66e02230..f9761bb30 100644
+--- a/apps/desktop/src/lib/desktop-fs.ts
++++ b/apps/desktop/src/lib/desktop-fs.ts
+@@ -46,7 +46,7 @@ function bridge() {
+   const desktop = window.hermesDesktop
+ 
+   if (!desktop) {
+-    throw new Error('Hermes Desktop bridge is unavailable')
++    throw new Error('Marketing OS bridge is unavailable')
+   }
+ 
+   return desktop
+diff --git a/apps/desktop/src/lib/desktop-git.ts b/apps/desktop/src/lib/desktop-git.ts
+index 1a12c3b8a..5c2ae1db9 100644
+--- a/apps/desktop/src/lib/desktop-git.ts
++++ b/apps/desktop/src/lib/desktop-git.ts
+@@ -20,7 +20,7 @@ function desktopApi<T>(path: string, body?: Record<string, unknown>): Promise<T>
+   const desktop = window.hermesDesktop
+ 
+   if (!desktop) {
+-    throw new Error('Hermes Desktop bridge is unavailable')
++    throw new Error('Marketing OS bridge is unavailable')
+   }
+ 
+   return desktop.api<T>(
+diff --git a/apps/desktop/src/product.test.ts b/apps/desktop/src/product.test.ts
+new file mode 100644
+index 000000000..d566f5ad9
+--- /dev/null
++++ b/apps/desktop/src/product.test.ts
+@@ -0,0 +1,12 @@
++import { describe, expect, it } from 'vitest'
++
++import { PRODUCT_APP_ID, PRODUCT_ID, PRODUCT_NAME, PRODUCT_TAGLINE } from './product'
++
++describe('Marketing OS product identity', () => {
++  it('is the native desktop product rather than an external Hermes shell', () => {
++    expect(PRODUCT_ID).toBe('marketing-os')
++    expect(PRODUCT_NAME).toBe('Marketing OS')
++    expect(PRODUCT_APP_ID).toBe('com.marketingos.desktop')
++    expect(PRODUCT_TAGLINE).toContain('账号')
++  })
++})
+diff --git a/apps/desktop/src/product.ts b/apps/desktop/src/product.ts
+new file mode 100644
+index 000000000..c9bf84646
+--- /dev/null
++++ b/apps/desktop/src/product.ts
+@@ -0,0 +1,4 @@
++export const PRODUCT_ID = 'marketing-os'
++export const PRODUCT_NAME = 'Marketing OS'
++export const PRODUCT_TAGLINE = '长期经营账号的智能操作系统'
++export const PRODUCT_APP_ID = 'com.marketingos.desktop'
+diff --git a/apps/desktop/src/store/onboarding.ts b/apps/desktop/src/store/onboarding.ts
+index 9ef3754be..1996f3582 100644
+--- a/apps/desktop/src/store/onboarding.ts
++++ b/apps/desktop/src/store/onboarding.ts
+@@ -196,7 +196,7 @@ function shouldPreserveConfiguredOnFallback(runtime: RuntimeReadinessResult, sta
+ }
+ 
+ function notifyReady(provider: string) {
+-  notify({ kind: 'success', title: 'Hermes is ready', message: `${provider} connected.` })
++  notify({ kind: 'success', title: 'Marketing OS is ready', message: `${provider} connected.` })
+ }
+ 
+ // Human-friendly labels for tools auto-routed through the Nous Tool Gateway,
+@@ -365,8 +365,8 @@ function providerResolutionFailure(reason: null | string) {
+   const detail = reason?.trim()
+ 
+   return detail
+-    ? `Connected, but Hermes still cannot resolve a usable provider. ${detail}`
+-    : 'Connected, but Hermes still cannot resolve a usable provider.'
++    ? `Connected, but Marketing OS still cannot resolve a usable provider. ${detail}`
++    : 'Connected, but Marketing OS still cannot resolve a usable provider.'
+ }
+ 
+ async function refreshProviders() {
+@@ -531,7 +531,7 @@ export async function refreshOnboarding(ctx: OnboardingContext) {
+       kind: 'error',
+       title: 'Runtime not ready',
+       message:
+-        'Hermes Desktop could not verify the running backend on startup. Some features may be unavailable until the gateway is reachable.'
++        'Marketing OS could not verify the running backend on startup. Some features may be unavailable until the gateway is reachable.'
+     })
+ 
+     return false
+@@ -744,7 +744,7 @@ export async function recheckExternalSignin(ctx: OnboardingContext) {
+       provider,
+       message:
+         reason?.trim() ||
+-        `Hermes still cannot reach ${provider.name}. Run \`${provider.cli_command}\` in a terminal first.`
++        `Marketing OS still cannot reach ${provider.name}. Run \`${provider.cli_command}\` in a terminal first.`
+     })
+   )
+ }
+@@ -859,7 +859,7 @@ export async function saveOnboardingLocalEndpoint(baseUrl: string, apiKey: strin
+     if (!runtime.ready) {
+       const detail = (runtime.reason ?? '').trim()
+ 
+-      return { ok: false, message: detail || `Saved, but Hermes still cannot reach ${url}.` }
++      return { ok: false, message: detail || `Saved, but Marketing OS still cannot reach ${url}.` }
+     }
+ 
+     notifyReady('Local / custom endpoint')
+diff --git a/apps/desktop/src/styles.css b/apps/desktop/src/styles.css
+index 5e9a156b8..50fb344f0 100644
+--- a/apps/desktop/src/styles.css
++++ b/apps/desktop/src/styles.css
+@@ -759,8 +759,9 @@ code {
+ }
+ 
+ /* Arc-style multicolor action surface (static, not animated). Reusable on any
+-   Button via className. Unlayered so it beats Tailwind's bg-*/
+-text-* variant utilities. */ .btn-arc {
++   Button via className. Unlayered so it beats Tailwind background and text
++   variant utilities. */
++.btn-arc {
+   background-image: linear-gradient(110deg, #5b6cff 0%, #8b5cf6 28%, #d946ef 58%, #fb7185 82%, #fb923c 100%);
+   color: #fff;
+   border-color: transparent;
+diff --git a/marketing_os/__init__.py b/marketing_os/__init__.py
+new file mode 100644
+index 000000000..a68b5e927
+--- /dev/null
++++ b/marketing_os/__init__.py
+@@ -0,0 +1,5 @@
++"""Marketing OS product layer built directly into the Hermes fork."""
++
++from .product import PRODUCT_AGENT_IDENTITY, PRODUCT_NAME, PRODUCT_RUNTIME_GUIDANCE
++
++__all__ = ["PRODUCT_AGENT_IDENTITY", "PRODUCT_NAME", "PRODUCT_RUNTIME_GUIDANCE"]
+diff --git a/marketing_os/product.py b/marketing_os/product.py
+new file mode 100644
+index 000000000..f5dd15783
+--- /dev/null
++++ b/marketing_os/product.py
+@@ -0,0 +1,44 @@
++"""Canonical product identity for every Marketing OS surface.
++
++This module lives in the Hermes fork on purpose. Desktop, TUI, gateway, cron
++and messaging sessions must all construct the same product agent instead of
++wrapping a generic Hermes process with a second personality layer.
++"""
++
++PRODUCT_ID = "marketing-os"
++PRODUCT_NAME = "Marketing OS"
++
++PRODUCT_ARCHITECTURE_PRINCIPLES = (
++    "One native agent owns conversation, tasks, memory, skills and marketing workflows.",
++    "Both inherited Hermes code and earlier Marketing OS modules may be decomposed or rewritten.",
++    "Preserve product philosophy and verified user outcomes, not historical directories or adapters.",
++    "Account modeling, evidence, creation, publishing receipts, metrics and learning form one loop.",
++)
++
++PRODUCT_AGENT_IDENTITY = (
++    "You are Marketing OS, a long-running AI operating system for social-media "
++    "account growth and content operations. You do not behave like a generic "
++    "chatbot or a collection of disconnected marketing buttons. You learn the "
++    "user's preferences, model each account and audience, gather traceable "
++    "evidence, create platform-native content, coordinate approved actions, "
++    "collect real publishing receipts and metrics, and use governed retrospectives "
++    "to improve the next cycle. Be natural in conversation, proactive about the "
++    "next useful step, explicit about uncertainty, and never invent account data, "
++    "sources, platform results or completed actions. Optimize for a durable user "
++    "outcome rather than for showing how many tools you can call."
++)
++
++PRODUCT_RUNTIME_GUIDANCE = (
++    "You run as the Marketing OS product fork of Hermes Agent. Hermes supplies "
++    "the native conversation loop, sessions, long-running tasks, memory, skills, "
++    "cron and messaging runtime; Marketing OS directly modifies those source "
++    "paths for this product. Never describe Hermes as an external plugin, a "
++    "separate assistant, or a service that the user must operate. All desktop, "
++    "mobile and messaging surfaces are views of the same Marketing OS agent. "
++    "Inherited Hermes code and earlier Marketing OS modules may both be split, "
++    "rewritten and recomposed around capability boundaries; preserve the product's "
++    "full-cycle operating philosophy rather than any historical directory layout. "
++    "Marketing decisions must distinguish verified facts, strategy inference and "
++    "creative suggestions. External effects, paid providers, publication and "
++    "sensitive account actions require the product's approval and receipt rules."
++)
+diff --git a/package-lock.json b/package-lock.json
+index 2fe353773..608cd43d2 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -58,7 +58,7 @@
+       }
+     },
+     "apps/desktop": {
+-      "name": "hermes",
++      "name": "marketing-os-desktop",
+       "version": "0.17.0",
+       "dependencies": {
+         "@assistant-ui/react": "^0.12.28",
+@@ -11831,10 +11831,6 @@
+         "url": "https://opencollective.com/unified"
+       }
+     },
+-    "node_modules/hermes": {
+-      "resolved": "apps/desktop",
+-      "link": true
+-    },
+     "node_modules/hermes-estree": {
+       "version": "0.25.1",
+       "resolved": "https://registry.npmjs.org/hermes-estree/-/hermes-estree-0.25.1.tgz",
+@@ -13626,6 +13622,10 @@
+         "node": ">= 20"
+       }
+     },
++    "node_modules/marketing-os-desktop": {
++      "resolved": "apps/desktop",
++      "link": true
++    },
+     "node_modules/matcher": {
+       "version": "3.0.0",
+       "resolved": "https://registry.npmjs.org/matcher/-/matcher-3.0.0.tgz",
+diff --git a/tests/test_marketing_os_product.py b/tests/test_marketing_os_product.py
+new file mode 100644
+index 000000000..b4493e52e
+--- /dev/null
++++ b/tests/test_marketing_os_product.py
+@@ -0,0 +1,23 @@
++from agent.prompt_builder import DEFAULT_AGENT_IDENTITY, HERMES_AGENT_HELP_GUIDANCE
++from marketing_os.product import (
++    PRODUCT_AGENT_IDENTITY,
++    PRODUCT_ARCHITECTURE_PRINCIPLES,
++    PRODUCT_NAME,
++    PRODUCT_RUNTIME_GUIDANCE,
++)
++
++
++def test_marketing_os_is_the_native_agent_identity():
++    assert PRODUCT_NAME == "Marketing OS"
++    assert DEFAULT_AGENT_IDENTITY == PRODUCT_AGENT_IDENTITY
++    assert DEFAULT_AGENT_IDENTITY.startswith("You are Marketing OS")
++    assert "generic chatbot" in DEFAULT_AGENT_IDENTITY
++    assert "real publishing receipts" in DEFAULT_AGENT_IDENTITY
++
++
++def test_runtime_guidance_forbids_external_plugin_identity():
++    assert HERMES_AGENT_HELP_GUIDANCE.startswith(PRODUCT_RUNTIME_GUIDANCE)
++    assert "Never describe Hermes as an external plugin" in HERMES_AGENT_HELP_GUIDANCE
++    assert "same Marketing OS agent" in HERMES_AGENT_HELP_GUIDANCE
++    assert "earlier Marketing OS modules may both be split" in HERMES_AGENT_HELP_GUIDANCE
++    assert any("not historical directories" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
+diff --git a/tests/tui_gateway/test_marketing_os_product.py b/tests/tui_gateway/test_marketing_os_product.py
+new file mode 100644
+index 000000000..0f7e8baaf
+--- /dev/null
++++ b/tests/tui_gateway/test_marketing_os_product.py
+@@ -0,0 +1,19 @@
++from tui_gateway import server
++
++
++def test_product_status_comes_from_native_gateway():
++    response = server.handle_request({
++        "jsonrpc": "2.0",
++        "id": "marketing-os-status",
++        "method": "marketing.product.status",
++        "params": {},
++    })
++
++    assert response["result"] == {
++        "product_id": "marketing-os",
++        "product_name": "Marketing OS",
++        "runtime": "hermes-product-fork",
++        "agent_owner": "native",
++        "desktop_owner": "apps/desktop",
++        "surfaces": ["desktop", "messaging", "cron"],
++    }
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index ec873bfba..42c6c7a96 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -12772,6 +12772,24 @@ def _(rid, params: dict) -> dict:
+ # ── Methods: insights ────────────────────────────────────────────────
+ 
+ 
++@method("marketing.product.status")
++def _(rid, _params: dict) -> dict:
++    """Expose the product-fork identity through the native Hermes gateway."""
++    from marketing_os.product import PRODUCT_ID, PRODUCT_NAME
++
++    return _ok(
++        rid,
++        {
++            "product_id": PRODUCT_ID,
++            "product_name": PRODUCT_NAME,
++            "runtime": "hermes-product-fork",
++            "agent_owner": "native",
++            "desktop_owner": "apps/desktop",
++            "surfaces": ["desktop", "messaging", "cron"],
++        },
++    )
++
++
+ @method("insights.get")
+ def _(rid, params: dict) -> dict:
+     days = params.get("days", 30)
