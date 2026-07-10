@@ -1,0 +1,757 @@
+From 9fd17e094303572ccdd9d92636b212be6deb6535 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Sat, 11 Jul 2026 01:26:55 +0800
+Subject: [PATCH 16/17] feat(content): enforce claim support and revision
+ history
+
+---
+ marketing_os/domains/article_drafts.py        | 179 ++++++++++++-
+ marketing_os/domains/content_assets.py        | 135 +++++++++-
+ tests/test_marketing_os_content_production.py | 244 +++++++++++++++++-
+ tools/marketing_os_tools.py                   |  16 +-
+ 4 files changed, 568 insertions(+), 6 deletions(-)
+
+diff --git a/marketing_os/domains/article_drafts.py b/marketing_os/domains/article_drafts.py
+index 4fd1dd3a9..76ba3940d 100644
+--- a/marketing_os/domains/article_drafts.py
++++ b/marketing_os/domains/article_drafts.py
+@@ -9,6 +9,7 @@ from typing import Any
+ 
+ 
+ ARTICLE_STYLEBOOK_VERSION = "2026-07-10.hermes-native-v1"
++ARTICLE_CLAIM_AUDIT_VERSION = "marketing.article_claim_audit.v1"
+ 
+ ARTICLE_STYLEBOOKS: dict[str, dict[str, Any]] = {
+     "wechat_official": {
+@@ -139,6 +140,7 @@ class ArticleDraftValidator:
+             variants=normalized_variants,
+             platforms=platforms,
+             known_evidence=known_evidence,
++            evidence_records=evidence_records,
+         )
+         stylebooks = article_stylebooks(platforms)
+         visual_requirements = [
+@@ -202,6 +204,7 @@ def _validate_bundle(
+     variants: dict[str, dict[str, Any]],
+     platforms: list[str],
+     known_evidence: set[str],
++    evidence_records: list[dict[str, Any]],
+ ) -> dict[str, Any]:
+     issues: list[str] = []
+     parent_chars = _content_chars(parent_body)
+@@ -267,8 +270,25 @@ def _validate_bundle(
+     if duplicate_pairs:
+         issues.append("platform_variants_not_distinct")
+ 
++    claim_audit = _audit_claim_support(
++        documents={
++            "parent": parent_body,
++            **{
++                f"platform:{platform}": str(
++                    variants.get(platform, {}).get("body_markdown") or ""
++                )
++                for platform in platforms
++            },
++        },
++        evidence_records=evidence_records,
++    )
++    if claim_audit["uncited_findings"]:
++        issues.append("factual_claim_citation_missing")
++    if claim_audit["numeric_mismatch_findings"]:
++        issues.append("numeric_claim_not_supported_by_cited_evidence")
++
+     return {
+-        "version": "marketing.article_validation.v1",
++        "version": "marketing.article_validation.v2",
+         "ready": not issues,
+         "issues": issues,
+         "parent_char_count": parent_chars,
+@@ -283,6 +303,7 @@ def _validate_bundle(
+         "unknown_platform_citations": unknown_variant_citations,
+         "copied_parent_variants": copied_parent,
+         "duplicate_platform_variant_pairs": duplicate_pairs,
++        "claim_audit": claim_audit,
+         "pending_human_checks": [
+             "platform tone and account fit",
+             "claim meaning matches cited evidence",
+@@ -292,6 +313,162 @@ def _validate_bundle(
+     }
+ 
+ 
++_ATTRIBUTION_PATTERN = re.compile(
++    r"(?:联合国教科文组织|UNESCO|教育部|政府工作报告|官方(?:文件|政策|指南)|"
++    r"(?:研究|报告|调查|数据显示|统计显示|指南|政策)(?:发现|显示|指出|提出|要求)|"
++    r"全球首个|国内首个|首次发布|唯一)",
++    flags=re.IGNORECASE,
++)
++_GENERALIZATION_PATTERN = re.compile(
++    r"(?:绝大多数|大多数|多数(?:机构|学校|家长|教师|学生|课程|培训班)|"
++    r"普遍(?:认为|采用|存在)|几乎所有|显著(?:提高|提升|下降|减少)|大幅(?:提高|提升|下降|减少))"
++)
++_PRESCRIPTIVE_PATTERN = re.compile(
++    r"(?:建议|可以|不妨|试着|请|行动清单|行动步骤|练习|实验验证|先做|让孩子|让学生|让教师)"
++)
++_ARABIC_QUANTITY_PATTERN = re.compile(
++    r"(?<![A-Za-z0-9_])\d+(?:\.\d+)?\s*(?:%|％|年|个月|月|周|天|小时|分钟|"
++    r"倍|成|万人|万人次|人|项|次|个版本)(?:以上|以下|左右|以内|以外)?"
++)
++_CHINESE_QUANTITY_PATTERN = re.compile(
++    r"(?:每|平均|约|近|超过|至少|不足|仅)?\s*[一二三四五六七八九十百千万半两]+\s*"
++    r"(?:年|个月|月|周|天|小时|分钟|次|倍|成)(?:以上|以下|左右|以内|以外|有效)?"
++)
++_YEAR_PATTERN = re.compile(r"(?<!\d)(?:19|20)\d{2}(?:年)?(?!\d)")
++
++
++def _audit_claim_support(
++    *,
++    documents: dict[str, str],
++    evidence_records: list[dict[str, Any]],
++) -> dict[str, Any]:
++    evidence_text = {
++        str(item.get("id") or ""): _support_text(item)
++        for item in evidence_records
++        if item.get("id")
++    }
++    uncited: list[dict[str, Any]] = []
++    numeric_mismatch: list[dict[str, Any]] = []
++    inspected = 0
++    cited = 0
++    for document, body in documents.items():
++        for paragraph_index, paragraph in enumerate(_claim_paragraphs(body), start=1):
++            inspected += 1
++            citations = sorted(_citations(paragraph))
++            if citations:
++                cited += 1
++            claim_text = _strip_citations(paragraph)
++            numeric_tokens = _numeric_claim_tokens(claim_text)
++            attribution_terms = sorted(
++                {
++                    match.group(0)
++                    for pattern in (_ATTRIBUTION_PATTERN, _GENERALIZATION_PATTERN)
++                    for match in pattern.finditer(claim_text)
++                }
++            )
++            if _PRESCRIPTIVE_PATTERN.search(claim_text) and not attribution_terms:
++                numeric_tokens = []
++            if not numeric_tokens and not attribution_terms:
++                continue
++            if not citations:
++                uncited.append(
++                    {
++                        "document": document,
++                        "paragraph": paragraph_index,
++                        "excerpt": _claim_excerpt(claim_text),
++                        "numeric_tokens": numeric_tokens,
++                        "attribution_terms": attribution_terms,
++                        "evidence_refs": [],
++                    }
++                )
++                continue
++            for token in numeric_tokens:
++                cited_sources = [evidence_text.get(ref, "") for ref in citations]
++                if not any(_quantity_supported(token, source) for source in cited_sources):
++                    numeric_mismatch.append(
++                        {
++                            "document": document,
++                            "paragraph": paragraph_index,
++                            "excerpt": _claim_excerpt(claim_text),
++                            "numeric_token": token,
++                            "evidence_refs": citations,
++                        }
++                    )
++    return {
++        "version": ARTICLE_CLAIM_AUDIT_VERSION,
++        "ready": not uncited and not numeric_mismatch,
++        "verification_scope": "deterministic citation proximity and numeric token support",
++        "claim_truth_verified": False,
++        "paragraphs_inspected": inspected,
++        "paragraphs_with_citations": cited,
++        "uncited_findings": uncited,
++        "numeric_mismatch_findings": numeric_mismatch,
++        "note": (
++            "通过只表示高风险归因/数量主张就近引用，且数量词能在引用证据摘要中找到；"
++            "语义是否被来源完整支持仍需主张级人工或语义核验。"
++        ),
++    }
++
++
++def _claim_paragraphs(value: str) -> list[str]:
++    result: list[str] = []
++    for block in re.split(r"\n\s*\n+", str(value or "")):
++        text = block.strip()
++        if not text or text.startswith("#") or text.startswith("```"):
++            continue
++        if re.fullmatch(r"(?:\s*\[evidence_[0-9a-f]{28}\]\s*)+", text):
++            if result:
++                result[-1] = f"{result[-1]} {text}"
++            continue
++        result.append(text)
++    return result
++
++
++def _strip_citations(value: str) -> str:
++    text = re.sub(r"\[evidence_[0-9a-f]{28}\]", "", value)
++    text = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)、]\s+)", "", text)
++    return re.sub(r"\s+", " ", text).strip()
++
++
++def _numeric_claim_tokens(value: str) -> list[str]:
++    tokens = {
++        re.sub(r"\s+", "", match.group(0)).replace("％", "%")
++        for pattern in (
++            _ARABIC_QUANTITY_PATTERN,
++            _CHINESE_QUANTITY_PATTERN,
++            _YEAR_PATTERN,
++        )
++        for match in pattern.finditer(value)
++    }
++    return sorted(token for token in tokens if token)
++
++
++def _support_text(item: dict[str, Any]) -> str:
++    return re.sub(
++        r"\s+",
++        "",
++        " ".join(
++            str(item.get(key) or "")
++            for key in ("title", "excerpt", "canonical_url", "captured_at")
++        ),
++    ).replace("％", "%").lower()
++
++
++def _quantity_supported(token: str, source: str) -> bool:
++    normalized = re.sub(r"\s+", "", token).replace("％", "%").lower()
++    if normalized in source:
++        return True
++    # A cited source may write a year as ISO date while the draft says “2026年”.
++    if normalized.endswith("年") and normalized[:-1].isdigit():
++        return normalized[:-1] in source
++    return False
++
++
++def _claim_excerpt(value: str) -> str:
++    text = re.sub(r"\s+", " ", value).strip()
++    return text[:220] + ("…" if len(text) > 220 else "")
++
++
+ def _citations(value: str) -> set[str]:
+     return set(re.findall(r"\[(evidence_[0-9a-f]{28})\]", value))
+ 
+diff --git a/marketing_os/domains/content_assets.py b/marketing_os/domains/content_assets.py
+index cfe25965e..1632b6c5d 100644
+--- a/marketing_os/domains/content_assets.py
++++ b/marketing_os/domains/content_assets.py
+@@ -135,6 +135,7 @@ class ContentAssetRepository:
+         evidence_refs: list[str],
+         topic: str = "",
+         hook: str = "",
++        revision_of: str = "",
+     ) -> dict[str, Any]:
+         plan_id_value = _bounded_text(plan_id, "plan_id", 120)
+         with self._connect() as db:
+@@ -147,6 +148,28 @@ class ContentAssetRepository:
+             raise KeyError("production plan not found in account scope")
+         if plan_row["kind"] != "article_soft":
+             raise ValueError("article bundle requires an article_soft production plan")
++        parent_asset_id: str | None = None
++        next_version = 1
++        revision_of_value = str(revision_of or "").strip()
++        if revision_of_value:
++            with self._connect() as db:
++                parent_row = db.execute(
++                    """SELECT * FROM content_assets
++                    WHERE id=? AND user_id=? AND account_id=?""",
++                    (revision_of_value, user_id, account_id),
++                ).fetchone()
++            if parent_row is None:
++                raise KeyError("article revision parent not found in account scope")
++            if parent_row["platform"] != "multi_article" or parent_row["type"] != "script":
++                raise ValueError("article revision parent is not an ArticleBundle")
++            try:
++                parent_content = json.loads(parent_row["content_json"])
++            except (TypeError, ValueError) as exc:
++                raise ValueError("article revision parent content is invalid") from exc
++            if parent_content.get("_production_plan_id") != plan_id_value:
++                raise ValueError("article revision must keep the same production plan")
++            parent_asset_id = parent_row["id"]
++            next_version = int(parent_row["version"] or 1) + 1
+         target_platforms = json.loads(plan_row["platforms_json"])
+         verified_evidence = EvidenceRepository(self.paths).require_verified(
+             user_id=user_id,
+@@ -180,6 +203,8 @@ class ContentAssetRepository:
+             allow_multi_article=True,
+             asset_status="review_ready" if ready else "draft",
+             plan_checkpoint_status="review_ready" if ready else "draft_created",
++            parent_id=parent_asset_id,
++            asset_version=next_version,
+         )
+ 
+     def _save_draft(
+@@ -200,6 +225,8 @@ class ContentAssetRepository:
+         allow_multi_article: bool = False,
+         asset_status: str = "draft",
+         plan_checkpoint_status: str = "draft_created",
++        parent_id: str | None = None,
++        asset_version: int = 1,
+     ) -> dict[str, Any]:
+         title_value = _bounded_text(title, "title", 300)
+         plan_id_value = _bounded_text(plan_id, "plan_id", 120)
+@@ -213,6 +240,8 @@ class ContentAssetRepository:
+             raise ValueError(f"unsupported production kind: {production_kind}")
+         if asset_status not in {"draft", "review_ready"}:
+             raise ValueError("unsupported content asset status")
++        if int(asset_version) < 1:
++            raise ValueError("content asset version must be positive")
+         if not isinstance(content, dict) or not content:
+             raise ValueError("content must be a non-empty object")
+         if any(str(key).startswith("_") for key in content):
+@@ -256,7 +285,7 @@ class ContentAssetRepository:
+                 """INSERT INTO content_assets
+                 (id,user_id,account_id,platform,title,type,status,parent_id,experiment_id,
+                  topic,hook,version,content_json,metrics_json,created_at,updated_at)
+-                VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?,1,?,'{}',?,?)""",
++                VALUES (?,?,?,?,?,?,?,?,NULL,?,?,?,?,'{}',?,?)""",
+                 (
+                     asset_id,
+                     user_id,
+@@ -265,13 +294,23 @@ class ContentAssetRepository:
+                     title_value,
+                     asset_type,
+                     asset_status,
++                    parent_id,
+                     _optional_text(topic, 200),
+                     _optional_text(hook, 200),
++                    int(asset_version),
+                     encoded,
+                     now,
+                     now,
+                 ),
+             )
++            if parent_id:
++                updated = db.execute(
++                    """UPDATE content_assets SET status='superseded', updated_at=?
++                    WHERE id=? AND user_id=? AND account_id=?""",
++                    (now, parent_id, user_id, account_id),
++                ).rowcount
++                if updated != 1:
++                    raise KeyError("article revision parent disappeared from account scope")
+             db.execute(
+                 """UPDATE content_production_plans
+                 SET status=?, updated_at=? WHERE id=?""",
+@@ -304,6 +343,8 @@ class ContentAssetRepository:
+         if status:
+             query += " AND status=?"
+             params.append(status)
++        else:
++            query += " AND status!='superseded'"
+         if platform:
+             if platform not in CONTENT_ASSET_PLATFORMS:
+                 raise ValueError(f"unsupported content platform: {platform}")
+@@ -363,6 +404,98 @@ class ContentAssetRepository:
+                     ON content_production_plans(user_id, account_id, updated_at);
+                 """
+             )
++            self._migrate_article_validation_v2(db)
++
++    def _migrate_article_validation_v2(self, db: sqlite3.Connection) -> None:
++        evidence_table = db.execute(
++            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_records'"
++        ).fetchone()
++        if evidence_table is None:
++            return
++        rows = db.execute(
++            """SELECT * FROM content_assets
++            WHERE platform='multi_article' AND type='script'"""
++        ).fetchall()
++        for row in rows:
++            try:
++                previous = json.loads(row["content_json"])
++            except (TypeError, ValueError):
++                continue
++            if previous.get("schema") != "marketing.article_bundle.v1":
++                continue
++            previous_validation = previous.get("validation") or {}
++            if previous_validation.get("version") == "marketing.article_validation.v2":
++                continue
++            evidence_ids = previous.get("_provenance_evidence_refs") or [
++                item.get("evidence_id")
++                for item in previous.get("evidence_pack") or []
++                if isinstance(item, dict) and item.get("evidence_id")
++            ]
++            evidence_records: list[dict[str, Any]] = []
++            if evidence_ids:
++                placeholders = ",".join("?" for _ in evidence_ids)
++                evidence_records = [
++                    dict(item)
++                    for item in db.execute(
++                        f"""SELECT * FROM evidence_records
++                        WHERE user_id=? AND account_id=? AND id IN ({placeholders})""",
++                        [row["user_id"], row["account_id"], *evidence_ids],
++                    ).fetchall()
++                ]
++            try:
++                bundle = ArticleDraftValidator().build_bundle(
++                    title=str(
++                        (previous.get("parent_draft") or {}).get("title")
++                        or row["title"]
++                    ),
++                    parent_body_markdown=str(
++                        (previous.get("parent_draft") or {}).get("body_markdown")
++                        or ""
++                    ),
++                    target_platforms=list(
++                        (previous.get("platform_variants") or {}).keys()
++                    ),
++                    variants=previous.get("platform_variants") or {},
++                    evidence_records=evidence_records,
++                    topic=str(previous.get("topic") or row["topic"] or ""),
++                    hook=str(previous.get("hook") or row["hook"] or ""),
++                )
++                for key, value in previous.items():
++                    if str(key).startswith("_"):
++                        bundle[key] = value
++                ready = bundle["review_status"] == "ready_for_human_review"
++                encoded = _bounded_json(bundle, "content", 500_000)
++            except (KeyError, TypeError, ValueError) as exc:
++                failed = dict(previous)
++                failed["review_status"] = "needs_revision"
++                failed["validation"] = {
++                    "version": "marketing.article_validation.v2",
++                    "ready": False,
++                    "issues": ["article_validation_migration_failed"],
++                    "migration_error": str(exc)[:300],
++                }
++                ready = False
++                encoded = _bounded_json(failed, "content", 500_000)
++            now = _now()
++            db.execute(
++                """UPDATE content_assets
++                SET content_json=?, status=?, version=version+1, updated_at=?
++                WHERE id=?""",
++                (encoded, "review_ready" if ready else "draft", now, row["id"]),
++            )
++            plan_id = previous.get("_production_plan_id")
++            if plan_id:
++                db.execute(
++                    """UPDATE content_production_plans
++                    SET status=?, updated_at=? WHERE id=? AND user_id=? AND account_id=?""",
++                    (
++                        "review_ready" if ready else "draft_created",
++                        now,
++                        plan_id,
++                        row["user_id"],
++                        row["account_id"],
++                    ),
++                )
+ 
+     def _connect(self) -> sqlite3.Connection:
+         db = sqlite3.connect(self.paths.agent_db, timeout=10)
+diff --git a/tests/test_marketing_os_content_production.py b/tests/test_marketing_os_content_production.py
+index 592566447..9bb0e5848 100644
+--- a/tests/test_marketing_os_content_production.py
++++ b/tests/test_marketing_os_content_production.py
+@@ -1,12 +1,18 @@
+ import json
+ import hashlib
++import sqlite3
+ 
+ import hermes_state
+ import model_tools
+ import pytest
+ from hermes_state import SessionDB
+ from marketing_os.data_paths import MarketingDataPaths
+-from marketing_os.domains import ContentAssetRepository, ContentProductionPlanner, EvidenceRepository
++from marketing_os.domains import (
++    ArticleDraftValidator,
++    ContentAssetRepository,
++    ContentProductionPlanner,
++    EvidenceRepository,
++)
+ from marketing_os.evidence_capture import enrich_tool_result_with_evidence
+ from model_tools import get_tool_definitions, handle_function_call
+ 
+@@ -506,3 +512,239 @@ def test_incomplete_or_duplicated_article_variants_are_saved_but_not_review_read
+     assert "platform_variants_copy_parent" in issues
+     assert "platform_variants_not_distinct" in issues
+     assert created["content"]["prediction"]["traffic_range"] is None
++
++
++def test_article_claim_audit_blocks_uncited_quantitative_market_claims(
++    tmp_path, monkeypatch
++):
++    _bind_session(tmp_path, monkeypatch)
++    _, evidence_id = _capture_evidence()
++    planned = json.loads(
++        handle_function_call(
++            "marketing_plan_content_production",
++            {
++                "objective": "写一篇有证据的 AI 教育长文",
++                "platforms": ["zhihu"],
++                "audience": "家长和教师",
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    unsupported = "市场上90%以上的培训班都只教提示词，这个比例没有任何来源。"
++    created = json.loads(
++        handle_function_call(
++            "marketing_draft_article_create",
++            {
++                "title": "AI 教育真正该教什么",
++                "plan_id": planned["plan_id"],
++                "parent_body_markdown": f"{_long_article(evidence_id, '父稿')}\n\n{unsupported}",
++                "platform_variants": {
++                    "zhihu": {
++                        "title": "AI 教育真正该教什么",
++                        "body_markdown": (
++                            f"{_long_article(evidence_id, '知乎独立版本')}\n\n{unsupported}"
++                        ),
++                    }
++                },
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++
++    assert created["status"] == "draft"
++    validation = created["content"]["validation"]
++    assert "factual_claim_citation_missing" in validation["issues"]
++    findings = validation["claim_audit"]["uncited_findings"]
++    assert any(
++        any(token.startswith("90%") for token in item["numeric_tokens"])
++        for item in findings
++    )
++
++
++def test_article_claim_audit_accepts_cited_number_found_in_evidence_excerpt():
++    evidence_id = "evidence_" + "a" * 28
++    records = [
++        {
++            "id": evidence_id,
++            "title": "行动计划",
++            "excerpt": "行动计划提出，到2030年人工智能与教育深度融合格局基本形成。",
++            "canonical_url": "https://example.com/policy",
++            "captured_at": "2026-07-10T00:00:00+00:00",
++            "content_sha256": "b" * 64,
++            "verification_level": "source_integrity",
++        }
++    ]
++    supported = f"教育部政策提出，到2030年相关建设目标将进一步推进。 [{evidence_id}]"
++    bundle = ArticleDraftValidator().build_bundle(
++        title="AI 教育行动计划",
++        parent_body_markdown=f"{_long_article(evidence_id, '父稿')}\n\n{supported}",
++        target_platforms=["zhihu"],
++        variants={
++            "zhihu": {
++                "title": "AI 教育行动计划：边界与行动",
++                "body_markdown": f"{_long_article(evidence_id, '知乎独立版本')}\n\n{supported}",
++            }
++        },
++        evidence_records=records,
++    )
++
++    assert bundle["review_status"] == "ready_for_human_review"
++    assert bundle["validation"]["claim_audit"]["ready"] is True
++
++
++def test_existing_v1_article_is_revalidated_and_downgraded_on_repository_open(
++    tmp_path, monkeypatch
++):
++    paths = _bind_session(tmp_path, monkeypatch)
++    _, evidence_id = _capture_evidence()
++    planned = json.loads(
++        handle_function_call(
++            "marketing_plan_content_production",
++            {
++                "objective": "迁移旧文章质量门",
++                "platforms": ["zhihu"],
++                "audience": "家长和教师",
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    unsupported = "市场上90%以上的培训班都只教提示词，这个比例没有来源。"
++    created = json.loads(
++        handle_function_call(
++            "marketing_draft_article_create",
++            {
++                "title": "旧版误判文章",
++                "plan_id": planned["plan_id"],
++                "parent_body_markdown": f"{_long_article(evidence_id, '父稿')}\n\n{unsupported}",
++                "platform_variants": {
++                    "zhihu": {
++                        "title": "旧版误判文章",
++                        "body_markdown": (
++                            f"{_long_article(evidence_id, '知乎版本')}\n\n{unsupported}"
++                        ),
++                    }
++                },
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    old_payload = dict(created["content"])
++    old_payload["review_status"] = "ready_for_human_review"
++    old_payload["validation"] = {
++        "version": "marketing.article_validation.v1",
++        "ready": True,
++        "issues": [],
++    }
++    with sqlite3.connect(paths.agent_db) as db:
++        db.execute(
++            "UPDATE content_assets SET content_json=?, status='review_ready' WHERE id=?",
++            (json.dumps(old_payload, ensure_ascii=False), created["id"]),
++        )
++        db.execute(
++            "UPDATE content_production_plans SET status='review_ready' WHERE id=?",
++            (planned["plan_id"],),
++        )
++
++    repository = ContentAssetRepository(paths)
++    migrated = repository.get(
++        asset_id=created["id"], user_id="default", account_id="acct-1"
++    )
++
++    assert migrated["status"] == "draft"
++    assert migrated["version"] == 2
++    assert migrated["content"]["review_status"] == "needs_revision"
++    assert migrated["content"]["validation"]["version"] == "marketing.article_validation.v2"
++    assert "factual_claim_citation_missing" in migrated["content"]["validation"]["issues"]
++    with sqlite3.connect(paths.agent_db) as db:
++        checkpoint_status = db.execute(
++            "SELECT status FROM content_production_plans WHERE id=?",
++            (planned["plan_id"],),
++        ).fetchone()[0]
++    assert checkpoint_status == "draft_created"
++
++
++def test_article_revision_creates_immutable_version_chain(tmp_path, monkeypatch):
++    _bind_session(tmp_path, monkeypatch)
++    _, evidence_id = _capture_evidence()
++    planned = json.loads(
++        handle_function_call(
++            "marketing_plan_content_production",
++            {
++                "objective": "写一篇可持续修订的知乎文章",
++                "platforms": ["zhihu"],
++                "audience": "AI 入门用户",
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    first = json.loads(
++        handle_function_call(
++            "marketing_draft_article_create",
++            {
++                "title": "第一版",
++                "plan_id": planned["plan_id"],
++                "parent_body_markdown": _long_article(evidence_id, "父稿第一版"),
++                "platform_variants": {
++                    "zhihu": {
++                        "title": "第一版知乎稿",
++                        "body_markdown": _long_article(evidence_id, "知乎第一版"),
++                    }
++                },
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    second = json.loads(
++        handle_function_call(
++            "marketing_draft_article_create",
++            {
++                "title": "第二版",
++                "plan_id": planned["plan_id"],
++                "parent_body_markdown": _long_article(evidence_id, "父稿第二版"),
++                "platform_variants": {
++                    "zhihu": {
++                        "title": "第二版知乎稿",
++                        "body_markdown": _long_article(evidence_id, "知乎第二版"),
++                    }
++                },
++                "evidence_refs": [evidence_id],
++                "revision_of": first["id"],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++
++    assert first["version"] == 1
++    assert second["version"] == 2
++    assert second["parent_id"] == first["id"]
++    repository = ContentAssetRepository()
++    parent = repository.get(
++        asset_id=first["id"], user_id="default", account_id="acct-1"
++    )
++    assert parent["status"] == "superseded"
++    active = repository.list(user_id="default", account_id="acct-1")
++    assert [item["id"] for item in active["assets"]] == [second["id"]]
++    history = repository.list(
++        user_id="default", account_id="acct-1", status="superseded"
++    )
++    assert [item["id"] for item in history["assets"]] == [first["id"]]
+diff --git a/tools/marketing_os_tools.py b/tools/marketing_os_tools.py
+index 43aff473c..deae04788 100644
+--- a/tools/marketing_os_tools.py
++++ b/tools/marketing_os_tools.py
+@@ -191,10 +191,12 @@ CREATE_ARTICLE_DRAFT_SCHEMA = {
+     "name": "marketing_draft_article_create",
+     "description": (
+         "Save an Agent-authored long-form parent draft and its distinct Zhihu/WeChat variants as one "
+-        "validated article bundle for the account bound to this conversation. Cite evidence in every "
+-        "body using exact [evidence_xxx] markers returned by web_extract or "
++        "validated article bundle for the account bound to this conversation. Cite evidence in the "
++        "same paragraph as every factual attribution or quantitative claim, using exact "
++        "[evidence_xxx] markers returned by web_extract or "
+         "marketing_read_evidence_pack. The tool persists useful incomplete drafts as needs_revision, "
+-        "but only structurally complete, cited and platform-distinct bundles become review_ready."
++        "but only structurally complete, cited, numerically supported and platform-distinct bundles "
++        "become review_ready. Never invent percentages, time intervals or market prevalence."
+     ),
+     "parameters": {
+         "type": "object",
+@@ -224,6 +226,13 @@ CREATE_ARTICLE_DRAFT_SCHEMA = {
+                 "items": {"type": "string"},
+                 "minItems": 1,
+             },
++            "revision_of": {
++                "type": "string",
++                "description": (
++                    "Existing ArticleBundle asset_id when revising a saved draft. The new asset "
++                    "becomes the next immutable version and the parent is marked superseded."
++                ),
++            },
+         },
+         "required": [
+             "title",
+@@ -411,6 +420,7 @@ def _create_article_draft(args: dict, **kwargs) -> str:
+         evidence_refs=args.get("evidence_refs") or [],
+         topic=str(args.get("topic") or ""),
+         hook=str(args.get("hook") or ""),
++        revision_of=str(args.get("revision_of") or ""),
+     )
+     return json.dumps(result, ensure_ascii=False)
+ 
+-- 
+2.54.0
+

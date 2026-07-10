@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/NousResearch/hermes-agent.git",
   "baseline_commit": "4488fe134b1de4359f3a4f1f8368576413e6e268",
-  "product_tree": "e932537cdf9a5c7f978da760ac6734db82e8c1cf",
+  "product_tree": "136e3ca3d72846b43c0e8bcf68fd00bf435b5a14",
   "patches": [
     {
       "file": "hermes-patches/0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch",
@@ -58,6 +58,18 @@
     {
       "file": "hermes-patches/0014-refactor-desktop-make-Hermes-own-provider-configurat.patch",
       "sha256": "053a35d0f96041e937a3b2c537b62a7dcbf251fc7d7e9a0805785beadb85e668"
+    },
+    {
+      "file": "hermes-patches/0015-fix-desktop-preserve-original-app-identity.patch",
+      "sha256": "7cd1f2da609586d8c8142d99085ad9db2072fd0164322833706910c4f2c7d1c1"
+    },
+    {
+      "file": "hermes-patches/0016-feat-content-enforce-claim-support-and-revision-hist.patch",
+      "sha256": "e4e246a16d841ad797ded8cefb0140a26da3878c3d486747fab38cae2ae665ee"
+    },
+    {
+      "file": "hermes-patches/0017-fix-web-expose-native-extraction-error-types.patch",
+      "sha256": "f38de64ec7aa667323296d82755f39d8142659e64abe8ee4f737c651924c2c51"
     }
   ]
 }

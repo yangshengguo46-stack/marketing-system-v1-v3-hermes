@@ -1,0 +1,86 @@
+From cf1f65e3f94e009b6c94d062253142532cea8b88 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Sat, 11 Jul 2026 01:27:23 +0800
+Subject: [PATCH 17/17] fix(web): expose native extraction error types
+
+---
+ tests/test_marketing_os_native_web_extract.py | 40 +++++++++++++++++++
+ tools/web_tools.py                            |  6 ++-
+ 2 files changed, 45 insertions(+), 1 deletion(-)
+
+diff --git a/tests/test_marketing_os_native_web_extract.py b/tests/test_marketing_os_native_web_extract.py
+index 9b7fa47c6..8a0470b61 100644
+--- a/tests/test_marketing_os_native_web_extract.py
++++ b/tests/test_marketing_os_native_web_extract.py
+@@ -134,6 +134,46 @@ async def test_native_extract_rechecks_redirect_for_ssrf(monkeypatch):
+     assert payload["results"][0]["content"] == ""
+ 
+ 
++@pytest.mark.asyncio
++async def test_native_extract_names_timeout_when_exception_message_is_blank(monkeypatch):
++    _force_native_provider(monkeypatch)
++
++    async def safe_url(_url):
++        return True
++
++    monkeypatch.setattr(web_tools, "async_is_safe_url", safe_url)
++
++    class TimeoutClient:
++        async def __aenter__(self):
++            return self
++
++        async def __aexit__(self, *_args):
++            return None
++
++        def stream(self, method, request_url, **_kwargs):
++            class TimeoutStream:
++                async def __aenter__(self):
++                    request = httpx.Request(method, request_url)
++                    raise httpx.ReadTimeout("", request=request)
++
++                async def __aexit__(self, *_args):
++                    return None
++
++            return TimeoutStream()
++
++    monkeypatch.setattr(web_tools.httpx, "AsyncClient", lambda **_kwargs: TimeoutClient())
++
++    payload = json.loads(
++        await web_tools.web_extract_tool(
++            ["https://example.com/slow"], use_llm_processing=False
++        )
++    )
++
++    assert payload["results"][0]["error"] == (
++        "Native extraction failed (ReadTimeout): ReadTimeout"
++    )
++
++
+ def test_native_extract_is_visible_without_search_provider_and_captures_evidence(
+     tmp_path, monkeypatch
+ ):
+diff --git a/tools/web_tools.py b/tools/web_tools.py
+index 5c93452d7..175f3d8eb 100644
+--- a/tools/web_tools.py
++++ b/tools/web_tools.py
+@@ -1074,12 +1074,16 @@ async def _native_extract_urls(urls: List[str]) -> List[Dict[str, Any]]:
+                     raise ValueError("too many redirects")
+             except Exception as exc:
+                 if not appended:
++                    detail = str(exc).strip() or type(exc).__name__
+                     results.append(
+                         {
+                             "url": current_url,
+                             "title": "",
+                             "content": "",
+-                            "error": f"Native extraction failed: {exc}",
++                            "error": (
++                                "Native extraction failed "
++                                f"({type(exc).__name__}): {detail}"
++                            ),
+                         }
+                     )
+     return results
+-- 
+2.54.0
+

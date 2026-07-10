@@ -1,0 +1,105 @@
+From 171b20101da3de8f5a096dff3d8b625f73d6091a Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Sat, 11 Jul 2026 01:26:30 +0800
+Subject: [PATCH 15/17] fix(desktop): preserve original app identity
+
+---
+ .../electron/legacy-provider-migration.test.cjs      | 12 ++++++++++++
+ apps/desktop/electron/main.cjs                       | 10 +++++++---
+ apps/desktop/package.json                            |  2 +-
+ apps/desktop/src/product.test.ts                     |  2 +-
+ apps/desktop/src/product.ts                          |  2 +-
+ 5 files changed, 22 insertions(+), 6 deletions(-)
+
+diff --git a/apps/desktop/electron/legacy-provider-migration.test.cjs b/apps/desktop/electron/legacy-provider-migration.test.cjs
+index 0a31c306d..1ae408278 100644
+--- a/apps/desktop/electron/legacy-provider-migration.test.cjs
++++ b/apps/desktop/electron/legacy-provider-migration.test.cjs
+@@ -1,4 +1,6 @@
+ const assert = require('node:assert/strict')
++const fs = require('node:fs')
++const path = require('node:path')
+ const test = require('node:test')
+ 
+ const {
+@@ -83,3 +85,13 @@ test('migration leaves the legacy store untouched when secure storage is unavail
+     reason: 'secure-storage-unavailable'
+   })
+ })
++
++test('desktop preserves the original Electron identity used by macOS safeStorage', () => {
++  const mainSource = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
++  const packageJson = JSON.parse(
++    fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
++  )
++
++  assert.match(mainSource, /app\.setName\('marketing-os-desktop'\)/)
++  assert.equal(packageJson.build.appId, 'com.marketing-os.desktop')
++})
+diff --git a/apps/desktop/electron/main.cjs b/apps/desktop/electron/main.cjs
+index 9b817ee62..d64aaab09 100644
+--- a/apps/desktop/electron/main.cjs
++++ b/apps/desktop/electron/main.cjs
+@@ -654,16 +654,20 @@ function previewFileMetadata(filePath, mimeType) {
+   }
+ }
+ 
+-app.setName(APP_NAME)
++// Keep the original Electron identity so existing macOS Keychain-backed
++// safeStorage ciphertext, browser data and OS permissions remain readable
++// after the Hermes-native cutover. APP_NAME is still used for every visible
++// product label; app.getName() is an internal compatibility identity here.
++app.setName('marketing-os-desktop')
+ // Windows toast notifications silently no-op unless an AppUserModelID is set:
+ // `new Notification().show()` returns without error and nothing appears. The
+ // AUMID must match the installed Start Menu shortcut's AUMID, which
+-// electron-builder derives from the build `appId` (com.marketingos.desktop) —
++// electron-builder derives from the build `appId` (com.marketing-os.desktop) —
+ // keep this string in sync with package.json `build.appId`. macOS/Linux don't
+ // need this, so gate it on Windows. (Fixes: desktop approval/turn notifications
+ // never firing on Windows.)
+ if (IS_WINDOWS) {
+-  app.setAppUserModelId('com.marketingos.desktop')
++  app.setAppUserModelId('com.marketing-os.desktop')
+ }
+ // Seed the native About panel with the live Hermes version. This is refreshed
+ // on every open via the explicit "About" menu handler (refreshAboutPanel), so
+diff --git a/apps/desktop/package.json b/apps/desktop/package.json
+index 5389903c4..359073917 100644
+--- a/apps/desktop/package.json
++++ b/apps/desktop/package.json
+@@ -144,7 +144,7 @@
+   },
+   "build": {
+     "electronVersion": "40.10.2",
+-    "appId": "com.marketingos.desktop",
++    "appId": "com.marketing-os.desktop",
+     "productName": "Marketing OS",
+     "executableName": "Marketing OS",
+     "protocols": [
+diff --git a/apps/desktop/src/product.test.ts b/apps/desktop/src/product.test.ts
+index d566f5ad9..765c879df 100644
+--- a/apps/desktop/src/product.test.ts
++++ b/apps/desktop/src/product.test.ts
+@@ -6,7 +6,7 @@ describe('Marketing OS product identity', () => {
+   it('is the native desktop product rather than an external Hermes shell', () => {
+     expect(PRODUCT_ID).toBe('marketing-os')
+     expect(PRODUCT_NAME).toBe('Marketing OS')
+-    expect(PRODUCT_APP_ID).toBe('com.marketingos.desktop')
++    expect(PRODUCT_APP_ID).toBe('com.marketing-os.desktop')
+     expect(PRODUCT_TAGLINE).toContain('账号')
+   })
+ })
+diff --git a/apps/desktop/src/product.ts b/apps/desktop/src/product.ts
+index c9bf84646..aed9eb9df 100644
+--- a/apps/desktop/src/product.ts
++++ b/apps/desktop/src/product.ts
+@@ -1,4 +1,4 @@
+ export const PRODUCT_ID = 'marketing-os'
+ export const PRODUCT_NAME = 'Marketing OS'
+ export const PRODUCT_TAGLINE = '长期经营账号的智能操作系统'
+-export const PRODUCT_APP_ID = 'com.marketingos.desktop'
++export const PRODUCT_APP_ID = 'com.marketing-os.desktop'
+-- 
+2.54.0
+

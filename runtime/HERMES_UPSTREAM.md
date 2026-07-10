@@ -5,7 +5,7 @@
 - Baseline date: 2026-06-28
 - Local checkout: `runtime/hermes-agent`
 - Adaptation branch: `codex/marketing-os-runtime`
-- Product tree: `e932537cdf9a5c7f978da760ac6734db82e8c1cf`
+- Product tree: `136e3ca3d72846b43c0e8bcf68fd00bf435b5a14`
 - Reproducible lock: `runtime/hermes-runtime.lock.json`
 - Patch series: `runtime/hermes-patches/*.patch`
 
@@ -33,6 +33,9 @@ Direct modification of the Hermes fork is now permitted. Rules:
 | 1 | 2026-07-10 | `0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch` | 飞书/微信只是同一个 Marketing OS Agent 的 communication surface；入站消息转入本机 Agent session/task，不再落回 Hermes 默认 persona；Feishu SOCKS 依赖随 extra 声明 | `tests/test_mobile_bridge.py`、`tests/test_channels.py` |
 | 13 | 2026-07-10 | `0013-feat-web-add-native-extraction-fallback.patch` | Hermes 原生 `web_extract` 在没有收费 Provider Key 时仍能安全读取公开 HTML；已配置的成熟 Provider 继续优先 | `tests/test_marketing_os_native_web_extract.py` 及 Web tool 回归 |
 | 14 | 2026-07-10 | `0014-refactor-desktop-make-Hermes-own-provider-configurat.patch` | Provider Catalog、模型设置和 `/api/env` 保持 Hermes 唯一 owner；旧 Marketing 密钥仓只迁移一次，随后退出 | `legacy-provider-migration.test.cjs`、desktop platform、Hermes env/provider 回归 |
+| 15 | 2026-07-10 | `0015-fix-desktop-preserve-original-app-identity.patch` | Hermes-native 桌面继续使用旧 Electron 内部身份和 appId，保住 macOS Keychain safeStorage、浏览器数据和既有系统权限；对外产品名仍为 Marketing OS | `legacy-provider-migration.test.cjs`、desktop platform 回归 |
+| 16 | 2026-07-10 | `0016-feat-content-enforce-claim-support-and-revision-hist.patch` | 高风险主张必须同段引用、数量 token 必须能在证据摘要中匹配；文章修订生成不可变版本链，不覆盖旧稿 | `tests/test_marketing_os_content_production.py`、真实 Provider v2→v4 E2E |
+| 17 | 2026-07-10 | `0017-fix-web-expose-native-extraction-error-types.patch` | 原生网页抽取即使异常文本为空，也返回可诊断的异常类型，不再只显示空错误 | `tests/test_marketing_os_native_web_extract.py` |
 
 ## Reproduction contract
 
