@@ -278,8 +278,12 @@ declare global {
   interface PlanStep {
     id: string
     description: string
-    tool_guess: string | null
-    status: 'pending' | 'running' | 'completed' | 'skipped' | 'failed'
+    tool_name?: string | null
+    tool_guess?: string | null
+    status: 'pending' | 'running' | 'waiting_approval' | 'completed' | 'skipped' | 'failed'
+    approval_id?: string | null
+    effect_id?: string | null
+    result_status?: string | null
   }
 
   interface LiveAgentEvent {

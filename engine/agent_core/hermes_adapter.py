@@ -324,8 +324,13 @@ class HermesAgentService:
         if session is None:
             raise KeyError(f"session not found: {task['session_id']}")
 
+        # Approval/effect events are the source of truth.  Reconcile them into
+        # the plan before reading a potentially stale persisted checkpoint.
+        self._reconcile_approval_steps(task_id)
+        task = self._store.get_task(task_id)
         plan = task.get("plan", [])
-        checkpoint = task.get("checkpoint", {})
+        checkpoint = self._build_checkpoint(task_id)
+        self._store.update_task_progress(task_id, checkpoint=checkpoint)
 
         # --- Re-execution guard: mark steps as completed if their effect already executed ---
         executed_effects = checkpoint.get("executed_effects", {})
@@ -355,16 +360,43 @@ class HermesAgentService:
                     return {"task_id": task_id, "status": "waiting_user", "approval_id": pending_approval_id}
                 elif approval["status"] == "expired":
                     for step in plan:
-                        if step.get("status") == "running":
+                        if (
+                            step.get("status") == "waiting_approval"
+                            and step.get("approval_id") == pending_approval_id
+                        ):
                             step["status"] = "skipped"
+                            step["result_status"] = "expired"
                     self._store.update_plan(task_id, plan)
+            except KeyError:
+                pass
+
+        # Approval and external effect submission are two separate client
+        # calls.  If approval succeeded but no receipt exists yet, never let a
+        # manual resume ask the model to repeat the real-world operation.
+        waiting_effect = next(
+            (s for s in plan if s.get("status") == "waiting_approval" and s.get("approval_id")),
+            None,
+        )
+        if waiting_effect:
+            try:
+                approval = self._store.get_approval(waiting_effect["approval_id"])
+                if approval["status"] == "approved":
+                    return {
+                        "task_id": task_id,
+                        "status": "waiting_user",
+                        "approval_id": approval["id"],
+                        "awaiting_effect_receipt": True,
+                    }
             except KeyError:
                 pass
 
         completed_steps = [s for s in plan if s.get("status") == "completed"]
         skipped_steps = [s for s in plan if s.get("status") == "skipped"]
         failed_steps = [s for s in plan if s.get("status") == "failed"]
-        pending_steps = [s for s in plan if s.get("status") in ("pending", "running", "failed")]
+        pending_steps = [
+            s for s in plan
+            if s.get("status") in ("pending", "running", "waiting_approval", "failed")
+        ]
         effect_events: list[dict] = []
 
         if plan and pending_steps:
@@ -406,16 +438,22 @@ class HermesAgentService:
 
         try:
             events = self._store.list_events_after(task_id, 0)
-            effect_events = [e for e in events if e["event_type"] == "effect.executed"]
+            effect_events = [
+                e for e in events
+                if e["event_type"] in {"effect.executed", "effect.failed", "effect.outcome_unknown"}
+            ]
             if effect_events:
                 last = effect_events[-1]["payload"]
                 receipt = last.get("receipt", {})
                 if receipt:
                     resume_message += f"\n\n上一个操作（{last.get('capability', '')}）已完成，结果：{self._summarize_receipt(receipt)}"
                 effect_descs = "、".join(
-                    f"{e['payload'].get('capability', '')}（已执行）" for e in effect_events
+                    f"{e['payload'].get('capability', '')}（{e['event_type'].split('.')[-1]}）"
+                    for e in effect_events
                 )
-                resume_message += f"\n已执行的效果操作（不得重复执行）：{effect_descs}"
+                resume_message += f"\n已有外部效果回执（不得自动重复执行）：{effect_descs}"
+                if effect_events[-1]["event_type"] == "effect.outcome_unknown":
+                    resume_message += "\n最近一次外部操作结果未知。必须明确告知用户并先人工核对，禁止自动重试。"
             rejected_events = [
                 e for e in events
                 if e["event_type"] == "approval.decided"
@@ -443,6 +481,52 @@ class HermesAgentService:
                    plan=plan, resume_step=resume_step)
         self._start_task(session, task_id, resume_message)
         return {"task_id": task_id, "status": "running"}
+
+    def _reconcile_approval_steps(self, task_id: str) -> bool:
+        """Project approval/effect events onto plan steps deterministically.
+
+        This also repairs the legacy state written by the old callback, where
+        ``pending_approval`` was incorrectly stored as a failed step.
+        """
+        from .plan_protocol import (
+            attach_approval_to_legacy_step,
+            settle_step_after_approval,
+        )
+
+        task = self._store.get_task(task_id)
+        plan = task.get("plan", [])
+        if not plan:
+            return False
+        changed = False
+        for event in self._store.list_events_after(task_id, 0):
+            payload = event.get("payload") or {}
+            event_type = event.get("event_type")
+            approval_id = str(payload.get("approval_id") or "")
+            if not approval_id:
+                continue
+            if event_type == "approval.requested":
+                changed = attach_approval_to_legacy_step(
+                    plan, str(payload.get("capability") or ""), approval_id,
+                ) or changed
+            elif event_type == "approval.decided":
+                decision = str(payload.get("decision") or "")
+                if decision in {"rejected", "expired"}:
+                    changed = settle_step_after_approval(
+                        plan, approval_id, decision,
+                    ) or changed
+            elif event_type in {"effect.executed", "effect.failed", "effect.outcome_unknown"}:
+                outcome = {
+                    "effect.executed": "executed",
+                    "effect.failed": "failed",
+                    "effect.outcome_unknown": "unknown",
+                }[event_type]
+                changed = settle_step_after_approval(
+                    plan, approval_id, outcome,
+                    effect_id=str(payload.get("effect_id") or "") or None,
+                ) or changed
+        if changed:
+            self._store.update_plan(task_id, plan)
+        return changed
 
     async def resume_safe_interrupted_tasks(self, *, limit: int = 1) -> list[dict[str, Any]]:
         """Resume process-interrupted tasks, never user-paused or unresolved-effect work."""
@@ -788,7 +872,11 @@ class HermesAgentService:
                     if result_status == "ok":
                         from .plan_protocol import complete_step_on_tool_success
                         changed = complete_step_on_tool_success(plan, name)
-                    elif result_status in ("error", "blocked", "invalid", "pending_approval"):
+                    elif result_status == "pending_approval":
+                        from .plan_protocol import wait_step_on_tool_approval
+                        approval_id = str(parsed_result.get("approval_id") or "")
+                        changed = wait_step_on_tool_approval(plan, name, approval_id)
+                    elif result_status in ("error", "blocked", "invalid"):
                         from .plan_protocol import fail_step_on_tool_error
                         changed = fail_step_on_tool_error(plan, name)
                 if changed:
@@ -1534,7 +1622,10 @@ class HermesAgentService:
         plan = task.get("plan", [])
         completed = [s["id"] for s in plan if s.get("status") == "completed"]
         failed = [s["id"] for s in plan if s.get("status") == "failed"]
-        running = next((s for s in plan if s.get("status") == "running"), None)
+        running = next(
+            (s for s in plan if s.get("status") in {"running", "waiting_approval"}),
+            None,
+        )
 
         executed_effects: dict[str, dict[str, Any]] = {}
         try:
@@ -1545,6 +1636,7 @@ class HermesAgentService:
                     if effect_id:
                         receipt = payload.get("receipt", {})
                         executed_effects[effect_id] = {
+                            "approval_id": payload.get("approval_id", ""),
                             "capability": payload.get("capability", ""),
                             "receipt_status": receipt.get("status", "unknown") if isinstance(receipt, dict) else "unknown",
                         }
@@ -1566,7 +1658,10 @@ class HermesAgentService:
         except Exception:
             pass
 
-        pending = next((s for s in plan if s.get("status") in {"pending", "running"}), None)
+        pending = next(
+            (s for s in plan if s.get("status") in {"pending", "running", "waiting_approval", "failed"}),
+            None,
+        )
         all_terminal = bool(plan) and all(
             s.get("status") in {"completed", "skipped", "failed"} for s in plan
         )

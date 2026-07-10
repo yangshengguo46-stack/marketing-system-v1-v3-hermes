@@ -18,6 +18,9 @@ from agent_core.plan_protocol import (
     bind_step_on_tool_start,
     complete_step_on_tool_success,
     fail_step_on_tool_error,
+    wait_step_on_tool_approval,
+    attach_approval_to_legacy_step,
+    settle_step_after_approval,
     declare_plan,
 )
 from agent_core.store import AgentCoreStore
@@ -142,6 +145,16 @@ def test_bind_step_no_match():
     ]
     assert bind_step_on_tool_start(plan, "marketing_read_accounts") is False
     assert plan[0]["status"] == "pending"
+
+
+def test_bind_failed_step_for_retry():
+    plan = [
+        {"id": "1", "description": "retry", "tool_name": "marketing_read_trends",
+         "status": "failed", "kind": "tool", "result_status": "error"},
+    ]
+    assert bind_step_on_tool_start(plan, "marketing_read_trends") is True
+    assert plan[0]["status"] == "running"
+    assert "result_status" not in plan[0]
 
 
 def test_bind_step_skips_synthesis_steps():
@@ -288,6 +301,66 @@ def test_fail_step_wrong_tool():
     ]
     assert fail_step_on_tool_error(plan, "marketing_read_accounts") is False
     assert plan[0]["status"] == "running"
+
+
+def test_pending_approval_is_a_wait_not_a_failure():
+    plan = [
+        {"id": "1", "description": "publish", "tool_name": "marketing_effect_publish",
+         "status": "running", "kind": "tool"},
+    ]
+    assert wait_step_on_tool_approval(
+        plan, "marketing_effect_publish", "approval_123",
+    ) is True
+    assert plan[0]["status"] == "waiting_approval"
+    assert plan[0]["approval_id"] == "approval_123"
+    assert plan[0]["result_status"] == "pending_approval"
+
+
+def test_effect_receipt_completes_exact_approval_step():
+    plan = [
+        {"id": "1", "description": "first", "tool_name": "marketing_effect_publish",
+         "status": "waiting_approval", "approval_id": "approval_1"},
+        {"id": "2", "description": "second", "tool_name": "marketing_effect_publish",
+         "status": "waiting_approval", "approval_id": "approval_2"},
+    ]
+    assert settle_step_after_approval(
+        plan, "approval_2", "executed", effect_id="effect_2",
+    ) is True
+    assert plan[0]["status"] == "waiting_approval"
+    assert plan[1]["status"] == "completed"
+    assert plan[1]["effect_id"] == "effect_2"
+    assert plan[1]["result_status"] == "executed"
+
+
+@pytest.mark.parametrize("outcome, expected", [
+    ("failed", "failed"),
+    ("rejected", "skipped"),
+    ("expired", "skipped"),
+    ("unknown", "skipped"),
+])
+def test_non_success_effect_outcomes_never_auto_replay(outcome, expected):
+    plan = [
+        {"id": "1", "description": "publish", "tool_name": "marketing_effect_publish",
+         "status": "waiting_approval", "approval_id": "approval_1"},
+    ]
+    assert settle_step_after_approval(plan, "approval_1", outcome) is True
+    assert plan[0]["status"] == expected
+    assert plan[0]["result_status"] == outcome
+
+
+def test_legacy_failed_approval_step_is_repaired_once():
+    plan = [
+        {"id": "1", "description": "publish", "tool_name": "marketing_effect_publish",
+         "status": "failed"},
+    ]
+    assert attach_approval_to_legacy_step(
+        plan, "marketing_effect_publish", "approval_old",
+    ) is True
+    assert plan[0]["status"] == "waiting_approval"
+    assert plan[0]["approval_id"] == "approval_old"
+    assert attach_approval_to_legacy_step(
+        plan, "marketing_effect_publish", "approval_old",
+    ) is False
 
 
 def test_checkpoint_contains_failed_steps(tmp_path):

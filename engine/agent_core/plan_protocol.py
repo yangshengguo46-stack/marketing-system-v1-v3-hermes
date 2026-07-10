@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .models import PlanStepStatus
+
 MAX_STEPS = 12
 MAX_DESCRIPTION_CHARS = 200
 
@@ -112,11 +114,19 @@ def declare_plan(params: dict) -> str:
 
 
 def bind_step_on_tool_start(plan: list[dict[str, Any]], tool_name: str) -> bool:
-    """Mark the first pending step explicitly bound to ``tool_name`` as
-    running.  Steps without a tool_name never bind — no guessing."""
+    """Bind the first runnable step explicitly assigned to ``tool_name``.
+
+    A failed step is runnable again during deterministic recovery.  Approval
+    waits are deliberately excluded: the external effect receipt, not a
+    second model tool call, settles those steps.
+    """
     for step in plan:
-        if step.get("status") == "pending" and step.get("tool_name") == tool_name:
-            step["status"] = "running"
+        if (
+            step.get("status") in {PlanStepStatus.PENDING, "failed"}
+            and step.get("tool_name") == tool_name
+        ):
+            step["status"] = PlanStepStatus.RUNNING
+            step.pop("result_status", None)
             return True
     return False
 
@@ -136,4 +146,79 @@ def fail_step_on_tool_error(plan: list[dict[str, Any]], tool_name: str) -> bool:
         if step.get("status") == "running" and step.get("tool_name") == tool_name:
             step["status"] = "failed"
             return True
+    return False
+
+
+def wait_step_on_tool_approval(
+    plan: list[dict[str, Any]], tool_name: str, approval_id: str,
+) -> bool:
+    """Move the running tool step into a durable approval wait.
+
+    ``approval_id`` is persisted on the step so a later effect receipt can
+    settle exactly that step even after a process restart.
+    """
+    if not approval_id:
+        return False
+    for step in plan:
+        if step.get("status") == PlanStepStatus.RUNNING and step.get("tool_name") == tool_name:
+            step["status"] = PlanStepStatus.WAITING_APPROVAL
+            step["approval_id"] = approval_id
+            step["result_status"] = "pending_approval"
+            return True
+    return False
+
+
+def attach_approval_to_legacy_step(
+    plan: list[dict[str, Any]], tool_name: str, approval_id: str,
+) -> bool:
+    """Repair tasks written before approval IDs were stored on plan steps.
+
+    Old callbacks incorrectly changed a pending-approval step to ``failed``.
+    Only an unbound, exact tool match is repaired; completed history is never
+    rewritten.
+    """
+    if not approval_id or any(step.get("approval_id") == approval_id for step in plan):
+        return False
+    for step in plan:
+        if (
+            step.get("tool_name") == tool_name
+            and step.get("status") in {PlanStepStatus.RUNNING, "failed"}
+            and not step.get("approval_id")
+        ):
+            step["status"] = PlanStepStatus.WAITING_APPROVAL
+            step["approval_id"] = approval_id
+            step["result_status"] = "pending_approval"
+            return True
+    return False
+
+
+def settle_step_after_approval(
+    plan: list[dict[str, Any]], approval_id: str, outcome: str,
+    *, effect_id: str | None = None,
+) -> bool:
+    """Apply the durable external outcome to its approval-bound plan step.
+
+    Unknown outcomes and user rejection are terminal *for automatic replay*:
+    they are marked skipped with an explicit result instead of being retried
+    and potentially duplicating a real-world effect.
+    """
+    normalized = str(outcome or "").strip().lower()
+    for step in plan:
+        if step.get("approval_id") != approval_id:
+            continue
+        if normalized in {"executed", "ok", "completed", "success"}:
+            next_status = PlanStepStatus.COMPLETED
+        elif normalized in {"failed", "error", "cancelled"}:
+            next_status = "failed"
+        elif normalized in {"rejected", "expired", "unknown", "timeout", "indeterminate"}:
+            next_status = PlanStepStatus.SKIPPED
+        else:
+            return False
+        changed = step.get("status") != next_status or step.get("result_status") != normalized
+        step["status"] = next_status
+        step["result_status"] = normalized
+        if effect_id:
+            changed = changed or step.get("effect_id") != effect_id
+            step["effect_id"] = effect_id
+        return changed
     return False

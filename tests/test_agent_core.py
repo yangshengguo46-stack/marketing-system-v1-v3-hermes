@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -197,6 +198,53 @@ def test_gateway_injects_durable_account_context_into_tool_arguments():
     assert captured["__task_id"] == "task-1"
 
 
+@pytest.mark.parametrize(
+    ("handler_result", "expected_status", "expected_error"),
+    [
+        ({"status": "blocked", "reason": "evidence missing"}, "blocked", "evidence missing"),
+        ({"status": "invalid", "message": "bad arguments"}, "blocked", "bad arguments"),
+        ({"status": "unavailable", "error": "provider offline"}, "blocked", "provider offline"),
+        ({"status": "error", "error": "provider failed", "retryable": True}, "error", "provider failed"),
+    ],
+)
+def test_gateway_preserves_structured_handler_failures(
+    handler_result, expected_status, expected_error,
+):
+    from agent_core.tool_gateway import _wrap_handler
+
+    wrapped = _wrap_handler("marketing_read_context", lambda _params: handler_result)
+    result = json.loads(wrapped(None))
+
+    assert result["status"] == expected_status
+    assert result["error"] == expected_error
+    assert result["data"] == handler_result
+    if handler_result.get("retryable") is not None:
+        assert result["retryable"] is True
+
+
+def test_gateway_keeps_domain_workflow_state_as_successful_tool_execution():
+    from agent_core.tool_gateway import _wrap_handler
+
+    wrapped = _wrap_handler(
+        "marketing_draft_soft_article_create",
+        lambda _params: {"status": "needs_evidence", "asset_id": "asset-1"},
+    )
+    result = json.loads(wrapped(None))
+
+    assert result["status"] == "ok"
+    assert result["data"]["status"] == "needs_evidence"
+
+
+def test_gateway_keeps_non_object_json_results_as_successful_data():
+    from agent_core.tool_gateway import _wrap_handler
+
+    wrapped = _wrap_handler("marketing_read_context", lambda _params: '["one", "two"]')
+    result = json.loads(wrapped(None))
+
+    assert result["status"] == "ok"
+    assert result["data"] == ["one", "two"]
+
+
 def test_system_tools_blocked_by_policy():
     """System-level capabilities must be blocked."""
     policy = CapabilityPolicy()
@@ -260,6 +308,72 @@ def test_agent_session_survives_service_reopen(tmp_path):
     )
     loaded = asyncio.run(reopened.get_session(created["session_id"]))
     assert loaded and loaded["workspace"] == "workspace-a"
+
+
+def test_checkpoint_and_effect_receipt_settle_approval_bound_step(tmp_path):
+    store = AgentCoreStore(tmp_path / "agent-core.db")
+    task = running_task(store)
+    store.update_plan(task["id"], [
+        {"id": "1", "description": "发布", "tool_name": "marketing_effect_publish",
+         "status": "running", "kind": "tool"},
+    ])
+    approval = store.create_approval(
+        task_id=task["id"], capability="marketing_effect_publish",
+        arguments={"asset_id": "asset_1"}, risk_summary="外部发布",
+    )
+
+    # Use the projection methods without booting a second Hermes runtime.
+    svc = object.__new__(HermesAgentService)
+    svc._store = store
+    assert svc._reconcile_approval_steps(task["id"]) is True
+    waiting = store.get_task(task["id"])["plan"][0]
+    assert waiting["status"] == "waiting_approval"
+    assert waiting["approval_id"] == approval["id"]
+    checkpoint = svc._build_checkpoint(task["id"])
+    assert checkpoint["current_step"] == "1"
+    assert checkpoint["pending_approval_id"] == approval["id"]
+
+    store.decide_approval(approval["id"], True, transition_task=False)
+    effect = store.create_effect_intent(
+        task_id=task["id"], capability="marketing_effect_publish",
+        idempotency_key="publish:asset_1", preview={"asset_id": "asset_1"},
+        approval_id=approval["id"],
+    )
+    store.record_effect_receipt(effect["id"], {"status": "ok", "url": "https://example.test/post"})
+
+    assert svc._reconcile_approval_steps(task["id"]) is True
+    completed = store.get_task(task["id"])["plan"][0]
+    assert completed["status"] == "completed"
+    assert completed["effect_id"] == effect["id"]
+    checkpoint = svc._build_checkpoint(task["id"])
+    assert checkpoint["current_step"] is None
+    assert checkpoint["pending_approval_id"] is None
+    assert checkpoint["executed_effects"][effect["id"]]["approval_id"] == approval["id"]
+
+
+def test_approved_effect_without_receipt_cannot_resume_model_loop(tmp_path):
+    import asyncio
+
+    svc, store = _fake_agent_service(tmp_path)
+    session = asyncio.run(svc.create_session("user-1"))
+    task = store.create_task(
+        session_id=session["session_id"], user_id="user-1", objective="发布内容",
+    )
+    store.transition_task(task["id"], TaskStatus.RUNNING)
+    store.update_plan(task["id"], [
+        {"id": "1", "description": "发布", "tool_name": "marketing_effect_publish",
+         "status": "running", "kind": "tool"},
+    ])
+    approval = store.create_approval(
+        task_id=task["id"], capability="marketing_effect_publish",
+        arguments={"asset_id": "asset_1"}, risk_summary="外部发布",
+    )
+    store.decide_approval(approval["id"], True, transition_task=False)
+
+    result = asyncio.run(svc.resume_task(task["id"]))
+    assert result["status"] == "waiting_user"
+    assert result["awaiting_effect_receipt"] is True
+    assert store.get_task(task["id"])["plan"][0]["status"] == "waiting_approval"
 
 
 def test_safe_auto_resume_only_process_interrupted_tasks_without_pending_side_effects(tmp_path, monkeypatch):

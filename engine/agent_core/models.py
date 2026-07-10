@@ -221,10 +221,11 @@ class PlanStepStatus:
     COMPLETED = "completed"
     SKIPPED = "skipped"
     WAITING_APPROVAL = "waiting_approval"
+    FAILED = "failed"
 
     NOT_STARTED = {PENDING}
     ACTIVE = {RUNNING, WAITING_APPROVAL}
-    FINISHED = {COMPLETED, SKIPPED}
+    FINISHED = {COMPLETED, SKIPPED, FAILED}
 
 
 @dataclass
@@ -239,6 +240,8 @@ class PlanStep:
     tool_name: str | None = None
     status: str = PlanStepStatus.PENDING
     effect_id: str | None = None
+    approval_id: str | None = None
+    result_status: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -252,6 +255,8 @@ class PlanStep:
             tool_name=d.get("tool_name") or d.get("tool_guess"),
             status=str(d.get("status", PlanStepStatus.PENDING)),
             effect_id=d.get("effect_id"),
+            approval_id=d.get("approval_id"),
+            result_status=d.get("result_status"),
         )
 
     @classmethod

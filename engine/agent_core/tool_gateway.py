@@ -170,8 +170,30 @@ def _wrap_handler(tool_name: str, handler_callable):
             else:
                 parsed = {"data": str(raw)}
 
-            return json.dumps({
-                "status": "ok",
+            # A business handler is allowed to report a structured failure.
+            # Do not hide it below a synthetic top-level ``status=ok``: the
+            # task runner consumes the top-level status to update plan and
+            # checkpoint state.  Masking ``blocked``/``error`` here made a
+            # failed tool call look completed to the user.
+            parsed_fields = parsed if isinstance(parsed, dict) else {}
+            inner_status = str(parsed_fields.get("status") or "").strip().lower()
+            if inner_status in {"error", "failed"}:
+                outcome_status = "error"
+            elif inner_status in {
+                "blocked", "invalid", "unavailable", "denied",
+                "pending_approval",
+            }:
+                outcome_status = (
+                    "pending_approval" if inner_status == "pending_approval" else "blocked"
+                )
+            else:
+                # Domain workflow states such as needs_evidence or
+                # ready_for_review mean the handler ran successfully; they
+                # remain inside data for the next product decision.
+                outcome_status = "ok"
+
+            outcome = {
+                "status": outcome_status,
                 "data": parsed,
                 "evidence": {
                     "tool": tool_name,
@@ -179,7 +201,19 @@ def _wrap_handler(tool_name: str, handler_callable):
                     "approval_required": decision.approval_required,
                     "policy_reason": decision.reason,
                 },
-            }, ensure_ascii=False, default=str)
+            }
+            if outcome_status != "ok":
+                outcome["error"] = str(
+                    parsed_fields.get("error")
+                    or parsed_fields.get("reason")
+                    or parsed_fields.get("message")
+                    or f"{tool_name} returned {inner_status or outcome_status}"
+                )
+                if "retryable" in parsed_fields:
+                    outcome["retryable"] = bool(parsed_fields.get("retryable"))
+                if parsed_fields.get("approval_id"):
+                    outcome["approval_id"] = parsed_fields["approval_id"]
+            return json.dumps(outcome, ensure_ascii=False, default=str)
         except Exception as exc:
             logger.exception("tool %s failed", tool_name)
             from .models import classify_error
