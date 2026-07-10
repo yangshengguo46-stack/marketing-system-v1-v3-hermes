@@ -1,0 +1,1013 @@
+From db4d9c4ed39cf712e88efb07828c19fc53f2717a Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 22:06:12 +0800
+Subject: [PATCH] feat(marketing-os): validate native article bundles
+
+---
+ marketing_os/domains/__init__.py              |   3 +
+ marketing_os/domains/article_drafts.py        | 336 ++++++++++++++++++
+ marketing_os/domains/content_assets.py        | 121 ++++++-
+ marketing_os/domains/content_production.py    |   9 +-
+ marketing_os/product.py                       |   5 +-
+ tests/test_marketing_os_account_context.py    |   7 +-
+ tests/test_marketing_os_content_production.py | 147 +++++++-
+ tools/marketing_os_tools.py                   |  85 ++++-
+ toolsets.py                                   |   3 +-
+ 9 files changed, 683 insertions(+), 33 deletions(-)
+ create mode 100644 marketing_os/domains/article_drafts.py
+
+diff --git a/marketing_os/domains/__init__.py b/marketing_os/domains/__init__.py
+index 9e9891b52..2eaea9637 100644
+--- a/marketing_os/domains/__init__.py
++++ b/marketing_os/domains/__init__.py
+@@ -2,6 +2,7 @@
+ 
+ from .account_context import AccountContextRepository
+ from .account_lifecycle import AccountLifecycleRepository
++from .article_drafts import ArticleDraftValidator, article_stylebooks
+ from .content_assets import ContentAssetRepository
+ from .content_production import ContentProductionPlanner
+ from .evidence import EvidenceRepository
+@@ -9,7 +10,9 @@ from .evidence import EvidenceRepository
+ __all__ = [
+     "AccountContextRepository",
+     "AccountLifecycleRepository",
++    "ArticleDraftValidator",
+     "ContentAssetRepository",
+     "ContentProductionPlanner",
+     "EvidenceRepository",
++    "article_stylebooks",
+ ]
+diff --git a/marketing_os/domains/article_drafts.py b/marketing_os/domains/article_drafts.py
+new file mode 100644
+index 000000000..4fd1dd3a9
+--- /dev/null
++++ b/marketing_os/domains/article_drafts.py
+@@ -0,0 +1,336 @@
++"""Deterministic validation for Agent-authored long-form article bundles."""
++
++from __future__ import annotations
++
++import re
++from copy import deepcopy
++from difflib import SequenceMatcher
++from typing import Any
++
++
++ARTICLE_STYLEBOOK_VERSION = "2026-07-10.hermes-native-v1"
++
++ARTICLE_STYLEBOOKS: dict[str, dict[str, Any]] = {
++    "wechat_official": {
++        "platform": "wechat_official",
++        "display_name": "微信公众号",
++        "version": ARTICLE_STYLEBOOK_VERSION,
++        "guidance_status": "operational_guidance_requires_account_calibration",
++        "typography": {
++            "editor_mode": "rich_text_html",
++            "body_font_size_px": [15, 16],
++            "heading_font_size_px": [18, 20],
++            "caption_font_size_px": [12, 13],
++            "line_height": [1.75, 2.0],
++            "paragraph_spacing_px": [12, 18],
++            "body_color": "#3f3f3f",
++            "accent_policy": "one restrained accent color",
++            "disclaimer": "这些是移动端可读性建议，不是微信官方硬限制；最终以编辑器预览为准。",
++        },
++        "cover": {
++            "required": True,
++            "primary_ratio": "2.35:1",
++            "fallback_ratios": ["16:9", "1:1 share-safe crop"],
++            "safe_area": "关键文字和主体位于中心 70% 区域",
++            "text_overlay": "不超过 12 个中文大字",
++        },
++        "structure": {
++            "opening": "前 120 字说明读者处境、冲突和阅读承诺",
++            "sections": ["问题", "证据", "判断框架", "行动步骤", "轻 CTA"],
++            "paragraph_policy": "短段落优先，单段通常 80-160 字",
++            "cta_policy": "低压转化，不在正文中过早硬广",
++        },
++        "review": [
++            "标题是否克制且承诺清楚",
++            "证据是否能回链",
++            "图片是否有来源或生成记录",
++            "是否存在夸大收益、虚假背书或诱导焦虑",
++        ],
++    },
++    "zhihu": {
++        "platform": "zhihu",
++        "display_name": "知乎",
++        "version": ARTICLE_STYLEBOOK_VERSION,
++        "guidance_status": "operational_guidance_requires_account_calibration",
++        "typography": {
++            "editor_mode": "platform_default_markdown_rich_text",
++            "body_font_size_px": "platform_controlled",
++            "heading_policy": "用 H2/H3 表达论证层级，避免标题堆叠",
++            "paragraph_policy": "每段只讲一个判断，通常 2-4 句",
++            "quote_policy": "引用块只用于有来源的引用或反方观点",
++            "disclaimer": "字体和行高由知乎编辑器控制，产品只约束结构、证据和可读性。",
++        },
++        "cover": {
++            "required": False,
++            "primary_ratio": "16:9",
++            "fallback_ratios": ["4:3", "1:1"],
++            "safe_area": "文章封面核心信息居中；回答场景不强制封面",
++            "text_overlay": "少字，避免营销海报感",
++        },
++        "structure": {
++            "opening": "先给结论与边界，避免一上来销售",
++            "sections": ["结论", "依据", "反方观点", "适用边界", "行动建议"],
++            "paragraph_policy": "论证密度优先，每段只讲一个判断",
++            "cta_policy": "讨论型 CTA，弱化私域引导",
++        },
++        "review": [
++            "开头是否先给清楚结论",
++            "核心判断是否有证据链",
++            "是否写明适用边界和反方观点",
++            "是否像认真回答而不是广告软文",
++        ],
++    },
++}
++
++
++def article_stylebooks(platforms: list[str]) -> dict[str, dict[str, Any]]:
++    return {
++        platform: deepcopy(ARTICLE_STYLEBOOKS[platform])
++        for platform in platforms
++        if platform in ARTICLE_STYLEBOOKS
++    }
++
++
++class ArticleDraftValidator:
++    def build_bundle(
++        self,
++        *,
++        title: str,
++        parent_body_markdown: str,
++        target_platforms: list[str],
++        variants: Any,
++        evidence_records: list[dict[str, Any]],
++        topic: str = "",
++        hook: str = "",
++    ) -> dict[str, Any]:
++        title_value = _text(title, 300, required=True)
++        parent_body = _markdown(parent_body_markdown, 100_000)
++        if not parent_body:
++            raise ValueError("parent_body_markdown is required")
++        platforms = [item for item in target_platforms if item in ARTICLE_STYLEBOOKS]
++        if not platforms or len(platforms) != len(target_platforms):
++            raise ValueError("article plan contains unsupported platforms")
++        supplied = variants if isinstance(variants, dict) else {}
++        unsupported_variants = sorted(set(supplied) - set(platforms))
++        if unsupported_variants:
++            raise ValueError(
++                "platform_variants contains platforms outside the production plan: "
++                + ", ".join(unsupported_variants)
++            )
++        evidence_ids = [str(item["id"]) for item in evidence_records]
++        known_evidence = set(evidence_ids)
++
++        normalized_variants: dict[str, dict[str, Any]] = {}
++        for platform in platforms:
++            raw = supplied.get(platform) if isinstance(supplied.get(platform), dict) else {}
++            body = _markdown(raw.get("body_markdown") or raw.get("body"), 100_000)
++            normalized_variants[platform] = {
++                "platform": platform,
++                "title": _text(raw.get("title") or title_value, 300, required=True),
++                "summary": _text(raw.get("summary"), 500),
++                "body_markdown": body,
++                "tags": _string_list(raw.get("tags"), 12, 80),
++                "cta": _text(raw.get("cta"), 500),
++                "stylebook_version": ARTICLE_STYLEBOOK_VERSION,
++            }
++
++        validation = _validate_bundle(
++            parent_body=parent_body,
++            variants=normalized_variants,
++            platforms=platforms,
++            known_evidence=known_evidence,
++        )
++        stylebooks = article_stylebooks(platforms)
++        visual_requirements = [
++            {
++                "slot": "cover",
++                "platform": platform,
++                "status": "required" if stylebooks[platform]["cover"]["required"] else "optional",
++                "spec": deepcopy(stylebooks[platform]["cover"]),
++                "provenance_required": True,
++            }
++            for platform in platforms
++        ]
++        visual_requirements.append(
++            {
++                "slot": "inline_framework",
++                "platform": "shared",
++                "status": "optional",
++                "purpose": "只在能增强解释或证据时加入框架图/数据图",
++                "provenance_required": True,
++            }
++        )
++        return {
++            "schema": "marketing.article_bundle.v1",
++            "review_status": "ready_for_human_review" if validation["ready"] else "needs_revision",
++            "topic": _text(topic, 300),
++            "hook": _text(hook, 500),
++            "parent_draft": {
++                "title": title_value,
++                "body_markdown": parent_body,
++                "draft_origin": "agent_authored",
++            },
++            "platform_variants": normalized_variants,
++            "evidence_pack": [
++                {
++                    "evidence_id": item["id"],
++                    "title": item.get("title") or "",
++                    "canonical_url": item.get("canonical_url") or "",
++                    "captured_at": item.get("captured_at") or "",
++                    "content_sha256": item.get("content_sha256") or "",
++                    "verification_level": item.get("verification_level") or "",
++                }
++                for item in evidence_records
++            ],
++            "validation": validation,
++            "platform_stylebooks": stylebooks,
++            "visual_requirements": visual_requirements,
++            "prediction": {
++                "calibration_status": "uncalibrated",
++                "expected_outcome": (
++                    "可进入人工审稿" if validation["ready"] else "需要修改后再审稿"
++                ),
++                "traffic_range": None,
++                "note": "没有账号级真实先验时不输出阅读量、互动率或转化区间。",
++            },
++        }
++
++
++def _validate_bundle(
++    *,
++    parent_body: str,
++    variants: dict[str, dict[str, Any]],
++    platforms: list[str],
++    known_evidence: set[str],
++) -> dict[str, Any]:
++    issues: list[str] = []
++    parent_chars = _content_chars(parent_body)
++    parent_headings = len(re.findall(r"^#{1,3}\s+", parent_body, flags=re.MULTILINE))
++    parent_citations = _citations(parent_body)
++    unknown_parent_citations = sorted(parent_citations - known_evidence)
++    uncited_provenance = sorted(known_evidence - parent_citations)
++    if parent_chars < 800:
++        issues.append("parent_draft_too_short")
++    if parent_headings < 3:
++        issues.append("parent_draft_structure_incomplete")
++    if not parent_citations:
++        issues.append("parent_evidence_citation_missing")
++    if unknown_parent_citations:
++        issues.append("parent_contains_unknown_evidence")
++    if uncited_provenance:
++        issues.append("parent_has_uncited_evidence_refs")
++
++    missing_variants: list[str] = []
++    short_variants: list[str] = []
++    uncited_variants: list[str] = []
++    unknown_variant_citations: dict[str, list[str]] = {}
++    copied_parent: list[str] = []
++    normalized_parent = _similarity_text(parent_body)
++    normalized_bodies: dict[str, str] = {}
++    for platform in platforms:
++        body = str(variants.get(platform, {}).get("body_markdown") or "")
++        normalized = _similarity_text(body)
++        normalized_bodies[platform] = normalized
++        if not body:
++            missing_variants.append(platform)
++            continue
++        if _content_chars(body) < 500:
++            short_variants.append(platform)
++        citations = _citations(body)
++        if not citations:
++            uncited_variants.append(platform)
++        unknown = sorted(citations - known_evidence)
++        if unknown:
++            unknown_variant_citations[platform] = unknown
++        if normalized_parent and SequenceMatcher(None, normalized_parent, normalized).ratio() >= 0.97:
++            copied_parent.append(platform)
++
++    duplicate_pairs: list[list[str]] = []
++    for index, platform in enumerate(platforms):
++        left = normalized_bodies.get(platform) or ""
++        if not left:
++            continue
++        for other in platforms[index + 1 :]:
++            right = normalized_bodies.get(other) or ""
++            if right and SequenceMatcher(None, left, right).ratio() >= 0.97:
++                duplicate_pairs.append([platform, other])
++    if missing_variants:
++        issues.append("platform_variants_missing")
++    if short_variants:
++        issues.append("platform_variants_too_short")
++    if uncited_variants:
++        issues.append("platform_evidence_citation_missing")
++    if unknown_variant_citations:
++        issues.append("platform_contains_unknown_evidence")
++    if copied_parent:
++        issues.append("platform_variants_copy_parent")
++    if duplicate_pairs:
++        issues.append("platform_variants_not_distinct")
++
++    return {
++        "version": "marketing.article_validation.v1",
++        "ready": not issues,
++        "issues": issues,
++        "parent_char_count": parent_chars,
++        "parent_heading_count": parent_headings,
++        "known_evidence_refs": sorted(known_evidence),
++        "parent_cited_evidence_refs": sorted(parent_citations & known_evidence),
++        "unknown_parent_citations": unknown_parent_citations,
++        "uncited_provenance_refs": uncited_provenance,
++        "missing_platform_variants": missing_variants,
++        "short_platform_variants": short_variants,
++        "uncited_platform_variants": uncited_variants,
++        "unknown_platform_citations": unknown_variant_citations,
++        "copied_parent_variants": copied_parent,
++        "duplicate_platform_variant_pairs": duplicate_pairs,
++        "pending_human_checks": [
++            "platform tone and account fit",
++            "claim meaning matches cited evidence",
++            "visual rights and preview",
++            "compliance and sensitive-domain review",
++        ],
++    }
++
++
++def _citations(value: str) -> set[str]:
++    return set(re.findall(r"\[(evidence_[0-9a-f]{28})\]", value))
++
++
++def _content_chars(value: str) -> int:
++    return len(re.sub(r"[\s#*_>`~-]+", "", value))
++
++
++def _similarity_text(value: str) -> str:
++    return re.sub(r"\s+", "", value).lower()
++
++
++def _markdown(value: Any, limit: int) -> str:
++    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
++    text = re.sub(r"\n{4,}", "\n\n\n", text)
++    if len(text.encode("utf-8")) > limit:
++        raise ValueError(f"markdown exceeds {limit} bytes")
++    return text
++
++
++def _text(value: Any, limit: int, *, required: bool = False) -> str:
++    text = re.sub(r"\s+", " ", str(value or "")).strip()
++    if required and not text:
++        raise ValueError("required text is missing")
++    if len(text) > limit:
++        raise ValueError(f"text exceeds {limit} characters")
++    return text
++
++
++def _string_list(value: Any, count_limit: int, item_limit: int) -> list[str]:
++    if value is None:
++        return []
++    if not isinstance(value, list):
++        raise ValueError("tags must be a list")
++    result: list[str] = []
++    for item in value:
++        text = _text(item, item_limit)
++        if text and text not in result:
++            result.append(text)
++    if len(result) > count_limit:
++        raise ValueError(f"tags exceeds {count_limit} items")
++    return result
+diff --git a/marketing_os/domains/content_assets.py b/marketing_os/domains/content_assets.py
+index 3477ccb55..cfe25965e 100644
+--- a/marketing_os/domains/content_assets.py
++++ b/marketing_os/domains/content_assets.py
+@@ -11,11 +11,13 @@ from datetime import datetime, timezone
+ from typing import Any, Iterator
+ 
+ from marketing_os.data_paths import MarketingDataPaths
++from marketing_os.domains.article_drafts import ArticleDraftValidator
+ from marketing_os.domains.content_production import CONTENT_KINDS, VALID_PLATFORMS
+ from marketing_os.domains.evidence import EvidenceRepository
+ 
+ 
+ ASSET_TYPES = {"script", "video", "image", "caption"}
++CONTENT_ASSET_PLATFORMS = VALID_PLATFORMS | {"multi_article"}
+ 
+ 
+ class ContentAssetRepository:
+@@ -101,15 +103,116 @@ class ContentAssetRepository:
+         hook: str = "",
+         evidence_refs: list[str] | None = None,
+         memory_refs: list[str] | None = None,
++    ) -> dict[str, Any]:
++        if production_kind == "article_soft":
++            raise ValueError(
++                "article_soft drafts must use the validated article bundle path"
++            )
++        return self._save_draft(
++            user_id=user_id,
++            account_id=account_id,
++            title=title,
++            plan_id=plan_id,
++            asset_type=asset_type,
++            platform=platform,
++            production_kind=production_kind,
++            content=content,
++            topic=topic,
++            hook=hook,
++            evidence_refs=evidence_refs,
++            memory_refs=memory_refs,
++        )
++
++    def create_article_bundle(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        title: str,
++        plan_id: str,
++        parent_body_markdown: str,
++        platform_variants: dict[str, Any],
++        evidence_refs: list[str],
++        topic: str = "",
++        hook: str = "",
++    ) -> dict[str, Any]:
++        plan_id_value = _bounded_text(plan_id, "plan_id", 120)
++        with self._connect() as db:
++            plan_row = db.execute(
++                """SELECT * FROM content_production_plans
++                WHERE id=? AND user_id=? AND account_id=?""",
++                (plan_id_value, user_id, account_id),
++            ).fetchone()
++        if plan_row is None:
++            raise KeyError("production plan not found in account scope")
++        if plan_row["kind"] != "article_soft":
++            raise ValueError("article bundle requires an article_soft production plan")
++        target_platforms = json.loads(plan_row["platforms_json"])
++        verified_evidence = EvidenceRepository(self.paths).require_verified(
++            user_id=user_id,
++            account_id=account_id,
++            evidence_ids=evidence_refs,
++            require_any=True,
++        )
++        bundle = ArticleDraftValidator().build_bundle(
++            title=title,
++            parent_body_markdown=parent_body_markdown,
++            target_platforms=target_platforms,
++            variants=platform_variants,
++            evidence_records=verified_evidence,
++            topic=topic,
++            hook=hook,
++        )
++        ready = bundle["review_status"] == "ready_for_human_review"
++        return self._save_draft(
++            user_id=user_id,
++            account_id=account_id,
++            title=title,
++            plan_id=plan_id_value,
++            asset_type="script",
++            platform="multi_article",
++            production_kind="article_soft",
++            content=bundle,
++            topic=topic,
++            hook=hook,
++            evidence_refs=evidence_refs,
++            memory_refs=[],
++            allow_multi_article=True,
++            asset_status="review_ready" if ready else "draft",
++            plan_checkpoint_status="review_ready" if ready else "draft_created",
++        )
++
++    def _save_draft(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        title: str,
++        plan_id: str,
++        asset_type: str,
++        platform: str,
++        production_kind: str,
++        content: dict[str, Any],
++        topic: str = "",
++        hook: str = "",
++        evidence_refs: list[str] | None = None,
++        memory_refs: list[str] | None = None,
++        allow_multi_article: bool = False,
++        asset_status: str = "draft",
++        plan_checkpoint_status: str = "draft_created",
+     ) -> dict[str, Any]:
+         title_value = _bounded_text(title, "title", 300)
+         plan_id_value = _bounded_text(plan_id, "plan_id", 120)
+         if asset_type not in ASSET_TYPES:
+             raise ValueError(f"unsupported asset type: {asset_type}")
+-        if platform not in VALID_PLATFORMS:
++        if platform not in CONTENT_ASSET_PLATFORMS:
+             raise ValueError(f"unsupported content platform: {platform}")
++        if platform == "multi_article" and not allow_multi_article:
++            raise ValueError("multi_article is reserved for validated article bundles")
+         if production_kind not in CONTENT_KINDS:
+             raise ValueError(f"unsupported production kind: {production_kind}")
++        if asset_status not in {"draft", "review_ready"}:
++            raise ValueError("unsupported content asset status")
+         if not isinstance(content, dict) or not content:
+             raise ValueError("content must be a non-empty object")
+         if any(str(key).startswith("_") for key in content):
+@@ -140,7 +243,12 @@ class ContentAssetRepository:
+             plan_platforms = json.loads(plan_row["platforms_json"])
+             if plan_row["kind"] != production_kind:
+                 raise ValueError("draft production kind does not match its plan")
+-            if platform not in plan_platforms:
++            if platform == "multi_article":
++                if production_kind != "article_soft" or any(
++                    item not in {"zhihu", "wechat_official"} for item in plan_platforms
++                ):
++                    raise ValueError("article bundle platforms do not match its plan")
++            elif platform not in plan_platforms:
+                 raise ValueError("draft platform is outside its production plan")
+             payload["_production_plan_id"] = plan_id_value
+             encoded = _bounded_json(payload, "content", 500_000)
+@@ -148,7 +256,7 @@ class ContentAssetRepository:
+                 """INSERT INTO content_assets
+                 (id,user_id,account_id,platform,title,type,status,parent_id,experiment_id,
+                  topic,hook,version,content_json,metrics_json,created_at,updated_at)
+-                VALUES (?,?,?,?,?,?,'draft',NULL,NULL,?,?,1,?,'{}',?,?)""",
++                VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?,1,?,'{}',?,?)""",
+                 (
+                     asset_id,
+                     user_id,
+@@ -156,6 +264,7 @@ class ContentAssetRepository:
+                     platform,
+                     title_value,
+                     asset_type,
++                    asset_status,
+                     _optional_text(topic, 200),
+                     _optional_text(hook, 200),
+                     encoded,
+@@ -165,8 +274,8 @@ class ContentAssetRepository:
+             )
+             db.execute(
+                 """UPDATE content_production_plans
+-                SET status='draft_created', updated_at=? WHERE id=?""",
+-                (now, plan_id_value),
++                SET status=?, updated_at=? WHERE id=?""",
++                (plan_checkpoint_status, now, plan_id_value),
+             )
+         return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
+ 
+@@ -196,7 +305,7 @@ class ContentAssetRepository:
+             query += " AND status=?"
+             params.append(status)
+         if platform:
+-            if platform not in VALID_PLATFORMS:
++            if platform not in CONTENT_ASSET_PLATFORMS:
+                 raise ValueError(f"unsupported content platform: {platform}")
+             query += " AND platform=?"
+             params.append(platform)
+diff --git a/marketing_os/domains/content_production.py b/marketing_os/domains/content_production.py
+index ecfc4fdf7..2bd40ad50 100644
+--- a/marketing_os/domains/content_production.py
++++ b/marketing_os/domains/content_production.py
+@@ -10,6 +10,8 @@ from __future__ import annotations
+ import re
+ from typing import Any
+ 
++from marketing_os.domains.article_drafts import article_stylebooks
++
+ 
+ CONTENT_KINDS = {"article_soft", "faceless_video", "premium_human_video"}
+ ARTICLE_PLATFORMS = {"zhihu", "wechat_official"}
+@@ -49,7 +51,7 @@ SHARED_CAPABILITIES = {
+     },
+     "copywriting": {
+         "purpose": "生产父稿、平台变体、旁白、标题和 CTA。",
+-        "native_tools": ["marketing_draft_content_create"],
++        "native_tools": ["marketing_draft_article_create", "marketing_draft_content_create"],
+         "maturity": "ready",
+     },
+     "stock_material": {
+@@ -181,7 +183,7 @@ class ContentProductionPlanner:
+         else:
+             next_action = "使用已固化的 EvidencePack 生成父稿，再保存为可恢复草稿"
+ 
+-        return {
++        result = {
+             "status": "planned",
+             "architecture": "hermes-native-shared-capability-pool",
+             "kind": kind_value,
+@@ -214,6 +216,9 @@ class ContentProductionPlanner:
+             ],
+             "fallback": _fallback(kind_value),
+         }
++        if kind_value == "article_soft":
++            result["platform_stylebooks"] = article_stylebooks(platform_values)
++        return result
+ 
+ 
+ def infer_content_kind(objective: str, *, kind: str = "auto", platforms: Any = None) -> str:
+diff --git a/marketing_os/product.py b/marketing_os/product.py
+index a5f34a983..d4b2a1171 100644
+--- a/marketing_os/product.py
++++ b/marketing_os/product.py
+@@ -91,8 +91,9 @@ PRODUCT_RUNTIME_GUIDANCE = (
+     "native extraction automatically returns system-generated EvidencePack IDs. Raw URLs, source: "
+     "strings and model-written excerpts are not verified evidence. Use marketing_read_evidence_pack "
+     "to resume captured research, resolve the audience and evidence gaps, then pass the plan_id and "
+-    "verified evidence IDs when "
+-    "saving the actual output with marketing_draft_content_create. Resume drafts with marketing_read_content_assets; "
++    "verified evidence IDs when saving long-form parent drafts and distinct Zhihu/WeChat variants "
++    "with marketing_draft_article_create. Use marketing_draft_content_create only for non-article "
++    "assets. Resume drafts with marketing_read_content_assets; "
+     "never put complete articles, scripts or transient drafts into long-term memory. "
+     "Marketing decisions must distinguish verified facts, strategy inference and "
+     "creative suggestions. External effects, paid providers, publication and "
+diff --git a/tests/test_marketing_os_account_context.py b/tests/test_marketing_os_account_context.py
+index f4dafa436..0b2ca575b 100644
+--- a/tests/test_marketing_os_account_context.py
++++ b/tests/test_marketing_os_account_context.py
+@@ -170,9 +170,10 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
+         "marketing_read_accounts",
+         "marketing_read_account_context",
+         "marketing_update_account_lifecycle",
+-            "marketing_plan_content_production",
+-            "marketing_read_evidence_pack",
+-            "marketing_read_content_assets",
++        "marketing_plan_content_production",
++        "marketing_read_evidence_pack",
++        "marketing_read_content_assets",
++        "marketing_draft_article_create",
+         "marketing_draft_content_create",
+     }
+     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
+diff --git a/tests/test_marketing_os_content_production.py b/tests/test_marketing_os_content_production.py
+index 3bc75729b..592566447 100644
+--- a/tests/test_marketing_os_content_production.py
++++ b/tests/test_marketing_os_content_production.py
+@@ -82,6 +82,20 @@ def _capture_evidence(*, session_id="session-1", task_id="session-1"):
+     return payload, payload["marketing_evidence"]["records"][0]["evidence_id"]
+ 
+ 
++def _long_article(evidence_id, voice):
++    sections = []
++    for heading, idea in (
++        ("先说结论", "先把判断边界说清楚，再讨论工具能解决什么问题"),
++        ("证据意味着什么", "来源只能支持有限结论，不能把相关性包装成确定因果"),
++        ("真正的使用方法", "从一个重复任务开始，记录输入、人工判断与输出差异"),
++        ("容易踩的坑", "效率提升不等于岗位价值提升，保留复核和责任边界"),
++        ("下一步行动", "用一周小实验验证时间成本、错误率和实际收益"),
++    ):
++        paragraph = (f"{voice}：{idea}。这段内容围绕真实工作场景展开，并说明适用条件和反例。" * 8)
++        sections.append(f"## {heading}\n\n{paragraph} [{evidence_id}]")
++    return "\n\n".join(sections)
++
++
+ @pytest.mark.parametrize(
+     ("objective", "kind"),
+     [
+@@ -122,17 +136,21 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
+     )
+     created = json.loads(
+         handle_function_call(
+-            "marketing_draft_content_create",
++            "marketing_draft_article_create",
+             {
+                 "title": "普通人如何把 AI 变成工作搭档",
+                 "plan_id": planned["plan_id"],
+-                "type": "script",
+-                "platform": "wechat_official",
+-                "production_kind": "article_soft",
+                 "topic": "AI 工作流",
+                 "hook": "不是多学一个工具，而是重做工作方式",
+-                "content": {
+-                    "markdown": "# 普通人如何把 AI 变成工作搭档\n\n这是一份可审阅草稿。"
++                "parent_body_markdown": _long_article(evidence_id, "父稿"),
++                "platform_variants": {
++                    "wechat_official": {
++                        "title": "普通人如何把 AI 变成工作搭档",
++                        "summary": "从一个真实任务开始改造工作流",
++                        "body_markdown": _long_article(evidence_id, "公众号版本更重场景和行动"),
++                        "tags": ["AI", "工作流"],
++                        "cta": "从你最重复的一项任务开始记录。",
++                    }
+                 },
+                 "evidence_refs": [evidence_id],
+             },
+@@ -144,7 +162,7 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
+     listed = json.loads(
+         handle_function_call(
+             "marketing_read_content_assets",
+-            {"status": "draft"},
++            {"status": "review_ready"},
+             task_id="session-1",
+             session_id="session-1",
+             enabled_toolsets=["marketing"],
+@@ -163,16 +181,23 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
+     assert planned["account_scope"]["account_id"] == "acct-1"
+     assert planned["checkpoint_status"] == "planned"
+     assert planned["recommended_next_action"].startswith("使用已固化")
++    assert planned["platform_stylebooks"]["wechat_official"]["guidance_status"].startswith(
++        "operational_guidance"
++    )
+     assert extract_result["marketing_evidence"]["records"][0]["status"] == "verified"
+     assert created["account_id"] == "acct-1"
+     assert created["content"]["_created_by"] == "hermes-native-marketing"
+     assert created["content"]["_production_plan_id"] == planned["plan_id"]
+     assert created["content"]["_provenance_evidence_refs"] == [evidence_id]
+     assert created["content"]["_evidence_verification_level"] == "source_integrity"
++    assert created["content"]["schema"] == "marketing.article_bundle.v1"
++    assert created["content"]["review_status"] == "ready_for_human_review"
++    assert created["content"]["validation"]["ready"] is True
++    assert created["content"]["platform_stylebooks"]["wechat_official"]["cover"]["primary_ratio"] == "2.35:1"
+     assert listed["total"] == 1
+     assert listed["assets"][0]["id"] == created["id"]
+     assert replanned["plan_id"] == planned["plan_id"]
+-    assert replanned["checkpoint_status"] == "draft_created"
++    assert replanned["checkpoint_status"] == "review_ready"
+     assert ContentAssetRepository(paths).list(user_id="default", account_id="acct-2")["total"] == 0
+ 
+ 
+@@ -181,9 +206,11 @@ def test_content_write_schema_cannot_override_account_scope():
+     by_name = {item["function"]["name"]: item["function"] for item in definitions}
+ 
+     create_properties = by_name["marketing_draft_content_create"]["parameters"]["properties"]
++    article_properties = by_name["marketing_draft_article_create"]["parameters"]["properties"]
+     plan_properties = by_name["marketing_plan_content_production"]["parameters"]["properties"]
+ 
+     assert "account_id" not in create_properties
++    assert "account_id" not in article_properties
+     assert "account_id" not in plan_properties
+     assert "marketing_read_evidence_pack" in by_name
+     assert "marketing_read_content_assets" in by_name
+@@ -200,8 +227,8 @@ def test_content_repository_rejects_reserved_provenance_keys(tmp_path):
+             title="bad",
+             plan_id="production_plan_missing",
+             asset_type="script",
+-            platform="zhihu",
+-            production_kind="article_soft",
++            platform="douyin",
++            production_kind="faceless_video",
+             content={"_created_by": "model-forged"},
+         )
+ 
+@@ -231,8 +258,8 @@ def test_draft_requires_real_plan_in_same_account_scope(tmp_path):
+             title="不能绕过工单",
+             plan_id="production_plan_invented",
+             asset_type="script",
+-            platform="zhihu",
+-            production_kind="article_soft",
++            platform="douyin",
++            production_kind="faceless_video",
+             content={"markdown": "正文"},
+             evidence_refs=[evidence_id],
+         )
+@@ -375,13 +402,17 @@ def test_draft_rejects_evidence_from_another_account(tmp_path, monkeypatch):
+ 
+     result = json.loads(
+         handle_function_call(
+-            "marketing_draft_content_create",
++            "marketing_draft_article_create",
+             {
+                 "title": "不能串账号",
+                 "plan_id": planned["plan_id"],
+-                "platform": "wechat_official",
+-                "production_kind": "article_soft",
+-                "content": {"markdown": "正文"},
++                "parent_body_markdown": _long_article(foreign_id, "父稿"),
++                "platform_variants": {
++                    "wechat_official": {
++                        "title": "不能串账号",
++                        "body_markdown": _long_article(foreign_id, "公众号"),
++                    }
++                },
+                 "evidence_refs": [foreign_id],
+             },
+             task_id="session-1",
+@@ -391,3 +422,87 @@ def test_draft_rejects_evidence_from_another_account(tmp_path, monkeypatch):
+     )
+ 
+     assert "current account scope" in result["error"]
++
++
++def test_generic_draft_cannot_bypass_article_validation(tmp_path, monkeypatch):
++    _bind_session(tmp_path, monkeypatch)
++    _, evidence_id = _capture_evidence()
++    planned = json.loads(
++        handle_function_call(
++            "marketing_plan_content_production",
++            {
++                "objective": "写一篇知乎文章",
++                "platforms": ["zhihu"],
++                "audience": "AI 入门用户",
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    result = json.loads(
++        handle_function_call(
++            "marketing_draft_content_create",
++            {
++                "title": "绕过校验",
++                "plan_id": planned["plan_id"],
++                "platform": "zhihu",
++                "production_kind": "article_soft",
++                "content": {"markdown": "几句话冒充长文"},
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++
++    assert "validated article bundle path" in result["error"]
++
++
++def test_incomplete_or_duplicated_article_variants_are_saved_but_not_review_ready(
++    tmp_path, monkeypatch
++):
++    _bind_session(tmp_path, monkeypatch)
++    _, evidence_id = _capture_evidence()
++    planned = json.loads(
++        handle_function_call(
++            "marketing_plan_content_production",
++            {
++                "objective": "写一篇知乎和公众号长文",
++                "platforms": ["zhihu", "wechat_official"],
++                "audience": "AI 入门用户",
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    parent = _long_article(evidence_id, "完全相同的版本")
++    created = json.loads(
++        handle_function_call(
++            "marketing_draft_article_create",
++            {
++                "title": "同一份稿子不能复制到所有平台",
++                "plan_id": planned["plan_id"],
++                "parent_body_markdown": parent,
++                "platform_variants": {
++                    "zhihu": {"title": "知乎版", "body_markdown": parent},
++                    "wechat_official": {"title": "公众号版", "body_markdown": parent},
++                },
++                "evidence_refs": [evidence_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++
++    assert created["status"] == "draft"
++    assert created["content"]["review_status"] == "needs_revision"
++    issues = created["content"]["validation"]["issues"]
++    assert "platform_variants_copy_parent" in issues
++    assert "platform_variants_not_distinct" in issues
++    assert created["content"]["prediction"]["traffic_range"] is None
+diff --git a/tools/marketing_os_tools.py b/tools/marketing_os_tools.py
+index d4f348905..43aff473c 100644
+--- a/tools/marketing_os_tools.py
++++ b/tools/marketing_os_tools.py
+@@ -157,9 +157,10 @@ READ_EVIDENCE_PACK_SCHEMA = {
+ CREATE_CONTENT_DRAFT_SCHEMA = {
+     "name": "marketing_draft_content_create",
+     "description": (
+-        "Save a substantive, reversible content draft for the account bound to this conversation. "
+-        "Use after planning and evidence collection. The account id is taken from the Hermes session "
+-        "and cannot be supplied or overridden by the model."
++        "Save a substantive, reversible video/image/caption draft for the account bound to this "
++        "conversation. Article drafts must use marketing_draft_article_create so parent/variant and "
++        "citation checks cannot be bypassed. At least one verified EvidencePack ID is required. The "
++        "account id is taken from the Hermes session and cannot be supplied or overridden by the model."
+     ),
+     "parameters": {
+         "type": "object",
+@@ -186,6 +187,54 @@ CREATE_CONTENT_DRAFT_SCHEMA = {
+     },
+ }
+ 
++CREATE_ARTICLE_DRAFT_SCHEMA = {
++    "name": "marketing_draft_article_create",
++    "description": (
++        "Save an Agent-authored long-form parent draft and its distinct Zhihu/WeChat variants as one "
++        "validated article bundle for the account bound to this conversation. Cite evidence in every "
++        "body using exact [evidence_xxx] markers returned by web_extract or "
++        "marketing_read_evidence_pack. The tool persists useful incomplete drafts as needs_revision, "
++        "but only structurally complete, cited and platform-distinct bundles become review_ready."
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "title": {"type": "string"},
++            "plan_id": {"type": "string"},
++            "topic": {"type": "string"},
++            "hook": {"type": "string"},
++            "parent_body_markdown": {"type": "string"},
++            "platform_variants": {
++                "type": "object",
++                "description": "Keys must match every platform in the production plan.",
++                "additionalProperties": {
++                    "type": "object",
++                    "properties": {
++                        "title": {"type": "string"},
++                        "summary": {"type": "string"},
++                        "body_markdown": {"type": "string"},
++                        "tags": {"type": "array", "items": {"type": "string"}},
++                        "cta": {"type": "string"},
++                    },
++                    "required": ["title", "body_markdown"],
++                },
++            },
++            "evidence_refs": {
++                "type": "array",
++                "items": {"type": "string"},
++                "minItems": 1,
++            },
++        },
++        "required": [
++            "title",
++            "plan_id",
++            "parent_body_markdown",
++            "platform_variants",
++            "evidence_refs",
++        ],
++    },
++}
++
+ 
+ def _list_accounts(_args: dict, **_kwargs) -> str:
+     return json.dumps(AccountContextRepository().list_accounts(), ensure_ascii=False)
+@@ -345,6 +394,27 @@ def _create_content_draft(args: dict, **kwargs) -> str:
+     return json.dumps(result, ensure_ascii=False)
+ 
+ 
++def _create_article_draft(args: dict, **kwargs) -> str:
++    user_id, account_id = enforce_tool_account_scope(
++        {},
++        task_id=kwargs.get("task_id"),
++        session_id=kwargs.get("session_id"),
++        require_bound=True,
++    )
++    result = ContentAssetRepository().create_article_bundle(
++        user_id=user_id,
++        account_id=account_id,
++        title=str(args.get("title") or ""),
++        plan_id=str(args.get("plan_id") or ""),
++        parent_body_markdown=str(args.get("parent_body_markdown") or ""),
++        platform_variants=args.get("platform_variants") or {},
++        evidence_refs=args.get("evidence_refs") or [],
++        topic=str(args.get("topic") or ""),
++        hook=str(args.get("hook") or ""),
++    )
++    return json.dumps(result, ensure_ascii=False)
++
++
+ registry.register(
+     name="marketing_read_accounts",
+     toolset="marketing",
+@@ -407,3 +477,12 @@ registry.register(
+     description="Persist a reversible content draft in the current account scope.",
+     emoji="✍️",
+ )
++
++registry.register(
++    name="marketing_draft_article_create",
++    toolset="marketing",
++    schema=CREATE_ARTICLE_DRAFT_SCHEMA,
++    handler=_create_article_draft,
++    description="Persist a validated parent article and platform-native variants.",
++    emoji="📝",
++)
+diff --git a/toolsets.py b/toolsets.py
+index bde5cb0d5..1444960c4 100644
+--- a/toolsets.py
++++ b/toolsets.py
+@@ -32,7 +32,7 @@ _HERMES_CORE_TOOLS = [
+     # Marketing OS product context. These bounded read tools are always present
+     # so desktop, messaging and cron sessions operate on the same accounts.
+     "marketing_read_accounts", "marketing_read_account_context", "marketing_update_account_lifecycle",
+-    "marketing_plan_content_production", "marketing_read_evidence_pack", "marketing_read_content_assets", "marketing_draft_content_create",
++    "marketing_plan_content_production", "marketing_read_evidence_pack", "marketing_read_content_assets", "marketing_draft_article_create", "marketing_draft_content_create",
+     # Web
+     "web_search", "web_extract",
+     # Terminal + process management
+@@ -107,6 +107,7 @@ TOOLSETS = {
+             "marketing_plan_content_production",
+             "marketing_read_evidence_pack",
+             "marketing_read_content_assets",
++            "marketing_draft_article_create",
+             "marketing_draft_content_create",
+         ],
+         "includes": [],
+-- 
+2.54.0
+

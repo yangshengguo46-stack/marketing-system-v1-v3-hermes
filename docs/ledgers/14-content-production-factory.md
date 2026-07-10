@@ -210,14 +210,17 @@ Claude 写的 `engine/video_core` / `engine/video_agents` 不是废物，但它�
 | CPF-NATIVE-02 | 持久生产 checkpoint | `content_production_plans` 绑定 `user_id + account_id + kind + platforms`；相同目标得到稳定 `plan_id`，跨重启可恢复 | automated |
 | CPF-NATIVE-03 | 草稿强制走工单 | `marketing_draft_content_create` 不接受 `account_id`；必须携带当前账号真实 `plan_id`，管线或平台不匹配直接拒绝 | automated |
 | CPF-NATIVE-04 | 内容资产可恢复 | `marketing_read_content_assets` 只读取当前 Hermes session 绑定账号；完整草稿进入 `content_assets`，不进入长期记忆 | automated |
-| CPF-NATIVE-05 | 原生工具链 | `marketing_plan_content_production / marketing_read_content_assets / marketing_draft_content_create` 进入 Hermes `marketing` toolset，并默认覆盖桌面、消息渠道与 cron surface | automated |
+| CPF-NATIVE-05 | 原生工具链 | `marketing_plan_content_production / marketing_read_evidence_pack / marketing_read_content_assets / marketing_draft_article_create / marketing_draft_content_create` 进入 Hermes `marketing` toolset，并默认覆盖桌面、消息渠道与 cron surface | automated |
 | CPF-NATIVE-06 | 原生证据捕获 | Hermes `model_tools` 在真实 `web_extract` handler 返回后按当前 SessionDB 账号自动固化 `evidence_records`；模型没有 create-evidence 工具 | automated |
 | CPF-NATIVE-07 | 原文指纹与摘要边界 | `web_extract` 对预摘要原始抓取内容计算 SHA-256，并显式返回 `content_origin`；EvidencePack 区分 source integrity 与 claim truth | automated |
 | CPF-NATIVE-08 | 证据引用强校验 | 计划和草稿只接受当前账号真实 verified `evidence_id`；原始 URL、`source:` 字符串、跨账号引用、失败或空抓取被拒绝 | automated |
+| CPF-NATIVE-09 | ArticleBundle | 父稿、知乎/公众号变体、EvidencePack、视觉需求、stylebook、验证与未校准声明作为同一可恢复内容资产持久化 | automated |
+| CPF-NATIVE-10 | 平台差异质量门 | 父稿长度/章节/引用与平台变体缺失、短稿、复制父稿、版本近似均进入确定性 validation；不达标保存为 `needs_revision`，不冒充可审稿 | automated |
+| CPF-NATIVE-11 | 关闭通用绕过 | `marketing_draft_content_create` 拒绝 `article_soft`；文章必须经 `marketing_draft_article_create`，模型不能用任意 JSON 绕过父稿/证据/平台门 | automated |
 
 边界：当前完成的是“工单 → 真实来源捕获 → 草稿资产”的原生状态所有权，不等于真实软文质量、主张级多源核验、素材下载、视频渲染、发布或指标回收已完成。EvidencePack 的 `verified/source_integrity` 只证明真实 collector、来源、时间与内容哈希完整，不把页面中的每句话宣布为客观事实。
 
-验证：Hermes 产品/SessionDB/Gateway/账号/内容组合回归 622 项通过；原生 EvidencePack 定向 12 项通过；ModelTools/Web/异步桥/浏览器组合 124 项通过；Web 抽取、站点策略、秘密阻断与证据哈希组合 57 项通过；Ruff 与 py_compile 通过。以上测试存在集合重叠，不以相加数字冒充独立用例数。
+验证：Hermes 产品/SessionDB/Gateway/账号/内容组合回归 624 项通过；原生 EvidencePack + ArticleBundle 定向 14 项通过；ModelTools/Web/异步桥/浏览器组合 124 项通过；Web 抽取、站点策略、秘密阻断与证据哈希组合 57 项通过；Ruff 与 py_compile 通过。以上测试存在集合重叠，不以相加数字冒充独立用例数。
 
 ## 六、下一步执行清单
 
