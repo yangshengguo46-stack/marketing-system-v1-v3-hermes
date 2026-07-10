@@ -1,0 +1,642 @@
+From 2942f6ad528c1c3da55467861eabf9dd16486992 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 18:29:20 +0800
+Subject: [PATCH 3/3] feat(marketing-os): read native account operating context
+
+---
+ apps/desktop/electron/main.cjs             |  11 +
+ apps/desktop/src/app/workbench/index.tsx   |  25 +-
+ marketing_os/data_paths.py                 |  41 +++
+ marketing_os/domains/__init__.py           |   5 +
+ marketing_os/domains/account_context.py    | 289 +++++++++++++++++++++
+ tests/test_marketing_os_account_context.py | 148 +++++++++++
+ tui_gateway/server.py                      |  24 ++
+ 7 files changed, 542 insertions(+), 1 deletion(-)
+ create mode 100644 marketing_os/data_paths.py
+ create mode 100644 marketing_os/domains/__init__.py
+ create mode 100644 marketing_os/domains/account_context.py
+ create mode 100644 tests/test_marketing_os_account_context.py
+
+diff --git a/apps/desktop/electron/main.cjs b/apps/desktop/electron/main.cjs
+index 57bc2acf7..db7fc253c 100644
+--- a/apps/desktop/electron/main.cjs
++++ b/apps/desktop/electron/main.cjs
+@@ -152,8 +152,19 @@ if (USER_DATA_OVERRIDE) {
+   const resolvedUserData = path.resolve(USER_DATA_OVERRIDE)
+   fs.mkdirSync(resolvedUserData, { recursive: true })
+   app.setPath('userData', resolvedUserData)
++} else {
++  // Keep the existing Marketing OS product data root while the former desktop
++  // shell is removed. Accounts, browser partitions, content, receipts and the
++  // Agent domain database must survive the native Hermes Desktop cutover.
++  const productUserData = path.join(app.getPath('appData'), 'marketing-os-desktop')
++  fs.mkdirSync(productUserData, { recursive: true })
++  app.setPath('userData', productUserData)
+ }
+ 
++process.env.MARKETING_OS_USER_DATA ||= app.getPath('userData')
++process.env.MARKETING_OS_CONFIG_DIR ||= path.join(app.getPath('userData'), 'config')
++process.env.MARKETING_OS_AGENT_DB ||= path.join(app.getPath('userData'), 'agent-runtime', 'agent_core.db')
++
+ const DEV_SERVER = process.env.HERMES_DESKTOP_DEV_SERVER
+ const IS_PACKAGED = app.isPackaged
+ const IS_MAC = process.platform === 'darwin'
+diff --git a/apps/desktop/src/app/workbench/index.tsx b/apps/desktop/src/app/workbench/index.tsx
+index b2c8d43be..c370d33e0 100644
+--- a/apps/desktop/src/app/workbench/index.tsx
++++ b/apps/desktop/src/app/workbench/index.tsx
+@@ -13,6 +13,12 @@ interface MarketingProductStatus {
+   surfaces: string[]
+ }
+ 
++interface MarketingAccountsSummary {
++  accounts: Array<{ id: string; label?: string; platform?: string; username?: string }>
++  total: number
++  source: string
++}
++
+ interface WorkbenchViewProps {
+   onNewChat: () => void
+   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
+@@ -20,6 +26,7 @@ interface WorkbenchViewProps {
+ 
+ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps) {
+   const [status, setStatus] = useState<MarketingProductStatus | null>(null)
++  const [accounts, setAccounts] = useState<MarketingAccountsSummary | null>(null)
+   const [error, setError] = useState('')
+ 
+   useEffect(() => {
+@@ -33,6 +40,14 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
+         if (active) setError(reason instanceof Error ? reason.message : String(reason))
+       })
+ 
++    void requestGateway<MarketingAccountsSummary>('marketing.accounts.list')
++      .then(result => {
++        if (active) setAccounts(result)
++      })
++      .catch(reason => {
++        if (active) setError(reason instanceof Error ? reason.message : String(reason))
++      })
++
+     return () => {
+       active = false
+     }
+@@ -57,7 +72,15 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
+ 
+         <section className="grid gap-4 md:grid-cols-3">
+           <WorkbenchSignal label="智能体" value={status ? '原生运行' : '正在连接'} detail="会话、长任务、记忆和技能由同一个内核运行" />
+-          <WorkbenchSignal label="经营主线" value="账号全周期" detail="受众、定位、内容、发布、指标与复盘连续推进" />
++          <WorkbenchSignal
++            label="经营对象"
++            value={accounts ? `${accounts.total} 个账号` : '正在读取'}
++            detail={
++              accounts?.accounts[0]
++                ? `${accounts.accounts[0].platform || '平台'} · ${accounts.accounts[0].label || accounts.accounts[0].username || accounts.accounts[0].id}`
++                : '未登录也可以先从自然对话建立目标受众和账号方向'
++            }
++          />
+           <WorkbenchSignal label="产品界面" value="原生桌面" detail="工作台、对话和后台任务共享同一会话与运行时" />
+         </section>
+ 
+diff --git a/marketing_os/data_paths.py b/marketing_os/data_paths.py
+new file mode 100644
+index 000000000..2aa86bf1a
+--- /dev/null
++++ b/marketing_os/data_paths.py
+@@ -0,0 +1,41 @@
++"""Resolve the single Marketing OS data root shared by every native surface."""
++
++from __future__ import annotations
++
++import os
++import sys
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Mapping
++
++
++@dataclass(frozen=True)
++class MarketingDataPaths:
++    user_data: Path
++    config_dir: Path
++    agent_db: Path
++
++    @classmethod
++    def from_env(cls, env: Mapping[str, str] | None = None) -> "MarketingDataPaths":
++        values = os.environ if env is None else env
++        user_data_value = str(values.get("MARKETING_OS_USER_DATA") or "").strip()
++        user_data = Path(user_data_value).expanduser() if user_data_value else _default_user_data()
++        config_value = str(values.get("MARKETING_OS_CONFIG_DIR") or "").strip()
++        db_value = str(values.get("MARKETING_OS_AGENT_DB") or "").strip()
++
++        return cls(
++            user_data=user_data,
++            config_dir=Path(config_value).expanduser() if config_value else user_data / "config",
++            agent_db=Path(db_value).expanduser() if db_value else user_data / "agent-runtime" / "agent_core.db",
++        )
++
++
++def _default_user_data() -> Path:
++    home = Path.home()
++    if sys.platform == "darwin":
++        return home / "Library" / "Application Support" / "marketing-os-desktop"
++    if sys.platform == "win32":
++        local_app_data = os.environ.get("LOCALAPPDATA")
++        return Path(local_app_data) / "marketing-os-desktop" if local_app_data else home / "AppData" / "Local" / "marketing-os-desktop"
++    xdg_data = os.environ.get("XDG_DATA_HOME")
++    return Path(xdg_data) / "marketing-os-desktop" if xdg_data else home / ".local" / "share" / "marketing-os-desktop"
+diff --git a/marketing_os/domains/__init__.py b/marketing_os/domains/__init__.py
+new file mode 100644
+index 000000000..9f7b744d3
+--- /dev/null
++++ b/marketing_os/domains/__init__.py
+@@ -0,0 +1,5 @@
++"""Product-owned Marketing OS domain capabilities."""
++
++from .account_context import AccountContextRepository
++
++__all__ = ["AccountContextRepository"]
+diff --git a/marketing_os/domains/account_context.py b/marketing_os/domains/account_context.py
+new file mode 100644
+index 000000000..c50cea604
+--- /dev/null
++++ b/marketing_os/domains/account_context.py
+@@ -0,0 +1,289 @@
++"""Read the canonical account operating context without an outer API shell.
++
++This is deliberately a read projection over the existing product truth. It lets
++the native Hermes gateway consume account data before write ownership and schema
++migrations move into the fork, without introducing a second JSON/SQLite store.
++"""
++
++from __future__ import annotations
++
++import json
++import sqlite3
++from contextlib import closing
++from pathlib import Path
++from typing import Any
++
++from marketing_os.data_paths import MarketingDataPaths
++
++
++_ACCOUNT_FIELDS = ("id", "platform", "username", "label", "status", "stats")
++_NEXT_ACTION_BY_STAGE = {
++    "not_started": "draft_audience_hypothesis",
++    "goal_defined": "draft_audience_hypothesis",
++    "audience_hypothesis_ready": "complete_benchmark_evidence",
++    "benchmark_evidence_ready": "draft_account_positioning",
++    "positioning_approved": "propose_first_content_experiment",
++    "experiment_running": "collect_and_review_evidence",
++}
++
++
++class AccountContextRepository:
++    """Produce a bounded, secret-free account context from canonical storage."""
++
++    def __init__(self, paths: MarketingDataPaths | None = None):
++        self.paths = paths or MarketingDataPaths.from_env()
++
++    def list_accounts(self) -> dict[str, Any]:
++        raw = _read_json(self.paths.config_dir / "accounts.json", {"accounts": []})
++        rows = raw.get("accounts") if isinstance(raw, dict) else []
++        accounts = [_sanitize_account(item) for item in rows if isinstance(item, dict)]
++        accounts = [item for item in accounts if item.get("id")]
++        return {"accounts": accounts, "total": len(accounts), "source": "marketing_store"}
++
++    def read(self, *, user_id: str, account_id: str) -> dict[str, Any]:
++        user_id = str(user_id or "default").strip() or "default"
++        account_id = str(account_id or "").strip()
++        if not account_id:
++            raise ValueError("account_id is required")
++
++        account = next(
++            (item for item in self.list_accounts()["accounts"] if item.get("id") == account_id),
++            None,
++        )
++        context: dict[str, Any] = {
++            "user_id": user_id,
++            "account_id": account_id,
++            "connected": account is not None,
++            "account": account,
++            "lifecycle": _empty_lifecycle(),
++            "account_dna": {},
++            "actual_audience": None,
++            "source": "marketing_store",
++        }
++        if not self.paths.agent_db.is_file():
++            context["data_state"] = "database_missing"
++            return context
++
++        with closing(_connect_readonly(self.paths.agent_db)) as db:
++            tables = _table_names(db)
++            project = _active_project(db, tables, user_id=user_id, account_id=account_id)
++            context["account_dna"] = _memory_account_dna(
++                db, tables, user_id=user_id, account_id=account_id
++            )
++            if project is None:
++                context["data_state"] = "ready"
++                return context
++
++            project_id = str(project["id"])
++            audience = _confirmed_audience(
++                db, tables, user_id=user_id, account_id=account_id, project_id=project_id
++            )
++            positioning = _approved_positioning(
++                db, tables, user_id=user_id, account_id=account_id, project_id=project_id
++            )
++            snapshot = _latest_audience_snapshot(
++                db, tables, user_id=user_id, account_id=account_id, project_id=project_id
++            )
++            benchmark_count = _scoped_count(
++                db,
++                tables,
++                "benchmark_accounts",
++                "user_id=? AND target_account_id=? AND project_id=? AND selection_status='selected'",
++                (user_id, account_id, project_id),
++            )
++            experiment_count = _scoped_count(
++                db,
++                tables,
++                "account_experiments",
++                "user_id=? AND account_id=? AND project_id=?",
++                (user_id, account_id, project_id),
++            )
++            stage = str(project["stage"] or "goal_defined")
++            context["lifecycle"] = {
++                "project_id": project_id,
++                "business_goal": str(project["business_goal"] or ""),
++                "stage": stage,
++                "next_action": _NEXT_ACTION_BY_STAGE.get(stage, "review_account_strategy"),
++                "audience_hypothesis": audience,
++                "positioning": positioning,
++                "benchmark_count": benchmark_count,
++                "experiment_count": experiment_count,
++                "data_gaps": list(audience.get("data_gaps", [])) if audience else [],
++            }
++            if positioning:
++                context["account_dna"] = {
++                    **context["account_dna"],
++                    "persona": positioning.get("persona"),
++                    "tone": positioning.get("tone"),
++                    "audience": positioning.get("audience_summary", "以已确认目标受众假设为准"),
++                    "content_pillars": positioning.get("content_pillars", []),
++                    "taboos": positioning.get("taboos", []),
++                    "goals": [positioning.get("promise")] if positioning.get("promise") else [],
++                }
++            context["actual_audience"] = snapshot
++            context["data_state"] = "ready"
++        return context
++
++
++def _empty_lifecycle() -> dict[str, Any]:
++    return {
++        "project_id": None,
++        "business_goal": "",
++        "stage": "not_started",
++        "next_action": "draft_audience_hypothesis",
++        "audience_hypothesis": None,
++        "positioning": None,
++        "benchmark_count": 0,
++        "experiment_count": 0,
++        "data_gaps": [],
++    }
++
++
++def _sanitize_account(value: dict[str, Any]) -> dict[str, Any]:
++    return {key: value.get(key) for key in _ACCOUNT_FIELDS if key in value}
++
++
++def _read_json(path: Path, default: Any) -> Any:
++    try:
++        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else default
++    except (OSError, json.JSONDecodeError):
++        return default
++
++
++def _json_object(value: Any, default: Any) -> Any:
++    if not isinstance(value, str):
++        return default
++    try:
++        parsed = json.loads(value)
++    except json.JSONDecodeError:
++        return default
++    return parsed
++
++
++def _connect_readonly(path: Path) -> sqlite3.Connection:
++    connection = sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True)
++    connection.row_factory = sqlite3.Row
++    return connection
++
++
++def _table_names(db: sqlite3.Connection) -> set[str]:
++    return {str(row[0]) for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
++
++
++def _active_project(
++    db: sqlite3.Connection, tables: set[str], *, user_id: str, account_id: str
++) -> sqlite3.Row | None:
++    if "account_strategy_projects" not in tables:
++        return None
++    return db.execute(
++        """SELECT id,business_goal,stage FROM account_strategy_projects
++        WHERE user_id=? AND account_id=? AND status='active'
++        ORDER BY updated_at DESC LIMIT 1""",
++        (user_id, account_id),
++    ).fetchone()
++
++
++def _confirmed_audience(
++    db: sqlite3.Connection,
++    tables: set[str],
++    *,
++    user_id: str,
++    account_id: str,
++    project_id: str,
++) -> dict[str, Any] | None:
++    if "audience_hypotheses" not in tables:
++        return None
++    row = db.execute(
++        """SELECT id,version,segments_json,pains_json,scenarios_json,exclusions_json,
++        data_gaps_json,confirmed_at FROM audience_hypotheses WHERE project_id=?
++        AND user_id=? AND account_id=? AND status='confirmed' ORDER BY version DESC LIMIT 1""",
++        (project_id, user_id, account_id),
++    ).fetchone()
++    if row is None:
++        return None
++    return {
++        "id": row["id"],
++        "version": row["version"],
++        "segments": _json_object(row["segments_json"], []),
++        "pains": _json_object(row["pains_json"], []),
++        "scenarios": _json_object(row["scenarios_json"], []),
++        "exclusions": _json_object(row["exclusions_json"], []),
++        "data_gaps": _json_object(row["data_gaps_json"], []),
++        "confirmed_at": row["confirmed_at"],
++    }
++
++
++def _approved_positioning(
++    db: sqlite3.Connection,
++    tables: set[str],
++    *,
++    user_id: str,
++    account_id: str,
++    project_id: str,
++) -> dict[str, Any] | None:
++    if "positioning_versions" not in tables:
++        return None
++    row = db.execute(
++        """SELECT positioning_json FROM positioning_versions WHERE project_id=?
++        AND user_id=? AND account_id=? AND status='approved' ORDER BY version DESC LIMIT 1""",
++        (project_id, user_id, account_id),
++    ).fetchone()
++    return None if row is None else _json_object(row["positioning_json"], {})
++
++
++def _latest_audience_snapshot(
++    db: sqlite3.Connection,
++    tables: set[str],
++    *,
++    user_id: str,
++    account_id: str,
++    project_id: str,
++) -> dict[str, Any] | None:
++    if "audience_snapshots" not in tables:
++        return None
++    row = db.execute(
++        """SELECT platform,dimensions_json,provenance_json,window_start,window_end,captured_at
++        FROM audience_snapshots WHERE project_id=? AND user_id=? AND account_id=?
++        ORDER BY captured_at DESC LIMIT 1""",
++        (project_id, user_id, account_id),
++    ).fetchone()
++    if row is None:
++        return None
++    return {
++        "platform": row["platform"],
++        "dimensions": _json_object(row["dimensions_json"], {}),
++        "provenance": _json_object(row["provenance_json"], {}),
++        "window_start": row["window_start"],
++        "window_end": row["window_end"],
++        "captured_at": row["captured_at"],
++    }
++
++
++def _memory_account_dna(
++    db: sqlite3.Connection, tables: set[str], *, user_id: str, account_id: str
++) -> dict[str, Any]:
++    if "memory_candidates" not in tables:
++        return {}
++    rows = db.execute(
++        """SELECT content FROM memory_candidates WHERE user_id=? AND account_id=?
++        AND kind='account' AND status IN ('verified','locked') ORDER BY created_at""",
++        (user_id, account_id),
++    ).fetchall()
++    dna: dict[str, Any] = {}
++    for row in rows:
++        value = _json_object(row["content"], {})
++        if isinstance(value, dict) and value.get("field"):
++            dna[str(value["field"])] = value.get("value")
++    return dna
++
++
++def _scoped_count(
++    db: sqlite3.Connection,
++    tables: set[str],
++    table: str,
++    where: str,
++    params: tuple[Any, ...],
++) -> int:
++    if table not in tables:
++        return 0
++    return int(db.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params).fetchone()[0])
+diff --git a/tests/test_marketing_os_account_context.py b/tests/test_marketing_os_account_context.py
+new file mode 100644
+index 000000000..02dde9a45
+--- /dev/null
++++ b/tests/test_marketing_os_account_context.py
+@@ -0,0 +1,148 @@
++import json
++import sqlite3
++
++from marketing_os.data_paths import MarketingDataPaths
++from marketing_os.domains import AccountContextRepository
++from tui_gateway import server
++
++
++def _seed_product_store(tmp_path):
++    config_dir = tmp_path / "config"
++    config_dir.mkdir()
++    (config_dir / "accounts.json").write_text(
++        json.dumps({
++            "accounts": [{
++                "id": "acct-1",
++                "platform": "douyin",
++                "username": "creator",
++                "label": "主账号",
++                "status": "active",
++                "stats": {"followers": 42},
++                "cookie": "must-not-cross-the-domain-port",
++            }]
++        }, ensure_ascii=False),
++        encoding="utf-8",
++    )
++    db_path = tmp_path / "agent-runtime" / "agent_core.db"
++    db_path.parent.mkdir()
++    with sqlite3.connect(db_path) as db:
++        db.executescript(
++            """
++            CREATE TABLE account_strategy_projects (
++                id TEXT PRIMARY KEY,user_id TEXT,account_id TEXT,business_goal TEXT,
++                stage TEXT,status TEXT,updated_at TEXT
++            );
++            CREATE TABLE audience_hypotheses (
++                id TEXT PRIMARY KEY,project_id TEXT,user_id TEXT,account_id TEXT,version INTEGER,
++                segments_json TEXT,pains_json TEXT,scenarios_json TEXT,exclusions_json TEXT,
++                data_gaps_json TEXT,status TEXT,confirmed_at TEXT
++            );
++            CREATE TABLE positioning_versions (
++                id TEXT PRIMARY KEY,project_id TEXT,user_id TEXT,account_id TEXT,version INTEGER,
++                positioning_json TEXT,status TEXT
++            );
++            CREATE TABLE audience_snapshots (
++                id TEXT PRIMARY KEY,project_id TEXT,user_id TEXT,account_id TEXT,platform TEXT,
++                dimensions_json TEXT,provenance_json TEXT,window_start TEXT,window_end TEXT,captured_at TEXT
++            );
++            CREATE TABLE benchmark_accounts (
++                id TEXT PRIMARY KEY,user_id TEXT,target_account_id TEXT,project_id TEXT,selection_status TEXT
++            );
++            CREATE TABLE account_experiments (
++                id TEXT PRIMARY KEY,user_id TEXT,account_id TEXT,project_id TEXT
++            );
++            CREATE TABLE memory_candidates (
++                id TEXT PRIMARY KEY,user_id TEXT,account_id TEXT,kind TEXT,status TEXT,content TEXT,created_at TEXT
++            );
++            """
++        )
++        db.execute(
++            "INSERT INTO account_strategy_projects VALUES (?,?,?,?,?,?,?)",
++            ("project-1", "default", "acct-1", "经营 AI 教育账号", "positioning_approved", "active", "2026-07-10"),
++        )
++        db.execute(
++            "INSERT INTO audience_hypotheses VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
++            (
++                "audience-1", "project-1", "default", "acct-1", 1,
++                '[{"label":"想转型的职场人"}]', '["缺少路径"]', '["下班学习"]', '[]',
++                '["真实年龄分布"]', "confirmed", "2026-07-10",
++            ),
++        )
++        positioning = {
++            "persona": "懂业务的 AI 实践者",
++            "tone": "直接、可信",
++            "audience_summary": "想用 AI 转型的职场人",
++            "content_pillars": ["案例", "方法"],
++            "taboos": ["虚构收益"],
++            "promise": "提供可复现路径",
++        }
++        db.execute(
++            "INSERT INTO positioning_versions VALUES (?,?,?,?,?,?,?)",
++            ("position-1", "project-1", "default", "acct-1", 1, json.dumps(positioning, ensure_ascii=False), "approved"),
++        )
++        db.execute(
++            "INSERT INTO audience_snapshots VALUES (?,?,?,?,?,?,?,?,?,?)",
++            (
++                "snapshot-1", "project-1", "default", "acct-1", "douyin",
++                '{"age":{"25-34":0.6}}',
++                '{"source_kind":"creator_center_mcp","source_ref":"creator-center","captured_at":"2026-07-10"}',
++                None, None, "2026-07-10",
++            ),
++        )
++        db.execute(
++            "INSERT INTO benchmark_accounts VALUES (?,?,?,?,?)",
++            ("bench-1", "default", "acct-1", "project-1", "selected"),
++        )
++        db.execute(
++            "INSERT INTO memory_candidates VALUES (?,?,?,?,?,?,?)",
++            ("memory-1", "default", "acct-1", "account", "verified", '{"field":"goals","value":"稳定获客"}', "2026-07-09"),
++        )
++    return MarketingDataPaths(user_data=tmp_path, config_dir=config_dir, agent_db=db_path)
++
++
++def test_account_context_projects_existing_product_truth_without_secrets(tmp_path):
++    repository = AccountContextRepository(_seed_product_store(tmp_path))
++
++    accounts = repository.list_accounts()
++    context = repository.read(user_id="default", account_id="acct-1")
++
++    assert accounts["total"] == 1
++    assert "cookie" not in accounts["accounts"][0]
++    assert context["connected"] is True
++    assert context["lifecycle"]["stage"] == "positioning_approved"
++    assert context["lifecycle"]["audience_hypothesis"]["segments"][0]["label"] == "想转型的职场人"
++    assert context["account_dna"]["persona"] == "懂业务的 AI 实践者"
++    assert context["account_dna"]["goals"] == ["提供可复现路径"]
++    assert context["actual_audience"]["dimensions"]["age"]["25-34"] == 0.6
++
++
++def test_account_context_is_explicit_when_database_is_not_initialized(tmp_path):
++    paths = MarketingDataPaths(
++        user_data=tmp_path,
++        config_dir=tmp_path / "config",
++        agent_db=tmp_path / "agent-runtime" / "agent_core.db",
++    )
++    repository = AccountContextRepository(paths)
++
++    result = repository.read(user_id="default", account_id="prospect_default")
++
++    assert result["connected"] is False
++    assert result["data_state"] == "database_missing"
++    assert result["lifecycle"]["next_action"] == "draft_audience_hypothesis"
++
++
++def test_native_gateway_reads_same_marketing_store(tmp_path, monkeypatch):
++    paths = _seed_product_store(tmp_path)
++    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
++    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
++    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
++
++    response = server.handle_request({
++        "jsonrpc": "2.0",
++        "id": "account-context",
++        "method": "marketing.account.context",
++        "params": {"user_id": "default", "account_id": "acct-1"},
++    })
++
++    assert response["result"]["account"]["platform"] == "douyin"
++    assert response["result"]["lifecycle"]["business_goal"] == "经营 AI 教育账号"
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index 42c6c7a96..d0f087f37 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -12790,6 +12790,30 @@ def _(rid, _params: dict) -> dict:
+     )
+ 
+ 
++@method("marketing.accounts.list")
++def _(rid, _params: dict) -> dict:
++    """Read connected account summaries from the canonical product store."""
++    from marketing_os.domains import AccountContextRepository
++
++    return _ok(rid, AccountContextRepository().list_accounts())
++
++
++@method("marketing.account.context")
++def _(rid, params: dict) -> dict:
++    """Read the native operating context for one user-scoped account."""
++    from marketing_os.domains import AccountContextRepository
++
++    params = params if isinstance(params, dict) else {}
++    try:
++        result = AccountContextRepository().read(
++            user_id=str(params.get("user_id") or "default"),
++            account_id=str(params.get("account_id") or ""),
++        )
++    except ValueError as exc:
++        return _err(rid, -32602, str(exc))
++    return _ok(rid, result)
++
++
+ @method("insights.get")
+ def _(rid, params: dict) -> dict:
+     days = params.get("days", 30)
