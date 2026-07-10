@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
 const test = require('node:test')
 
 const {
@@ -82,4 +84,14 @@ test('migration leaves the legacy store untouched when secure storage is unavail
     migrated: false,
     reason: 'secure-storage-unavailable'
   })
+})
+
+test('desktop preserves the original Electron identity used by macOS safeStorage', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+  )
+
+  assert.match(mainSource, /app\.setName\('marketing-os-desktop'\)/)
+  assert.equal(packageJson.build.appId, 'com.marketing-os.desktop')
 })

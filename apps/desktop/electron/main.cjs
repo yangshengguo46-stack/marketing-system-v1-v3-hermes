@@ -654,16 +654,20 @@ function previewFileMetadata(filePath, mimeType) {
   }
 }
 
-app.setName(APP_NAME)
+// Keep the original Electron identity so existing macOS Keychain-backed
+// safeStorage ciphertext, browser data and OS permissions remain readable
+// after the Hermes-native cutover. APP_NAME is still used for every visible
+// product label; app.getName() is an internal compatibility identity here.
+app.setName('marketing-os-desktop')
 // Windows toast notifications silently no-op unless an AppUserModelID is set:
 // `new Notification().show()` returns without error and nothing appears. The
 // AUMID must match the installed Start Menu shortcut's AUMID, which
-// electron-builder derives from the build `appId` (com.marketingos.desktop) —
+// electron-builder derives from the build `appId` (com.marketing-os.desktop) —
 // keep this string in sync with package.json `build.appId`. macOS/Linux don't
 // need this, so gate it on Windows. (Fixes: desktop approval/turn notifications
 // never firing on Windows.)
 if (IS_WINDOWS) {
-  app.setAppUserModelId('com.marketingos.desktop')
+  app.setAppUserModelId('com.marketing-os.desktop')
 }
 // Seed the native About panel with the live Hermes version. This is refreshed
 // on every open via the explicit "About" menu handler (refreshAboutPanel), so
