@@ -1,37 +1,37 @@
 """Soft-article production chain for Zhihu and WeChat Official Account.
 
-This module is intentionally deterministic.  It does not call an LLM, scrape
-the web, or download images.  Its job is to turn already-collected context into
-a durable, reviewable ``content_assets`` draft with:
+This module is intentionally deterministic, but it is not the writer.  Hermes
+supplies the actual parent draft and platform rewrites; this module validates
+and persists them.  It never calls an LLM, scrapes the web, or downloads images.
+Its job is to turn already-collected context and Agent-authored prose into a
+durable ``content_assets`` draft with:
 
 - a parent long-form article draft;
 - platform variants for Zhihu and WeChat Official Account;
 - evidence and visual requirements;
-- a pre-publish scoring/prediction packet.
+- an explicit readiness statement that refuses to invent performance numbers.
 
-The Hermes agent can still do higher-level creative writing around it, but this
-module gives the product a reliable closure point: content production no longer
-ends at a plan.
+If authored prose is missing, it stores an explicit writing scaffold and keeps
+the asset blocked.  A deterministic template must never masquerade as finished
+creative work.
 """
 
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from typing import Any, TYPE_CHECKING
 
 from .content_lane_gate import (
     attach_asset_to_requested_experiment,
     attach_content_lane_gate,
     attach_experiment_context,
-    gate_result_status,
     requested_experiment_context,
     run_content_lane_gate,
 )
 from .content_feature_snapshot import build_content_feature_snapshot
 from .content_matrix import adapt_cta, adapt_tags, adapt_title
-from .content_prediction import attach_prediction_dimensions
 from .content_production import build_content_production_plan
-from .learning_pipeline import review_content_asset
 from .platform_stylebook import (
     article_platform_publish_packs,
     build_article_publish_pack,
@@ -48,6 +48,12 @@ ARTICLE_PLATFORMS = ("zhihu", "wechat_official")
 def _text(value: Any, *, limit: int | None = None) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text[:limit] if limit is not None else text
+
+
+def _markdown(value: Any, *, limit: int = 40_000) -> str:
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+    return text[:limit]
 
 
 def _normalise_platforms(value: Any) -> list[str]:
@@ -107,7 +113,7 @@ def _normalise_evidence(value: Any) -> list[dict[str, Any]]:
         if not title and not summary:
             continue
         evidence.append({
-            "id": f"ev_{index:02d}",
+            "id": _text(item.get("id"), limit=80) if isinstance(item, dict) and item.get("id") else f"ev_{index:02d}",
             "title": title or f"证据 {index}",
             "summary": summary or title,
             "url": url,
@@ -143,7 +149,7 @@ def _article_title(topic: str, objective: str) -> str:
     return adapt_title(f"{topic}这件事，普通人真正该先看懂什么", "wechat_official")
 
 
-def _build_body(*, topic: str, objective: str, evidence: list[dict[str, Any]], audience: dict[str, Any]) -> str:
+def _build_scaffold(*, topic: str, objective: str, evidence: list[dict[str, Any]], audience: dict[str, Any]) -> str:
     target_reader = audience["target_reader"]
     pains = audience["pain_points"] or ["不知道该不该入局", "看见机会但缺少判断框架", "担心被流量带偏"]
     promise = audience["promise"]
@@ -153,33 +159,135 @@ def _build_body(*, topic: str, objective: str, evidence: list[dict[str, Any]], a
     ] or ["- 暂无可回链证据：本文只能作为观点草稿，不能进入发布审核。"]
 
     return "\n\n".join([
-        f"## 开头：先把问题说清楚\n{target_reader}在看『{topic}』时，最容易被两个东西带偏：一个是短期热度，一个是别人包装好的确定性。真正值得先做的，不是马上跟风，而是确认这件事和自己的目标、资源、风险承受能力有没有关系。",
-        f"## 为什么现在值得讨论\n用户原始目标：{objective}\n\n这篇内容的承诺是：{promise}。如果这个承诺还没有被账号定位确认，发布前必须先补定位或把语气改成探索。",
-        "## 已有证据\n" + "\n".join(evidence_lines),
-        "## 读者最可能卡住的地方\n" + "\n".join(f"{index}. {pain}" for index, pain in enumerate(pains, start=1)),
-        f"## 一个更稳的判断框架\n第一，看它解决的是不是长期问题，而不是只看今天的热搜。\n第二，看你能不能连续输出 30 天相关内容，而不是只蹭一次流量。\n第三，看它能不能和你的真实经历、技能、服务对象连接起来。\n\n放到『{topic}』上，如果这三点都回答不上来，就先不要急着把它当账号主线；可以做成一次内容实验，用真实反馈来判断。",
-        "## 可以怎么行动\n1. 先把目标用户写成一句话。\n2. 再选 3 个对标账号，拆他们解决的具体问题。\n3. 最后只做一条内容验证一个假设：标题、开头、证据、CTA 都只服务这个假设。",
-        f"## 结尾与 CTA\n如果你也在判断『{topic}』是不是适合自己，先别急着套模板。把你的行业、目标用户和现有资源列出来，我们可以继续把它拆成一个可验证的账号方向。",
+        "# 待 Agent 完成的父稿",
+        f"> 目标：{objective}",
+        f"> 读者：{target_reader}",
+        f"> 内容承诺：{promise}",
+        "## 开头钩子\n[用一个可验证的矛盾、具体场景或读者问题开场，禁止虚构数字。]",
+        "## 核心判断\n[明确本文主张、适用边界和反方观点。]",
+        "## 证据与论证\n" + "\n".join(evidence_lines) + "\n\n[引用证据时使用 [ev_01] 形式，并区分事实与推断。]",
+        "## 读者问题\n" + "\n".join(f"{index}. {pain}" for index, pain in enumerate(pains, start=1)),
+        f"## 行动建议\n[围绕『{topic}』给出能执行、能验证、不过度承诺的下一步。]",
+        "## 结尾与 CTA\n[结合账号目标写自然 CTA，不使用诱导分享或虚假稀缺。]",
     ])
 
 
-def _build_variants(*, title: str, body: str, topic_terms: list[str], platforms: list[str], cta: str) -> dict[str, dict[str, Any]]:
+def _authored_variant_map(value: Any) -> dict[str, dict[str, Any]]:
+    if isinstance(value, list):
+        value = {
+            str(item.get("platform") or ""): item
+            for item in value if isinstance(item, dict) and item.get("platform")
+        }
+    return value if isinstance(value, dict) else {}
+
+
+def _build_variants(
+    *, title: str, body: str, topic_terms: list[str], platforms: list[str], cta: str,
+    authored_variants: Any = None,
+) -> dict[str, dict[str, Any]]:
+    supplied = _authored_variant_map(authored_variants)
     variants: dict[str, dict[str, Any]] = {}
     for platform in platforms:
-        tags = adapt_tags(topic_terms[:4], platform)
+        authored = supplied.get(platform) if isinstance(supplied.get(platform), dict) else {}
+        variant_body = _markdown(authored.get("body_markdown") or authored.get("body")) or body
+        variant_title = _text(authored.get("title") or title, limit=120)
+        origin = "agent_authored" if _markdown(authored.get("body_markdown") or authored.get("body")) else "parent_fallback"
+        tags = authored.get("tags") if isinstance(authored.get("tags"), list) else adapt_tags(topic_terms[:4], platform)
         publish_pack = build_article_publish_pack(platform) or {}
         variants[platform] = {
             "platform": platform,
-            "title": adapt_title(title, platform),
-            "summary": _text(body.replace("#", "").replace("\n", " "), limit=180),
-            "body": body,
+            "title": adapt_title(variant_title, platform),
+            "summary": _text(authored.get("summary") or variant_body.replace("#", " "), limit=180),
+            "body": variant_body,
             "tags": tags,
-            "cta": adapt_cta(platform, cta),
+            "cta": adapt_cta(platform, _text(authored.get("cta") or cta, limit=180)),
+            "draft_origin": origin,
             "format_notes": "知乎更重论证与反驳；公众号更重信任、步骤和转化。" if platform == "wechat_official" else "知乎版需要保留证据链和反方观点，避免硬广。",
             "style_profile": get_platform_style_profile(platform),
             "publish_pack": publish_pack,
         }
     return variants
+
+
+def _draft_validation(
+    *, body: str, evidence: list[dict[str, Any]], variants: dict[str, dict[str, Any]],
+    platforms: list[str], authored: bool,
+) -> dict[str, Any]:
+    body_chars = len(re.sub(r"\s+", "", body))
+    heading_count = len(re.findall(r"^#{1,3}\s+", body, flags=re.MULTILINE))
+    known_refs = {str(item.get("id")) for item in evidence if item.get("id")}
+    cited_refs = set(re.findall(r"\[([A-Za-z0-9_.:-]+)\]", body)) & known_refs
+    evidence_requires_citation = any(item.get("has_url") for item in evidence)
+    parent_ready = authored and body_chars >= 600 and heading_count >= 3
+    citation_ready = not evidence_requires_citation or bool(cited_refs)
+    missing_variants = [
+        platform for platform in platforms
+        if variants.get(platform, {}).get("draft_origin") != "agent_authored"
+        or len(re.sub(r"\s+", "", str(variants.get(platform, {}).get("body") or ""))) < 300
+    ]
+    normalised_parent = re.sub(r"\s+", "", body)
+    copied_variants = []
+    uncited_variants = []
+    normalised_variants: dict[str, str] = {}
+    for platform in platforms:
+        variant_body = str(variants.get(platform, {}).get("body") or "")
+        normalised_variant = re.sub(r"\s+", "", variant_body)
+        normalised_variants[platform] = normalised_variant
+        if not normalised_variant or not normalised_parent:
+            continue
+        similarity = SequenceMatcher(None, normalised_parent, normalised_variant).ratio()
+        if similarity >= 0.985:
+            copied_variants.append(platform)
+        variant_refs = set(re.findall(r"\[([A-Za-z0-9_.:-]+)\]", variant_body)) & known_refs
+        if evidence_requires_citation and not variant_refs:
+            uncited_variants.append(platform)
+    duplicate_variant_pairs = []
+    for index, platform in enumerate(platforms):
+        left = normalised_variants.get(platform, "")
+        if not left:
+            continue
+        for other in platforms[index + 1:]:
+            right = normalised_variants.get(other, "")
+            if right and SequenceMatcher(None, left, right).ratio() >= 0.985:
+                duplicate_variant_pairs.append([platform, other])
+    issues: list[str] = []
+    if not authored:
+        issues.append("agent_parent_draft_missing")
+    elif body_chars < 600:
+        issues.append("parent_draft_too_short")
+    if heading_count < 3:
+        issues.append("parent_draft_structure_incomplete")
+    if not citation_ready:
+        issues.append("evidence_citation_missing")
+    if missing_variants:
+        issues.append("agent_platform_variants_missing")
+    if copied_variants:
+        issues.append("platform_variants_copy_parent")
+    if duplicate_variant_pairs:
+        issues.append("platform_variants_not_distinct")
+    if uncited_variants:
+        issues.append("platform_evidence_citation_missing")
+    return {
+        "version": "article-draft-validation-v1",
+        "ready": (
+            parent_ready
+            and citation_ready
+            and not missing_variants
+            and not copied_variants
+            and not duplicate_variant_pairs
+            and not uncited_variants
+        ),
+        "parent_authored": authored,
+        "body_char_count": body_chars,
+        "heading_count": heading_count,
+        "known_evidence_refs": sorted(known_refs),
+        "cited_evidence_refs": sorted(cited_refs),
+        "missing_platform_variants": missing_variants,
+        "copied_platform_variants": copied_variants,
+        "duplicate_platform_variant_pairs": duplicate_variant_pairs,
+        "uncited_platform_variants": uncited_variants,
+        "issues": issues,
+    }
 
 
 def _visual_requirements(topic: str, topic_terms: list[str], evidence_ready: bool, platforms: list[str]) -> list[dict[str, Any]]:
@@ -217,50 +325,31 @@ def _visual_requirements(topic: str, topic_terms: list[str], evidence_ready: boo
     return requirements
 
 
-def _scores(evidence_ready: bool) -> dict[str, int]:
-    if evidence_ready:
-        return {
-            "hook": 7,
-            "topic": 7,
-            "emotion": 6,
-            "density": 7,
-            "pacing": 6,
-            "viewpoint": 7,
-            "cta": 6,
-            "title_bait_risk": 2,
-            "controversy_overload_risk": 2,
-        }
+def _prediction(evidence_ready: bool, draft_ready: bool, platforms: list[str], evidence_count: int) -> dict[str, Any]:
+    """Return an honest readiness statement, not an invented traffic range."""
     return {
-        "hook": 5,
-        "topic": 5,
-        "emotion": 4,
-        "density": 4,
-        "pacing": 5,
-        "viewpoint": 4,
-        "cta": 5,
-        "title_bait_risk": 2,
-        "controversy_overload_risk": 2,
-    }
-
-
-def _prediction(evidence_ready: bool, platforms: list[str], evidence_count: int, scores: dict[str, int]) -> dict[str, Any]:
-    confidence = "medium" if evidence_ready and evidence_count >= 2 else "low"
-    legacy = {
-        "confidence": confidence,
-        "expected_outcome": "可进入人工审稿" if evidence_ready else "需要先补证据，暂不建议发布",
+        "prediction_version": "uncalibrated-readiness-v1",
+        "calibration_status": "uncalibrated",
+        "confidence": "none",
+        "expected_outcome": (
+            "可进入人工审稿" if evidence_ready and draft_ready
+            else "草稿或证据尚未达标，不能进入发布审核"
+        ),
         "platforms": platforms,
-        "expected_views": {"low": 50, "mid": 300, "high": 1200} if evidence_ready else {"low": 0, "mid": 50, "high": 150},
-        "expected_read_completion_rate": {"low": 0.22, "mid": 0.42, "high": 0.68} if evidence_ready else {"low": 0.08, "mid": 0.18, "high": 0.3},
-        "expected_save_or_share_rate": {"low": 0.01, "mid": 0.03, "high": 0.08} if evidence_ready else {"low": 0, "mid": 0.01, "high": 0.02},
+        "readiness": {
+            "evidence_ready": evidence_ready,
+            "draft_ready": draft_ready,
+            "url_evidence_count": evidence_count,
+        },
         "basis": [
             f"evidence_with_url={evidence_count}",
+            f"draft_ready={str(draft_ready).lower()}",
             "soft_article_lane",
+            "performance_prior_missing",
             "no_publish_without_human_review",
         ],
+        "note": "没有该账号、平台和内容类型的真实历史 prior；不输出播放/阅读/互动区间。",
     }
-    return attach_prediction_dimensions(
-        legacy, kind="article_soft", scores=scores, evidence_ready=evidence_ready,
-    )
 
 
 def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -274,9 +363,34 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
     topic_terms = _topic_terms(objective)
     topic = _text(params.get("topic") or topic_terms[0], limit=80)
     title = _text(params.get("title") or _article_title(topic, objective), limit=120)
-    body = _build_body(topic=topic, objective=objective, evidence=evidence, audience=audience)
+    authored_body = _markdown(params.get("body_markdown") or params.get("body"))
+    body = authored_body or _build_scaffold(
+        topic=topic, objective=objective, evidence=evidence, audience=audience,
+    )
     cta = audience.get("cta") or "欢迎把你的情况发来，我们可以继续拆解适合你的方案"
-    variants = _build_variants(title=title, body=body, topic_terms=topic_terms, platforms=platforms, cta=cta)
+    variants = _build_variants(
+        title=title, body=body, topic_terms=topic_terms, platforms=platforms, cta=cta,
+        authored_variants=params.get("platform_variants"),
+    )
+    draft_validation = _draft_validation(
+        body=body, evidence=evidence, variants=variants, platforms=platforms,
+        authored=bool(authored_body),
+    )
+    draft_ready = bool(draft_validation["ready"])
+    if not authored_body:
+        article_status = "needs_agent_draft"
+    elif not evidence_ready:
+        article_status = "needs_evidence"
+    elif (
+        draft_validation["missing_platform_variants"]
+        or draft_validation["copied_platform_variants"]
+        or draft_validation["duplicate_platform_variant_pairs"]
+    ):
+        article_status = "needs_platform_variants"
+    elif not draft_ready:
+        article_status = "needs_draft_revision"
+    else:
+        article_status = "ready_for_review"
     hook = _text(params.get("hook") or f"{topic}真正该先看懂什么", limit=120)
     publish_packs = article_platform_publish_packs(platforms)
     visual_requirements = _visual_requirements(topic, topic_terms, evidence_ready, platforms)
@@ -286,8 +400,7 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
         "platforms": platforms,
         "account_id": params.get("account_id"),
     })
-    scores = _scores(evidence_ready)
-    prediction = _prediction(evidence_ready, platforms, len(evidence_with_url), scores)
+    prediction = _prediction(evidence_ready, draft_ready, platforms, len(evidence_with_url))
     feature_snapshot = build_content_feature_snapshot(
         kind="article_soft",
         objective=objective,
@@ -304,6 +417,8 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
             "sections": re.findall(r"^##\s+(.+)$", body, flags=re.MULTILINE),
             "body_char_count": len(body),
             "variant_count": len(variants),
+            "draft_origin": "agent_authored" if authored_body else "writing_scaffold",
+            "draft_ready": draft_ready,
             "visual_requirement_count": len(visual_requirements),
             "platform_variant_titles": {
                 platform: variant.get("title")
@@ -314,17 +429,18 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
             "publish_pack_platforms": list(publish_packs),
             "primary_platform": platforms[0] if platforms else None,
         },
-        scores=scores,
+        scores={},
         prediction=prediction,
         risks=[
             *([] if evidence_ready else ["needs_url_evidence"]),
+            *draft_validation["issues"],
             "manual_review_required",
             "visual_license_pending",
         ],
     )
 
     return {
-        "status": "ready_for_review" if evidence_ready else "needs_evidence",
+        "status": article_status,
         "title": title,
         "topic": topic,
         "hook": hook,
@@ -334,7 +450,7 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
             "production_kind": "article_soft",
             "objective": objective,
             "target_platforms": platforms,
-            "article_status": "ready_for_review" if evidence_ready else "needs_evidence",
+            "article_status": article_status,
             "evidence_status": {
                 "ready": evidence_ready,
                 "required": True,
@@ -346,25 +462,43 @@ def build_soft_article_asset_payload(params: dict[str, Any] | None = None) -> di
             "parent_draft": {
                 "title": title,
                 "body": body,
+                "draft_origin": "agent_authored" if authored_body else "writing_scaffold",
                 "tags": topic_terms,
                 "cta": cta,
             },
+            "draft_validation": draft_validation,
             "platform_variants": variants,
             "platform_publish_packs": publish_packs,
             "evidence_refs": evidence,
             "visual_requirements": visual_requirements,
             "quality_gates": [
                 {"name": "事实证据门", "status": "pass" if evidence_ready else "blocked"},
+                {"name": "Agent 父稿门", "status": "pass" if authored_body else "blocked"},
+                {
+                    "name": "证据引用门",
+                    "status": "pass" if not evidence_ready or (
+                        draft_validation["cited_evidence_refs"]
+                        and not draft_validation["uncited_platform_variants"]
+                    ) else "blocked",
+                },
+                {
+                    "name": "平台改写门",
+                    "status": "pass" if not (
+                        draft_validation["missing_platform_variants"]
+                        or draft_validation["copied_platform_variants"]
+                        or draft_validation["duplicate_platform_variant_pairs"]
+                    ) else "blocked",
+                },
                 {"name": "平台语气门", "status": "pending_human_review"},
                 {"name": "配图授权门", "status": "pending_when_visual_attached"},
                 {"name": "记忆边界门", "status": "pass", "note": "完整草稿只保存到 content_assets"},
             ],
             "production_plan": plan,
-            "pre_review_scores": scores,
+            "pre_review_scores": {},
             "pre_publish_prediction": prediction,
             "feature_snapshot": feature_snapshot,
         },
-        "scores": scores,
+        "scores": {},
         "prediction": prediction,
     }
 
@@ -374,11 +508,13 @@ def create_soft_article_asset(store: "AgentCoreStore", params: dict[str, Any] | 
     experiment_context = requested_experiment_context(store, params)
     gate = run_content_lane_gate(store, params, kind="article_soft")
     payload = build_soft_article_asset_payload(params)
+    draft_status = payload["status"]
     payload["content"] = attach_content_lane_gate(payload["content"], gate)
     payload["content"] = attach_experiment_context(payload["content"], experiment_context)
     if not gate["go"]:
         payload["status"] = gate["status"]
         payload["content"]["article_status"] = gate["status"]
+    payload["content"]["draft_status"] = draft_status
     asset = store.create_content_asset(
         title=payload["title"],
         type=payload["type"],
@@ -392,21 +528,13 @@ def create_soft_article_asset(store: "AgentCoreStore", params: dict[str, Any] | 
     experiment_link = attach_asset_to_requested_experiment(
         store, experiment_context, asset_id=asset["id"],
     )
-    review = None
-    if gate["go"]:
-        review = review_content_asset(
-            store,
-            asset_id=asset["id"],
-            scores=payload["scores"],
-            prediction=payload["prediction"],
-            task_id=str(params.get("__task_id", "")) or None,
-            notes="CPF-06 soft article production pre-publish review",
-        )
+    ready_for_review = gate["go"] and draft_status == "ready_for_review"
     return {
-        "status": gate_result_status(gate),
+        "status": "ok" if ready_for_review else "blocked",
         "asset_id": asset["id"],
         "title": asset["title"],
         "article_status": payload["status"],
+        "draft_status": draft_status,
         "preflight_id": gate["preflight_id"],
         "production_gate": gate,
         "target_platforms": payload["content"]["target_platforms"],
@@ -414,5 +542,7 @@ def create_soft_article_asset(store: "AgentCoreStore", params: dict[str, Any] | 
         "variant_count": len(payload["content"]["platform_variants"]),
         "visual_requirements": payload["content"]["visual_requirements"],
         "experiment_link": experiment_link,
-        "review": review,
+        "review": None,
+        "review_status": "human_review_required" if ready_for_review else "blocked_until_draft_ready",
+        "prediction_status": "not_created_before_human_review",
     }

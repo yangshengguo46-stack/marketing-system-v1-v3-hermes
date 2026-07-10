@@ -52,13 +52,13 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 
 | 事实 | 当前证据 |
 |---|---|
-| 主仓库 | 290 个跟踪文件；外层 Git 当前基线为 `2cb13b7` |
+| 主仓库 | 298 个跟踪文件；外层 Git 以本文档所在提交为当前产品基线 |
 | Agent 工具 | 60 个：29 L0、25 L1、5 L2、1 L3 |
 | 本机 API | `engine/marketing-os/server.py` 约 4598 行、126 个 FastAPI 路由 |
 | 状态仓库 | `engine/agent_core/store.py` 约 2969 行，任务、记忆、内容、发布、账号经营和学习集中在单类 |
-| Electron host | `electron/main.js` 约 2424 行，窗口、浏览器、渠道、文件、API 代理、发布和进程生命周期集中在单文件 |
-| Agent adapter | `engine/agent_core/hermes_adapter.py` 约 1770 行，session、任务、计划、证据、回复修复和工具事件集中在单类 |
-| 自动化 | 2026-07-10 当前工作树全量 Python：1322 passed，TypeScript `tsc --noEmit` 通过；1 个已知 Starlette/httpx 弃用警告 |
+| Electron host | `electron/main.js` 约 2427 行，窗口、浏览器、渠道、文件、API 代理、发布和进程生命周期集中在单文件 |
+| Agent adapter | `engine/agent_core/hermes_adapter.py` 约 1757 行，session、任务、计划、证据、回复修复和工具事件集中在单类 |
+| 自动化 | 2026-07-10 当前工作树全量 Python：1325 passed，TypeScript `tsc --noEmit` 通过，秘密扫描通过；1 个已知 Starlette/httpx 弃用警告 |
 | 构建 | backend 43MB、Hermes 发行源树 39MB、MCP+Chromium 407MB；Electron x64 DMG 约 352MB（未签名） |
 | Hermes fork | 外层 Git 忽略的嵌套 checkout；上游 SHA + 产品 tree + checksummed patch series 已锁定，nested repo clean，临时目录重放可得到同一 tree |
 | 打包验收 | 包内 Hermes manifest/source、MCP CLI/Chromium 均通过结构 hard gate；冻结 backend 真实创建 Agent session 并调用 L0，未调用外部模型 |
@@ -68,7 +68,7 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 - `tests/test_e2e_01_internal_chain.py` 明确不启动 Hermes，外部 MCP 使用 mock。
 - 没有真实 Electron UI E2E、干净机持续对话、真实发布、自动指标回收或跨天经营验收。
 - packaged smoke 尚未在一台没有本项目、Python、Node/Hermes 的干净 macOS 上执行，也未覆盖真实 Provider 对话。
-- 1322 个测试证明工程地基较强，不证明用户已经拿到完整产品闭环。
+- 1325 个测试证明工程地基较强，不证明用户已经拿到完整产品闭环。
 
 ## 四、已确认的结构性问题
 
@@ -78,11 +78,11 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 
 ### P0-02 工具结果与审批状态契约（已完成 automated 修复）
 
-旧实现会把业务 handler 的 `blocked/error` 再包装成顶层 `status=ok`，并把 `pending_approval` 计划步骤误写为 `failed`；审批后的 effect 回执也不会完成原步骤。2026-07-10 已修复为统一顶层 `ToolOutcome`，增加 `running → waiting_approval → completed/failed/skipped` 确定性投影、旧任务修复、精确 `approval_id/effect_id` 绑定和未知外部结果禁止自动重试。相关 83 个定向测试和 1322 个全量测试通过；真实 Electron 审批续跑仍属于 R4 人工验收。
+旧实现会把业务 handler 的 `blocked/error` 再包装成顶层 `status=ok`，并把 `pending_approval` 计划步骤误写为 `failed`；审批后的 effect 回执也不会完成原步骤。2026-07-10 已修复为统一顶层 `ToolOutcome`，增加 `running → waiting_approval → completed/failed/skipped` 确定性投影、旧任务修复、精确 `approval_id/effect_id` 绑定和未知外部结果禁止自动重试。相关 83 个定向测试和 1325 个全量测试通过；真实 Electron 审批续跑仍属于 R4 人工验收。
 
 ### P0-03 内容工厂还不是高质量内容生产系统
 
-当前软文正文、不露脸脚本和部分镜头来自确定性模板；固定播放区间和启发式常数会制造“数学上很专业”的错觉。正确边界应是：Agent 负责真正写作与创意，确定性代码负责证据包、结构校验、版本、资产、平台适配、预演门和审批。
+不露脸脚本和部分镜头仍来自确定性模板；固定播放区间和启发式常数会制造“数学上很专业”的错觉。软文路线已完成第一轮边界修复：Hermes 必须提供真实父稿和知乎/公众号改写，确定性代码只校验结构、证据引用、平台差异并保存资产；缺正文只保存 scaffold，复制父稿冒充平台改写会被阻断，未校准时不自动写评分或流量区间。真实 Provider 写稿和真人审稿仍待 R4 验收。
 
 ### P0-04 发布存在双真相源
 
@@ -174,10 +174,10 @@ UserGoal
 |---:|---|---|---|---|
 | 1 | R0-01 | Hermes fork 可复现基线 | lock + checksummed patch series；nested dirty hard fail；baseline 临时重放得到相同 product tree | automated complete（待远端 clean clone 网络验收） |
 | 2 | R0-02 | 打包 runtime 闭环 | Hermes/MCP 缺失 hard fail；冻结 backend 真实创建 session + L0；真实 Provider 对话和干净机待验 | packaged partial（结构、session、L0、MCP CLI 已通过） |
-| 3 | R1-01 | 统一 ToolOutcome | blocked/error 不再被标 completed；审批等待/回执按 approval_id 投影；未知外部结果不自动重试 | automated complete（83 定向 + 1322 全量；待 R4 真人验收） |
-| 4 | R1-02 | 图文真实生产纵切 | 自然对话 → EvidencePack → Agent 父稿 → 双平台变体 → ContentAsset → 人工审稿 | pending |
+| 3 | R1-01 | 统一 ToolOutcome | blocked/error 不再被标 completed；审批等待/回执按 approval_id 投影；未知外部结果不自动重试 | automated complete（83 定向 + 1325 全量；待 R4 真人验收） |
+| 4 | R1-02 | 图文真实生产纵切 | Agent 正文/双平台变体进入 ContentAsset；缺正文、缺引用、复制/重复变体均阻断；不自动评分 | automated partial（27 内容生产测试 + 1325 全量；真实 Provider/人工审稿待验） |
 | 5 | R2-01 | 发布单真相源 | JSON 一次迁移到 SQL；工作台、回执、指标、复盘只读 SQL | pending |
-| 6 | R2-02 | 未校准预测降级 | 无账号/平台真实 prior 时只给 readiness/风险，不输出伪流量区间 | pending |
+| 6 | R2-02 | 未校准预测降级 | 软文已只给 uncalibrated readiness；不露脸视频及其他生产路线仍需清除固定区间 | automated partial（soft article only） |
 | 7 | R3-01 | Application Core 拆分 | Tool Manifest 不再 import server；首批 content/publishing service + repository | pending |
 | 8 | R3-02 | 单一账号浏览器 profile | 登录与后台托管复用同一身份，跨重启不重复扫码 | pending |
 | 9 | R4-01 | 真人/打包验收门 | Electron UI E2E + 干净机 + 真实内容审稿 + 回执/指标闭环 | pending |

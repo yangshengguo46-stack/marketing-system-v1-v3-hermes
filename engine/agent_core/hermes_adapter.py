@@ -927,7 +927,7 @@ class HermesAgentService:
             "你可以使用 marketing_draft_memory_add 写入候选营销记忆。候选不会自动进入上下文；"
             "用户确认后，marketing_read_memory_list 才会把它作为当前用户范围内的有效记忆返回。\n\n"
             "一次性脚本、完整文案、标题草稿、封面说明等内容产物必须使用 marketing_draft_content_create；"
-            "知乎/微信公众号软文优先使用 marketing_draft_soft_article_create 生成可审稿资产；"
+            "知乎/微信公众号软文由你先完成真实父稿和逐平台改写，再使用 marketing_draft_soft_article_create 保存；"
             "不露脸素材视频优先使用 marketing_draft_faceless_video_create 生成视频草稿资产；"
             "不要把它们写入长期记忆。长期记忆只用于用户偏好、账号 DNA、长期项目上下文、复盘规律和可复用流程。\n\n"
             "边界：\n"
@@ -970,7 +970,9 @@ class HermesAgentService:
             "再按工单和预演决定读证据、写草稿、找素材或进入视频项目。"
             "工单里的 recommended_skills 是本产品允许用于该 lane 的技能白名单：preload 类型优先作为当前任务的写作/分镜/剪辑知识，"
             "on_demand 类型只在对应步骤需要时使用；不得在内容生产中随机翻找未列入白名单的 skill。\n"
-            "软文优先调用 marketing_draft_soft_article_create 保存父稿、知乎/公众号变体、证据状态、配图需求和发布前预测；"
+            "软文必须由你基于 EvidencePack 写出完整 body_markdown，并为每个目标平台写 platform_variants；"
+            "事实引用使用 [ev_01] 等证据 ID。再调用 marketing_draft_soft_article_create 保存父稿、知乎/公众号改写、证据状态和配图需求；"
+            "确定性工具不会替你写正文，也不会在缺少真实历史 prior 时生成流量区间；"
             "不露脸视频先调用 marketing_draft_faceless_video_create 保存脚本、镜头清单、素材检索包、版权凭证需求、缺口生成请求和 EDL；"
             "只有素材文件和 EDL clips 齐全后，才能调用 marketing_prepare_faceless_render 检查渲染命令；该工具也不执行渲染。\n"
             "真人/数字人高质量视频在 Volcengine/视频 provider 校准前只能交付项目画布、样片计划和预算门，"
@@ -1539,7 +1541,7 @@ class HermesAgentService:
             add("保存内容生产前总预演，判断受众、证据、平台、成本和生产可行性", "marketing_draft_content_preflight")
             add("读取已有内容资产、发布表现和可复用素材上下文", "marketing_read_content_list")
             if any(marker in text for marker in ("写软文", "软文", "公众号", "知乎", "文章", "长文")):
-                add("生成并保存知乎/公众号软文可审稿资产", "marketing_draft_soft_article_create")
+                add("基于证据创作父稿和逐平台改写，并保存为可审稿资产", "marketing_draft_soft_article_create")
             if any(marker in text for marker in ("不露脸", "素材拼接", "混剪", "找素材", "素材视频")):
                 add("生成并保存不露脸素材视频草稿资产", "marketing_draft_faceless_video_create")
                 add("检查 EDL 和素材是否已满足确定性渲染条件", "marketing_prepare_faceless_render")

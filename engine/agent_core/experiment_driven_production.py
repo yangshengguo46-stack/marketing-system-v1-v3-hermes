@@ -263,6 +263,10 @@ def build_content_request_from_experiment(store: Any, params: dict[str, Any] | N
     }
     if not request["title"]:
         request.pop("title")
+    for key in ("hook", "body_markdown", "platform_variants"):
+        value = params.get(key)
+        if value not in (None, "", [], {}):
+            request[key] = value
     return {
         "status": "ready",
         "kind": kind,

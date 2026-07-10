@@ -193,6 +193,56 @@ def _ready_experiment(store: AgentCoreStore) -> tuple[AccountLifecycleService, d
     return lifecycle, project, experiment
 
 
+def _agent_article_drafts(topic: str = "AI 工具内容") -> dict:
+    parent = f"""# {topic}：先把判断方法说清楚
+
+## 为什么现在值得重新判断
+很多人看到一个行业热词，就在乐观和悲观之间来回摇摆。真正影响普通人决策的，不是某一天的热搜，而是需求是否持续、竞争是否改变、个人能力能否形成可验证的价值。公开资料显示，这个领域仍在结构调整之中 [ev_01]。这句话只能说明变化仍在发生，不能直接推出人人都能获得结果。
+
+## 先区分事实、推断和个人选择
+事实层只保留可以回到来源核验的信息，包括公开数据、规则说明和真实案例。推断层要写清前提：如果需求持续、平台分发没有剧烈变化，那么具备具体经验的人更容易建立信任。个人选择层则要看时间、能力、风险承受力和愿不愿意长期表达。把三层混在一起，文章就会从分析滑向鼓动。
+
+## 一个可以执行的判断框架
+第一步，列出自己能连续讲二十次的真实问题，不写空泛赛道名。第二步，找三个正向样本和两个反向样本，观察它们解决了谁的问题，而不是只看粉丝量。第三步，用一周做三种表达实验，每次只改变标题、案例或结构中的一个变量。第四步，记录阅读、停留、收藏和评论里真正出现的问题，再决定是否加码。
+
+## 什么情况下不建议马上投入
+如果素材主要来自转述、无法说明证据来源，先停止发布；如果只能模仿爆款语气，却没有自己的经历或验证过程，也不适合急着扩量。短期热度可以带来曝光，但长期信任来自持续兑现同一种价值承诺。一个稳妥的起点，是先完成最小实验，再让真实反馈修正判断。
+
+## 下一步怎么做
+今天先写下一条你亲自经历过、能够提供细节的问题，再为它补一条可回链资料 [ev_01]。发布后不要急着用播放量给自己定性，先看读者是否理解、是否追问、是否愿意保存。这个过程不会承诺快速收益，但能让下一次创作比这一次更有依据。
+"""
+    zhihu = f"""# {topic}到底值不值得做？
+
+知乎读者更需要的是论证，而不是一句结论。先给边界：公开资料只能证明行业仍在变化 [ev_01]，不能证明每个新账号都有机会。判断时可以拆成三问：用户的问题是否反复出现，你是否拥有可验证的经验，这种经验能否连续表达。
+
+## 为什么只看热度会误判
+热度描述的是注意力，不等于信任，更不等于转化。一个话题很热，可能意味着竞争已经拥挤；一个话题不在热榜，也可能存在稳定而明确的需求。因此要同时查看正向样本、失败样本和评论中的具体问题。
+
+## 我的建议
+先做一周小实验：三篇内容只改变一个变量，保留证据链接，记录收藏、追问和反对意见。若读者开始提出更具体的问题，再继续深化；若反馈始终停留在泛泛点赞，就回到受众和承诺重新定位。这个结论是方法建议，不是收益保证。
+"""
+    wechat = f"""# 别急着追风口，先做一次小验证
+
+打开后台看到某个话题突然变热，最容易做的决定是立刻跟上，最难的决定是先问一句：这和我的读者有什么关系？公开资料可以帮助我们确认变化存在 [ev_01]，但真正决定内容价值的，是读者能不能把信息用于自己的选择。
+
+## 今天只做四步
+先写清你服务的是谁；再列出他此刻最具体的困惑；然后找一条能够回链的证据；最后用自己的经历解释这条证据意味着什么。不要堆术语，也不要许诺结果。
+
+## 把反馈留给下一篇
+发布后记录读者收藏了哪一段、追问了什么、在哪句话离开。数据不是成绩单，而是下一次创作的输入。只要每一轮都保留来源、假设和结果，账号就会逐步形成自己的判断能力。你也可以把当前方向和可投入时间告诉我，我们继续把第一次实验缩小到今天能完成的程度。
+"""
+    assert len(parent.replace("\n", "")) >= 600
+    assert len(zhihu.replace("\n", "")) >= 300
+    assert len(wechat.replace("\n", "")) >= 300
+    return {
+        "body_markdown": parent,
+        "platform_variants": {
+            "zhihu": {"title": f"{topic}到底值不值得做？", "body_markdown": zhihu},
+            "wechat_official": {"title": "别急着追风口，先做一次小验证", "body_markdown": wechat},
+        },
+    }
+
+
 def test_content_production_tool_is_read_only_and_registered():
     tool = tool_by_name("marketing_plan_content_production")
     assert tool is not None
@@ -202,7 +252,8 @@ def test_content_production_tool_is_read_only_and_registered():
     article_tool = tool_by_name("marketing_draft_soft_article_create")
     assert article_tool is not None
     assert article_tool.level == CapabilityLevel.REVERSIBLE_WRITE
-    assert "发布前预测" in article_tool.description
+    assert "不替 Agent 套模板写正文" in article_tool.description
+    assert "body_markdown" in article_tool.schema["properties"]
 
     faceless_tool = tool_by_name("marketing_draft_faceless_video_create")
     assert faceless_tool is not None
@@ -228,6 +279,7 @@ def test_content_production_tool_is_read_only_and_registered():
 def test_soft_article_builder_creates_reviewable_asset_with_variants(tmp_path):
     store = AgentCoreStore(tmp_path / "soft-article.db")
     result = create_soft_article_asset(store, {
+        **_agent_article_drafts("新能源汽车行业"),
         "objective": "写一篇新能源汽车行业适合公众号和知乎的软文",
         "platforms": ["zhihu", "wechat_official"],
         "account_id": "acct_ev",
@@ -251,7 +303,9 @@ def test_soft_article_builder_creates_reviewable_asset_with_variants(tmp_path):
     assert result["production_gate"]["go"] is True
     assert result["preflight_id"].startswith("preflight_")
     assert result["variant_count"] == 2
-    assert result["review"]["prediction"]["prediction"]["confidence"] == "low"
+    assert result["review"] is None
+    assert result["review_status"] == "human_review_required"
+    assert result["prediction_status"] == "not_created_before_human_review"
 
     asset = store.get_content_asset(result["asset_id"])
     assert asset["type"] == "script"
@@ -262,6 +316,12 @@ def test_soft_article_builder_creates_reviewable_asset_with_variants(tmp_path):
     assert asset["content"]["quality_gates"][-1]["name"] == "总预演门"
     assert asset["content"]["quality_gates"][-1]["status"] == "pass"
     assert asset["content"]["evidence_status"]["ready"] is True
+    assert asset["content"]["parent_draft"]["draft_origin"] == "agent_authored"
+    assert asset["content"]["draft_validation"]["ready"] is True
+    assert asset["content"]["draft_validation"]["cited_evidence_refs"] == ["ev_01"]
+    assert asset["content"]["draft_validation"]["copied_platform_variants"] == []
+    assert asset["content"]["draft_validation"]["uncited_platform_variants"] == []
+    assert asset["content"]["draft_validation"]["duplicate_platform_variant_pairs"] == []
     assert "zhihu" in asset["content"]["platform_variants"]
     assert "wechat_official" in asset["content"]["platform_variants"]
     wechat_variant = asset["content"]["platform_variants"]["wechat_official"]
@@ -293,22 +353,13 @@ def test_soft_article_builder_creates_reviewable_asset_with_variants(tmp_path):
     assert feature_snapshot["evidence"]["with_url"] == 1
     assert feature_snapshot["structure"]["variant_count"] == 2
     assert feature_snapshot["structure"]["visual_requirement_count"] == len(asset["content"]["visual_requirements"])
-    assert feature_snapshot["prediction_ref"]["prediction_version"] == "prepublish-prediction-v2.0"
-    assert set(feature_snapshot["prediction_ref"]["dimension_names"]) == {
-        "attention", "retention", "trust", "action", "account_fit", "risk",
-    }
-    assert store.list_content_scores()[0]["asset_id"] == asset["id"]
-    prediction = store.list_predictions()[0]
-    assert prediction["asset_id"] == asset["id"]
-    stored_prediction = prediction["prediction"]
-    assert stored_prediction["prediction_version"] == "prepublish-prediction-v2.0"
-    assert stored_prediction["expected_views"]["mid"] == 300
-    assert stored_prediction["expected_save_or_share_rate"]["mid"] == 0.03
-    assert set(stored_prediction["prediction_dimensions"]["dimensions"]) == {
-        "attention", "retention", "trust", "action", "account_fit", "risk",
-    }
-    assert stored_prediction["prediction_dimensions"]["dimensions"]["trust"]["expected_metric"] == "save_or_share_rate"
-    assert stored_prediction["prediction_dimensions"]["dimensions"]["risk"]["lower_is_better"] is True
+    assert feature_snapshot["prediction_ref"]["prediction_version"] == "uncalibrated-readiness-v1"
+    assert feature_snapshot["prediction_ref"]["dimension_names"] == []
+    assert asset["content"]["pre_review_scores"] == {}
+    assert asset["content"]["pre_publish_prediction"]["confidence"] == "none"
+    assert "expected_views" not in asset["content"]["pre_publish_prediction"]
+    assert store.list_content_scores() == []
+    assert store.list_predictions() == []
 
 
 def test_soft_article_asset_can_bind_back_to_account_experiment(tmp_path):
@@ -316,6 +367,7 @@ def test_soft_article_asset_can_bind_back_to_account_experiment(tmp_path):
     lifecycle, project, experiment = _ready_experiment(store)
 
     result = create_soft_article_asset(store, {
+        **_agent_article_drafts(),
         "__user_id": "u",
         "account_id": "acct_exp",
         "project_id": project["id"],
@@ -350,6 +402,7 @@ def test_experiment_driven_production_creates_soft_article_from_lifecycle_contex
     lifecycle, project, experiment = _ready_experiment(store)
 
     built = build_content_request_from_experiment(store, {
+        **_agent_article_drafts(),
         "__user_id": "u",
         "account_id": "acct_exp",
         "project_id": project["id"],
@@ -364,6 +417,7 @@ def test_experiment_driven_production_creates_soft_article_from_lifecycle_contex
     assert built["production_request"]["experiment_id"] == experiment["id"]
 
     result = create_content_from_experiment(store, {
+        **_agent_article_drafts(),
         "__user_id": "u",
         "account_id": "acct_exp",
         "project_id": project["id"],
@@ -389,6 +443,7 @@ def test_experiment_driven_production_creates_soft_article_from_lifecycle_contex
 
 def test_soft_article_builder_blocks_publish_when_evidence_has_no_url():
     payload = build_soft_article_asset_payload({
+        **_agent_article_drafts("AI 教育"),
         "objective": "写一篇 AI 教育软文",
         "evidence": [{"title": "只有一句传闻", "summary": "没有 URL"}],
     })
@@ -399,9 +454,73 @@ def test_soft_article_builder_blocks_publish_when_evidence_has_no_url():
     assert payload["content"]["visual_requirements"][0]["status"] == "blocked_until_evidence_ready"
 
 
+def test_soft_article_create_saves_scaffold_but_blocks_when_agent_body_is_missing(tmp_path):
+    store = AgentCoreStore(tmp_path / "soft-article-missing-body.db")
+    result = create_soft_article_asset(store, {
+        "objective": "写一篇 AI 教育软文",
+        "platforms": ["zhihu", "wechat_official"],
+        "audience_context": {
+            "target_reader": "准备了解 AI 教育的家长",
+            "promise": "给出可验证的判断方法",
+        },
+        "evidence": [{"title": "AI 教育公开资料", "url": "https://example.com/ai-edu"}],
+    })
+
+    assert result["status"] == "blocked"
+    assert result["draft_status"] == "needs_agent_draft"
+    assert result["production_gate"]["go"] is True
+    asset = store.get_content_asset(result["asset_id"])
+    assert asset["content"]["parent_draft"]["draft_origin"] == "writing_scaffold"
+    assert asset["content"]["draft_validation"]["issues"][0] == "agent_parent_draft_missing"
+    assert "[用一个可验证的矛盾" in asset["content"]["parent_draft"]["body"]
+    assert store.list_content_scores() == []
+    assert store.list_predictions() == []
+
+
+def test_soft_article_builder_blocks_platform_copy_instead_of_calling_it_rewrite():
+    drafts = _agent_article_drafts("AI 教育")
+    parent = drafts["body_markdown"]
+    payload = build_soft_article_asset_payload({
+        "objective": "写一篇 AI 教育软文",
+        "body_markdown": parent,
+        "platforms": ["zhihu", "wechat_official"],
+        "platform_variants": {
+            "zhihu": {"body_markdown": parent},
+            "wechat_official": {"body_markdown": parent},
+        },
+        "audience_context": {"target_reader": "普通家长", "promise": "解释判断方法"},
+        "evidence": [{"title": "AI 教育公开资料", "url": "https://example.com/ai-edu"}],
+    })
+
+    assert payload["status"] == "needs_platform_variants"
+    assert payload["content"]["draft_validation"]["copied_platform_variants"] == [
+        "zhihu", "wechat_official",
+    ]
+    assert "platform_variants_copy_parent" in payload["content"]["draft_validation"]["issues"]
+    assert payload["content"]["quality_gates"][3]["status"] == "blocked"
+
+
+def test_soft_article_builder_requires_evidence_lineage_in_each_platform_rewrite():
+    drafts = _agent_article_drafts("AI 教育")
+    drafts["platform_variants"]["zhihu"]["body_markdown"] = (
+        drafts["platform_variants"]["zhihu"]["body_markdown"].replace(" [ev_01]", "")
+    )
+    payload = build_soft_article_asset_payload({
+        "objective": "写一篇 AI 教育软文",
+        **drafts,
+        "audience_context": {"target_reader": "普通家长", "promise": "解释判断方法"},
+        "evidence": [{"title": "AI 教育公开资料", "url": "https://example.com/ai-edu"}],
+    })
+
+    assert payload["status"] == "needs_draft_revision"
+    assert payload["content"]["draft_validation"]["uncited_platform_variants"] == ["zhihu"]
+    assert payload["content"]["quality_gates"][2]["status"] == "blocked"
+
+
 def test_soft_article_create_blocks_before_review_when_preflight_missing_context(tmp_path):
     store = AgentCoreStore(tmp_path / "soft-article-blocked.db")
     result = create_soft_article_asset(store, {
+        **_agent_article_drafts("AI 教育"),
         "objective": "写一篇 AI 教育软文",
         "platforms": ["zhihu"],
         "evidence": [{"title": "AI 教育公开资料", "url": "https://example.com/ai-edu"}],

@@ -430,13 +430,19 @@ DRAFT_TOOLS: list[ToolSpec] = [
              _server_action("create_content_preflight"),
              ),
     ToolSpec("marketing_draft_soft_article_create", CapabilityLevel.REVERSIBLE_WRITE,
-             "根据软文生产工单生成并保存知乎/微信公众号长文资产：包含父稿、平台变体、证据状态、配图需求和发布前预测；"
-             "会先运行统一总预演 PreflightDecision，不通过时只保存阻断草稿、不写发布前预测；"
-             "不联网、不调用付费 API、不伪造证据，证据不足会标记 needs_evidence",
+             "保存由当前 Agent 真正写出的知乎/微信公众号长文资产：body_markdown 是父稿，platform_variants 是逐平台改写；"
+             "确定性代码只验证证据引用、结构、版本、平台格式和预演门，不替 Agent 套模板写正文；"
+             "缺父稿、缺平台改写或缺 URL/引用时只保存阻断 scaffold，不自动评分、不写伪流量预测",
              _schema({
                  "objective": {"type": "string", "description": "用户原始软文目标或选题"},
                  "topic": {"type": "string", "description": "可选主题"},
                  "title": {"type": "string", "description": "可选标题"},
+                 "hook": {"type": "string", "description": "可选开头钩子"},
+                 "body_markdown": {
+                     "type": "string",
+                     "minLength": 600,
+                     "description": "Agent 创作的完整 Markdown 父稿；事实引用使用 [ev_01] 等 evidence id",
+                 },
                  "platforms": {
                      "type": "array",
                      "items": {"type": "string", "enum": ["zhihu", "wechat_official"]},
@@ -450,6 +456,21 @@ DRAFT_TOOLS: list[ToolSpec] = [
                      "description": "已验证证据列表，至少应包含 title/summary/url；缺 URL 会被标记为待补证据",
                      "items": {"type": "object"},
                  },
+                 "platform_variants": {
+                     "type": "object",
+                     "description": "按 zhihu/wechat_official 键提供 Agent 改写后的 title/body_markdown/summary/tags/cta；不能只复制父稿",
+                     "additionalProperties": {
+                         "type": "object",
+                         "properties": {
+                             "title": {"type": "string"},
+                             "body_markdown": {"type": "string", "minLength": 300},
+                             "summary": {"type": "string"},
+                             "tags": {"type": "array", "items": {"type": "string"}},
+                             "cta": {"type": "string"},
+                         },
+                         "required": ["body_markdown"],
+                     },
+                 },
              }),
              _server_action("create_soft_article_asset"),
              ),
@@ -461,6 +482,7 @@ DRAFT_TOOLS: list[ToolSpec] = [
                  "objective": {"type": "string", "description": "用户原始视频目标或选题"},
                  "topic": {"type": "string", "description": "可选主题"},
                  "title": {"type": "string", "description": "可选标题"},
+                 "hook": {"type": "string", "description": "可选开头钩子"},
                  "platforms": {
                      "type": "array",
                      "items": {"type": "string", "enum": ["douyin", "wechat_channels", "bilibili"]},
@@ -497,6 +519,27 @@ DRAFT_TOOLS: list[ToolSpec] = [
                  "objective": {"type": "string", "description": "可选；覆盖由实验假设生成的生产目标"},
                  "topic": {"type": "string", "description": "可选主题"},
                  "title": {"type": "string", "description": "可选标题"},
+                 "hook": {"type": "string", "description": "可选开头钩子"},
+                 "body_markdown": {
+                     "type": "string",
+                     "minLength": 600,
+                     "description": "软文路线中由 Agent 写出的完整 Markdown 父稿",
+                 },
+                 "platform_variants": {
+                     "type": "object",
+                     "description": "软文路线中按目标平台提供的 Agent 改写稿",
+                     "additionalProperties": {
+                         "type": "object",
+                         "properties": {
+                             "title": {"type": "string"},
+                             "body_markdown": {"type": "string", "minLength": 300},
+                             "summary": {"type": "string"},
+                             "tags": {"type": "array", "items": {"type": "string"}},
+                             "cta": {"type": "string"},
+                         },
+                         "required": ["body_markdown"],
+                     },
+                 },
                  "audience_context": {"type": "object", "description": "可选；覆盖账号生命周期推导出的受众上下文"},
                  "evidence": {
                      "type": "array",
