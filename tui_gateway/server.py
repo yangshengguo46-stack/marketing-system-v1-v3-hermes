@@ -12869,7 +12869,11 @@ def _(rid, params: dict) -> dict:
 @method("marketing.product.status")
 def _(rid, _params: dict) -> dict:
     """Expose the product-fork identity through the native Hermes gateway."""
-    from marketing_os.product import PRODUCT_ID, PRODUCT_NAME
+    from marketing_os.product import (
+        PRODUCT_ECOSYSTEM_COMPATIBILITY,
+        PRODUCT_ID,
+        PRODUCT_NAME,
+    )
 
     return _ok(
         rid,
@@ -12880,6 +12884,7 @@ def _(rid, _params: dict) -> dict:
             "agent_owner": "native",
             "desktop_owner": "apps/desktop",
             "surfaces": ["desktop", "messaging", "cron"],
+            "ecosystem": PRODUCT_ECOSYSTEM_COMPATIBILITY,
         },
     )
 

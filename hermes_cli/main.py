@@ -9066,6 +9066,19 @@ def cmd_update(args):
         managed_error,
     )
 
+    # The packaged product deliberately keeps Hermes' MCP/skills/plugins
+    # ecosystem, but a raw upstream pull can delete Marketing OS domain and UI
+    # behavior. Core integration is therefore release-gated; independent
+    # ecosystem updates keep using their native commands.
+    try:
+        from marketing_os.product import PRODUCT_CORE_UPDATE_MESSAGE, is_product_runtime
+
+        if is_product_runtime():
+            print(PRODUCT_CORE_UPDATE_MESSAGE)
+            return
+    except Exception:
+        pass
+
     if is_managed():
         managed_error("update Hermes Agent")
         return

@@ -5,14 +5,49 @@ and messaging sessions must all construct the same product agent instead of
 wrapping a generic Hermes process with a second personality layer.
 """
 
+from __future__ import annotations
+
+import os
+from typing import Mapping
+
 PRODUCT_ID = "marketing-os"
 PRODUCT_NAME = "Marketing OS"
+
+PRODUCT_ECOSYSTEM_COMPATIBILITY = {
+    "mcp": {
+        "compatibility": "hermes-native",
+        "install_and_discovery": "preserved",
+        "update_channel": "mcp-server-or-product-release",
+    },
+    "skills": {
+        "compatibility": "hermes-native",
+        "hub_install_update": "preserved",
+        "user_skills": "preserved",
+    },
+    "plugins": {
+        "compatibility": "hermes-native",
+        "install_update": "preserved",
+    },
+    "core": {
+        "upstream": "NousResearch/hermes-agent",
+        "update_channel": "marketing-os-product-release",
+        "raw_upstream_apply": "blocked-in-product-runtime",
+    },
+}
+
+PRODUCT_CORE_UPDATE_MESSAGE = (
+    "Marketing OS is a product fork of Hermes Agent. Core Hermes updates must be "
+    "integrated and regression-tested in a Marketing OS release; applying raw "
+    "upstream in place could remove product behavior. MCP servers, Hub skills, "
+    "user skills and plugins keep their native independent install/update paths."
+)
 
 PRODUCT_ARCHITECTURE_PRINCIPLES = (
     "One native agent owns conversation, tasks, memory, skills and marketing workflows.",
     "Both inherited Hermes code and earlier Marketing OS modules may be decomposed or rewritten.",
     "Preserve product philosophy and verified user outcomes, not historical directories or adapters.",
     "Account modeling, evidence, creation, publishing receipts, metrics and learning form one loop.",
+    "Preserve Hermes MCP, skill and plugin contracts so ecosystem capabilities remain independently maintainable.",
 )
 
 PRODUCT_AGENT_IDENTITY = (
@@ -38,6 +73,10 @@ PRODUCT_RUNTIME_GUIDANCE = (
     "Inherited Hermes code and earlier Marketing OS modules may both be split, "
     "rewritten and recomposed around capability boundaries; preserve the product's "
     "full-cycle operating philosophy rather than any historical directory layout. "
+    "Keep Hermes-native MCP servers, Hub and user skills, plugins, tool middleware "
+    "and their independent update paths compatible; core upstream changes are "
+    "integrated through tested Marketing OS product releases rather than applied "
+    "raw over the running fork. "
     "Before giving account-specific positioning, content or growth advice, use the "
     "native Marketing OS account tools to read the selected account's verified "
     "context; treat every missing field as an evidence gap instead of inventing it. "
@@ -50,3 +89,32 @@ PRODUCT_RUNTIME_GUIDANCE = (
     "creative suggestions. External effects, paid providers, publication and "
     "sensitive account actions require the product's approval and receipt rules."
 )
+
+
+def is_product_runtime(env: Mapping[str, str] | None = None) -> bool:
+    """True when the fork is running as the packaged Marketing OS product."""
+
+    values = os.environ if env is None else env
+    return any(
+        str(values.get(key) or "").strip()
+        for key in (
+            "MARKETING_OS_USER_DATA",
+            "MARKETING_OS_CONFIG_DIR",
+            "MARKETING_OS_AGENT_DB",
+        )
+    )
+
+
+def product_core_update_status(current_version: str) -> dict[str, object]:
+    """Return the non-destructive core-update contract for product surfaces."""
+
+    return {
+        "install_method": "marketing-os-product-fork",
+        "current_version": current_version,
+        "behind": None,
+        "update_available": False,
+        "can_apply": False,
+        "update_command": "Update Marketing OS",
+        "message": PRODUCT_CORE_UPDATE_MESSAGE,
+        "ecosystem": PRODUCT_ECOSYSTEM_COMPATIBILITY,
+    }

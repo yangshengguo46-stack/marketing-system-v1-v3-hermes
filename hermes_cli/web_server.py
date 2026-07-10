@@ -1429,6 +1429,22 @@ def _dashboard_local_update_managed_externally() -> bool:
     return True
 
 
+def _marketing_os_product_update_payload() -> Dict[str, Any] | None:
+    """Describe the safe core-update path when running inside Marketing OS."""
+
+    try:
+        from marketing_os.product import (
+            is_product_runtime,
+            product_core_update_status,
+        )
+
+        if not is_product_runtime():
+            return None
+        return product_core_update_status(__version__)
+    except Exception:
+        return None
+
+
 def _managed_files_policy(request: Request, *, create_root: bool = True) -> ManagedFilesPolicy:
     raw_forced_root = os.environ.get(_MANAGED_FILES_ROOT_ENV, "").strip()
     if raw_forced_root:
@@ -2882,6 +2898,17 @@ async def gateway_drain(request: Request):
 @app.post("/api/hermes/update")
 async def update_hermes():
     """Kick off ``hermes update`` in the background."""
+    if product_update := _marketing_os_product_update_payload():
+        message = str(product_update["message"])
+        _record_completed_action("hermes-update", message, exit_code=1)
+        return {
+            "ok": False,
+            "pid": None,
+            "name": "hermes-update",
+            "error": "marketing_os_product_update_required",
+            "message": message,
+            "update_command": product_update["update_command"],
+        }
     if _dashboard_local_update_managed_externally():
         message = (
             "Hermes updates are managed outside this dashboard in "
@@ -2997,6 +3024,9 @@ async def check_hermes_update(force: bool = False):
                  desktop's remote update overlay renders this as "what's
                  changed". Additive: existing consumers ignore it.
     """
+    if product_update := _marketing_os_product_update_payload():
+        return product_update
+
     if _dashboard_local_update_managed_externally():
         return {
             "install_method": "managed-runtime",

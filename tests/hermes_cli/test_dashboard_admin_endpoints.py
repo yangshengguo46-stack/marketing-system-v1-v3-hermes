@@ -813,6 +813,30 @@ class TestUpdateCheckEndpoint:
         assert body["behind"] is None
         assert "managed outside this dashboard" in body["message"]
 
+    def test_marketing_os_product_runtime_requires_a_vetted_product_release(
+        self, monkeypatch, tmp_path
+    ):
+        import hermes_cli.web_server as ws
+
+        monkeypatch.setenv("MARKETING_OS_USER_DATA", str(tmp_path / "marketing-os"))
+        monkeypatch.setattr(
+            ws,
+            "detect_install_method",
+            lambda *a, **k: pytest.fail(
+                "product runtime must not probe or apply raw Hermes updates"
+            ),
+        )
+
+        check = self.client.get("/api/hermes/update/check").json()
+        apply = self.client.post("/api/hermes/update").json()
+
+        assert check["install_method"] == "marketing-os-product-fork"
+        assert check["can_apply"] is False
+        assert check["ecosystem"]["mcp"]["install_and_discovery"] == "preserved"
+        assert check["ecosystem"]["skills"]["hub_install_update"] == "preserved"
+        assert apply["ok"] is False
+        assert apply["error"] == "marketing_os_product_update_required"
+
     def test_check_failure_is_soft(self, monkeypatch):
         import hermes_cli.web_server as ws
         import hermes_cli.banner as banner
