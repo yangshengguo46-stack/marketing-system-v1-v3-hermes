@@ -90,7 +90,7 @@ def test_capability_policy_fails_closed():
 def test_tool_manifest_all_have_valid_levels():
     from agent_core.tool_manifest import all_tools
     tools = all_tools()
-    assert len(tools) == 59
+    assert len(tools) == 60
     for tool in tools:
         assert tool.level in CapabilityLevel
         assert tool.name.startswith("marketing_")
@@ -103,7 +103,7 @@ def test_only_implemented_tools_are_registered():
     read_count = sum(1 for t in tools if t.level is CapabilityLevel.READ_ONLY)
     controlled_count = sum(1 for t in tools if t.level is CapabilityLevel.CONTROLLED_RESOURCE)
     effect_count = sum(1 for t in tools if t.level is CapabilityLevel.EXTERNAL_EFFECT)
-    assert read_count == 28
+    assert read_count == 29
     assert controlled_count == 5
     assert effect_count == 1
     assert sum(1 for t in tools if t.level is CapabilityLevel.REVERSIBLE_WRITE) == 25
@@ -370,6 +370,7 @@ def test_initial_plan_supports_pre_account_monetization_exploration():
         None,
     )
     tools = [step.get("tool_name") for step in plan]
+    assert "marketing_read_account_onboarding" in tools
     assert "marketing_read_account_lifecycle" in tools
     assert "marketing_read_trends" not in tools
     assert plan[-1]["kind"] == "synthesis"
@@ -474,7 +475,10 @@ def test_product_executor_prefetches_prospect_lifecycle_for_positioning(tmp_path
 
     evidence = svc._prefetch_required_evidence(task["id"])
 
-    assert set(evidence) == {"marketing_read_account_lifecycle"}
+    assert set(evidence) == {"marketing_read_account_onboarding", "marketing_read_account_lifecycle"}
+    assert captured_params["marketing_read_account_onboarding"]["__user_id"] == "ordinary-user"
+    assert captured_params["marketing_read_account_onboarding"]["__task_id"] == task["id"]
+    assert captured_params["marketing_read_account_onboarding"]["objective"] == task["objective"]
     assert captured_params["marketing_read_account_lifecycle"]["__user_id"] == "ordinary-user"
     assert captured_params["marketing_read_account_lifecycle"]["__task_id"] == task["id"]
     assert "account_id" not in captured_params["marketing_read_account_lifecycle"]
@@ -813,7 +817,7 @@ def test_effect_receipt_idempotent(tmp_path):
 def test_controlled_tools_count(tmp_path):
     from agent_core.tool_manifest import all_tools
     tools = all_tools()
-    assert len(tools) == 59
+    assert len(tools) == 60
     controlled = [t for t in tools if t.level is CapabilityLevel.CONTROLLED_RESOURCE]
     assert len(controlled) == 5
     assert any(t.name == "marketing_publish_query" for t in controlled)

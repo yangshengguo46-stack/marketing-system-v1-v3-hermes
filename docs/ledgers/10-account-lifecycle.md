@@ -34,6 +34,17 @@
 | LIFE-12 | 端到端与升级 | 旧 YAML/benchmark/stats 迁移、干净机和升级机验收 | 🟡 automated/code closure（2026-07-04）：真实用户库 v11→v17，迁移前备份存在，`integrity_check=ok`，6 张生命周期主表齐全；全量 1107 项、TypeScript、Electron syntax、diff check、PyInstaller、Vite、MCP runtime、macOS zip/DMG 完整构建通过。自动恢复安全门覆盖用户暂停、待审批、未决 effect 和防重复。未完成仅剩真人 smoke：空账号起号对话、杀进程续跑、双账号隔离、断网降级；签名/公证属于交付，不阻塞主架构代码收口 | 🟡 |
 | LIFE-13 | 待绑定项目接入真实账号 | prospect 项目整体迁移；冲突保护、幂等重试、Agent/桌面自然入口 | ✅ code/build verified（2026-07-04）：生命周期主表、对标和实验关联内容在单事务内迁移；目标账号已有 active 项目时拒绝覆盖；以 project_id 支持安全重试。新增 Agent 工具、REST API、Electron allowlist 和桌面“继续沿用”提示。定向 154 项、全量 1117 项、TypeScript、Electron syntax、完整桌面构建通过；真人点击→Agent 执行→切换账号待验收 | 🟡 |
 | LIFE-14 | 对标自动发现 | 真实作者证据→候选排序→样本入库→用户选择；拒绝不复活 | 🟡 B站主链 code/live/build verified（2026-07-04）：公共关键词搜索保留作者与作品 provenance，真实 `AI 教育` smoke 得到 20 条作品/5 个候选；候选可存样本但不可形成定位观察，重复发现幂等，rejected 候选被抑制。新增 Agent/API 能力。定向 160 项、全量 1123 项和完整构建通过。抖音作者发现仍缺稳定来源，不使用创作者热点标题或验证码 DOM 冒充完成 |
+| LIFE-15 | Account DNA Onboarding | 新用户主动建模、30 分钟可见成果、前三天激活节奏；作为生命周期入口，不做独立页面 | ✅ code verified（2026-07-10）：新增 `engine/agent_core/account_onboarding.py`，输出 Account DNA v0、首轮引导语、最多 2 个关键问题、30 分钟执行计划、72 小时留存计划、建议受众草案 payload 和工具链；只读不写库，不要求登录，不把假设冒充真实粉丝。新增 `marketing_read_account_onboarding` Agent 工具与 `/api/plugins/marketing-os/account-onboarding` API；Hermes 初始计划在起号/定位/普通人探索任务中先读 onboarding，再读 lifecycle。定向测试覆盖未登录小白、已有业务目标、读取生命周期无副作用、tool/API 契约一致；真人首轮体验待验收 | 🟡 |
+
+## 2026-07-10 产品哲学补丁：首次半小时决定留存
+
+本轮把“如果我是这个智能体，我会怎么做”固化为底层协议，而不是 UI 引导文案：
+
+1. 第一反应不是让用户选功能、登录平台或填问卷，而是先承诺一个 30 分钟可见成果。
+2. 首轮只问 1~2 个影响决策的问题，围绕目标、供给资产、受众种子和边界，不把用户推进长表单。
+3. 用户没有账号时使用 prospect 待绑定项目；登录账号后再经确认迁移，避免把“账号渠道”当成起号前置条件。
+4. Account DNA v0 永远标记为 provisional，只能作为假设进入草案/实验/对标，不能冒充真实粉丝画像。
+5. 前三天节奏是产品核心体验：Day 0 让用户感到被理解，Day 1 补证据，Day 2 形成小闭环，Day 3 展示系统在变聪明。
 
 ## LIFE-01 固定领取提示
 

@@ -3311,6 +3311,16 @@ def account_lifecycle_status(params: dict | None = None) -> dict:
     return lifecycle.read_account_status(user_id=user_id, account_id=account_id)
 
 
+def account_onboarding_plan(params: dict | None = None) -> dict:
+    from agent_core import build_account_onboarding_plan
+
+    params = dict(params or {})
+    user_id, account_id = _lifecycle_identity(params)
+    params["user_id"] = user_id
+    params["_resolved_account_id"] = account_id
+    return build_account_onboarding_plan(params, store=_get_agent_service().get_store())
+
+
 def bind_prospect_strategy(params: dict) -> dict:
     """Attach the current user's pre-login strategy to a connected account."""
     from agent_core import AccountLifecycleService
@@ -3811,6 +3821,11 @@ def get_account_lifecycle(account_id: str, user_id: str = "default"):
 @app.get("/api/plugins/marketing-os/lifecycle/prospect")
 def get_prospect_lifecycle(user_id: str = "default"):
     return account_lifecycle_status({"user_id": user_id})
+
+
+@app.post("/api/plugins/marketing-os/account-onboarding")
+def post_account_onboarding(body: dict):
+    return account_onboarding_plan(body)
 
 
 @app.post("/api/plugins/marketing-os/accounts/{account_id}/lifecycle/bind-prospect")

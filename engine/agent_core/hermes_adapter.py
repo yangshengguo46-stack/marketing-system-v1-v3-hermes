@@ -49,6 +49,7 @@ class HermesAgentService:
         (["内容生产", "生产内容", "写软文", "公众号软文", "知乎软文", "不露脸视频", "素材拼接", "数字人视频", "ai人视频", "AI人视频"], "marketing_plan_content_production"),
         (["绑定起号项目", "绑定定位项目", "迁移起号项目", "把定位绑定"], "marketing_draft_bind_prospect_strategy"),
         (["发现对标", "寻找对标", "找对标", "推荐对标账号"], "marketing_draft_benchmark_discover"),
+        (["新用户", "普通人", "不知道怎么用", "不知道做什么", "没账号", "账号方向", "起号方向"], "marketing_read_account_onboarding"),
         (["目标受众", "受众假设", "账号定位", "起号", "账号生命周期"], "marketing_read_account_lifecycle"),
         (["对标研究", "对标账号", "同行账号", "竞品账号"], "marketing_read_benchmark_research"),
         (["当前定位", "定位版本", "账号dna", "账号 DNA"], "marketing_read_account_positioning"),
@@ -853,6 +854,7 @@ class HermesAgentService:
             "- 起号和账号经营遵循：经营目标→目标受众假设→对标证据→定位→内容实验→真实受众→复盘修订。"
             "目标受众假设、真实粉丝画像和评论推断是三类不同信息，不得混写。\n"
             "- 用户没有登录账号、没有产业或不知道如何变现时，仍可开始起号规划。此时使用待绑定策略项目，"
+            "先调用 marketing_read_account_onboarding 生成 30 分钟可见成果、前三天激活节奏和 Account DNA v0，"
             "不要要求先登录，也不要假装已有粉丝数据。通过自然对话逐步了解：愿意长期谈什么、真实经历/技能、"
             "可投入时间、是否愿意出镜、可接触的人群、价值观和收入期待。每轮优先问 1~2 个最关键问题，"
             "不要一次抛出问卷；信息不足时先探索，不急着创建正式定位。\n"
@@ -860,7 +862,7 @@ class HermesAgentService:
             "再调用 marketing_draft_bind_prospect_strategy。目标账号已有项目时停止并让用户选择，禁止静默合并。\n"
             "- 变现不是用户必须预先知道的答案。先从能力×兴趣×可服务人群形成 2~3 个方向假设，说明各自的"
             "内容难度、验证周期和潜在变现路径，再由用户选择要验证的方向。\n"
-            "- 用户要求起号、定位或受众分析时，先读取 marketing_read_account_lifecycle；"
+            "- 用户要求起号、定位或受众分析时，先读取 marketing_read_account_onboarding 和 marketing_read_account_lifecycle；"
             "没有已确认假设时可创建草案，但必须展示给用户确认后才能进入对标和定位阶段。\n"
             "- 对标账号必须说明选择理由；添加账号不等于完成研究。只有带 source_ref、captured_at、"
             "source_kind 和 confidence 的观察才能成为定位证据，推断必须明确标注。\n"
@@ -989,6 +991,7 @@ class HermesAgentService:
         required = {
             "marketing_read_context", "marketing_read_trends",
             "marketing_read_intelligence_report", "marketing_read_account_lifecycle",
+            "marketing_read_account_onboarding",
         }
         evidence: dict[str, Any] = {}
 
@@ -1000,9 +1003,12 @@ class HermesAgentService:
             if spec is None:
                 continue
             arguments: dict[str, Any] = {}
-            if name == "marketing_read_account_lifecycle":
+            if name in {"marketing_read_account_lifecycle", "marketing_read_account_onboarding"}:
                 arguments["__user_id"] = task.get("user_id") or "default"
                 arguments["__task_id"] = task_id
+            if name == "marketing_read_account_onboarding":
+                arguments["objective"] = task.get("objective") or ""
+                arguments["message"] = task.get("objective") or ""
             if task.get("account_id"):
                 arguments["account_id"] = task["account_id"]
             if name == "marketing_read_trends":
@@ -1116,6 +1122,28 @@ class HermesAgentService:
                 f"- 最近巡检状态：{report.get('status', 'unknown')}；"
                 f"错误/降级记录数：{len(errors)}。"
             )
+        onboarding = evidence.get("marketing_read_account_onboarding")
+        if isinstance(onboarding, dict):
+            dna = onboarding.get("account_dna_v0") if isinstance(onboarding.get("account_dna_v0"), dict) else {}
+            questions = onboarding.get("next_questions") if isinstance(onboarding.get("next_questions"), list) else []
+            lines.append(
+                f"- Account DNA Onboarding：stage={onboarding.get('inferred_stage') or 'unknown'}；"
+                f"mode={onboarding.get('mode') or 'unknown'}；"
+                f"next_action={onboarding.get('recommended_next_action') or 'unknown'}。"
+            )
+            if onboarding.get("opening_message"):
+                lines.append("- 首轮引导语：" + str(onboarding["opening_message"]))
+            if dna:
+                lines.append("- Account DNA v0 摘要：" + json.dumps({
+                    key: dna.get(key)
+                    for key in (
+                        "status", "business_goal", "industry_or_theme",
+                        "target_audience_hypothesis", "preferred_platforms", "confidence",
+                    )
+                    if dna.get(key) not in (None, "", [])
+                }, ensure_ascii=False, default=str))
+            if questions:
+                lines.append("- 下一轮只问这些问题：" + json.dumps(questions[:2], ensure_ascii=False, default=str))
         lifecycle = evidence.get("marketing_read_account_lifecycle")
         if isinstance(lifecycle, dict):
             lines.append(
@@ -1394,6 +1422,7 @@ class HermesAgentService:
             "变现", "账号方向", "起号方向", "做账号", "个人ip", "个人 ip", "赛道",
         ))
         if lifecycle_request:
+            add("生成 Account DNA Onboarding：用户建模、30 分钟可见成果和前三天激活节奏", "marketing_read_account_onboarding")
             add("读取账号经营生命周期、有效受众假设和数据缺口", "marketing_read_account_lifecycle")
             if "对标" in text or "定位" in text:
                 add("读取已选对标账号及其可追溯观察证据", "marketing_read_benchmark_research")

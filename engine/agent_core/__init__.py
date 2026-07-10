@@ -39,11 +39,13 @@ from .learning_governance import (
 )
 from .memory_classification import KnowledgeClassification, classify_memory, find_conflicting_classifications
 from .preflight_decision import PREFLIGHT_DECISION_VERSION, build_asset_preflight_decision, build_preflight_decision
+from .account_onboarding import ACCOUNT_ONBOARDING_VERSION, build_account_onboarding_plan
 from .account_lifecycle import AccountLifecycleService, LifecycleStatus
 
 __all__ = [
     "ACCOUNT_DNA_FIELDS",
     "ACCOUNT_DNA_LABELS",
+    "ACCOUNT_ONBOARDING_VERSION",
     "AccountLifecycleService",
     "AccountScopedMCPManager",
     "AgentCoreStore",
@@ -86,6 +88,7 @@ __all__ = [
     "decompose_content",
     "build_asset_influence_score",
     "build_asset_preflight_decision",
+    "build_account_onboarding_plan",
     "build_content_production_plan",
     "build_content_request_from_experiment",
     "build_content_production_preflight",

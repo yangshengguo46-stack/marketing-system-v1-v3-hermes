@@ -28,7 +28,7 @@ from agent_core.policy import CapabilityPolicy
 # If this snapshot changes, the test must be updated deliberately —
 # accidental tool additions or removals are regressions.
 EXPECTED_TOOL_NAMES = frozenset({
-    # L0 read-only (28)
+    # L0 read-only (29)
     "marketing_read_context",
     "marketing_research_web_search",
     "marketing_read_trends",
@@ -51,6 +51,7 @@ EXPECTED_TOOL_NAMES = frozenset({
     "marketing_read_influence_score",
     "marketing_read_preflight_decision",
     "marketing_read_account_lifecycle",
+    "marketing_read_account_onboarding",
     "marketing_read_benchmark_research",
     "marketing_read_account_positioning",
     "marketing_read_audience_snapshots",
@@ -105,7 +106,7 @@ def test_manifest_snapshot_tool_names():
 
 def test_manifest_snapshot_tool_count():
     """RUN-13: total tool count must match snapshot."""
-    assert len(all_tools()) == 59
+    assert len(all_tools()) == 60
 
 
 def test_manifest_snapshot_level_distribution():
@@ -114,7 +115,7 @@ def test_manifest_snapshot_level_distribution():
     by_level = {}
     for t in tools:
         by_level.setdefault(t.level, []).append(t.name)
-    assert len(by_level[CapabilityLevel.READ_ONLY]) == 28
+    assert len(by_level[CapabilityLevel.READ_ONLY]) == 29
     assert len(by_level[CapabilityLevel.REVERSIBLE_WRITE]) == 25
     assert len(by_level[CapabilityLevel.CONTROLLED_RESOURCE]) == 5
     assert len(by_level[CapabilityLevel.EXTERNAL_EFFECT]) == 1
@@ -124,7 +125,7 @@ def test_manifest_snapshot_level_distribution():
 def test_manifest_snapshot_gateway_names_by_level():
     """RUN-13: gateway level grouping matches manifest."""
     groups = get_tool_names_by_level()
-    assert len(groups["L0_read_only"]) == 28
+    assert len(groups["L0_read_only"]) == 29
     assert len(groups["L1_reversible_write"]) == 25
     assert len(groups["L2_controlled_resource"]) == 5
     assert len(groups["L3_external_effect"]) == 1
