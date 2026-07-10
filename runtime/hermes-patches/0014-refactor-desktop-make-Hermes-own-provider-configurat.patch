@@ -1,0 +1,368 @@
+From 643f9cf084ecd808dc34da661d25b5e3adba56ed Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 23:52:56 +0800
+Subject: [PATCH] refactor(desktop): make Hermes own provider configuration
+
+---
+ .../electron/legacy-provider-migration.cjs    | 132 ++++++++++++++++++
+ .../legacy-provider-migration.test.cjs        |  85 +++++++++++
+ apps/desktop/electron/main.cjs                |  63 +++------
+ .../electron/windows-child-process.test.cjs   |   2 +-
+ apps/desktop/package.json                     |   2 +-
+ 5 files changed, 239 insertions(+), 45 deletions(-)
+ create mode 100644 apps/desktop/electron/legacy-provider-migration.cjs
+ create mode 100644 apps/desktop/electron/legacy-provider-migration.test.cjs
+
+diff --git a/apps/desktop/electron/legacy-provider-migration.cjs b/apps/desktop/electron/legacy-provider-migration.cjs
+new file mode 100644
+index 000000000..c89266784
+--- /dev/null
++++ b/apps/desktop/electron/legacy-provider-migration.cjs
+@@ -0,0 +1,132 @@
++const fs = require('node:fs')
++const path = require('node:path')
++
++// This list describes the retired Marketing OS secret file, not a second
++// provider registry. New credentials are owned by Hermes' provider catalog and
++// /api/env flow. Keep this bounded so a tampered legacy file cannot inject
++// process-control variables into the Hermes runtime.
++const LEGACY_PROVIDER_ENV = new Set([
++  'ANTHROPIC_API_KEY',
++  'DEEPSEEK_API_KEY',
++  'DEEPSEEK_BASE_URL',
++  'DEEPSEEK_MODEL',
++  'FIRECRAWL_API_KEY',
++  'FIRECRAWL_API_URL',
++  'NOUS_API_KEY',
++  'OPENAI_API_KEY',
++  'OPENAI_BASE_URL',
++  'OPENAI_MODEL',
++  'OPENROUTER_API_KEY',
++  'PEXELS_API_KEY',
++  'TAVILY_API_KEY',
++  'XAI_API_KEY'
++])
++
++function parseLegacyProviderEnvironment(content) {
++  const result = {}
++  for (const rawLine of String(content || '').split(/\r?\n/)) {
++    const line = rawLine.trim().replace(/^export\s+/, '')
++    if (!line || line.startsWith('#')) continue
++    const separator = line.indexOf('=')
++    if (separator <= 0) continue
++    const key = line.slice(0, separator).trim()
++    if (!LEGACY_PROVIDER_ENV.has(key)) continue
++    let value = line.slice(separator + 1).trim()
++    if (
++      (value.startsWith('"') && value.endsWith('"')) ||
++      (value.startsWith("'") && value.endsWith("'"))
++    ) {
++      value = value.slice(1, -1)
++    }
++    if (!value || /[\r\n\0]/.test(value)) continue
++    result[key] = value
++  }
++  return result
++}
++
++function existingEnvKeys(content) {
++  const keys = new Set()
++  for (const rawLine of String(content || '').split(/\r?\n/)) {
++    const match = rawLine.trim().match(/^([A-Z][A-Z0-9_]*)\s*=/)
++    if (match) keys.add(match[1])
++  }
++  return keys
++}
++
++function quoteEnvValue(value) {
++  if (!/[\s#'"\\]/.test(value)) return value
++  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
++}
++
++function migrateLegacyProviderEnvironment({
++  userDataPath,
++  hermesHome,
++  safeStorage,
++  fsImpl = fs
++} = {}) {
++  if (!userDataPath || !hermesHome) {
++    return { migrated: false, reason: 'missing-path' }
++  }
++  if (!safeStorage?.isEncryptionAvailable?.()) {
++    return { migrated: false, reason: 'secure-storage-unavailable' }
++  }
++
++  const legacyPath = path.join(path.resolve(userDataPath), 'secrets', 'providers.env.encrypted')
++  if (!fsImpl.existsSync(legacyPath)) {
++    return { migrated: false, reason: 'no-legacy-store' }
++  }
++
++  let values
++  try {
++    values = parseLegacyProviderEnvironment(
++      safeStorage.decryptString(fsImpl.readFileSync(legacyPath))
++    )
++  } catch {
++    return { migrated: false, reason: 'legacy-decrypt-failed' }
++  }
++
++  const targetDir = path.resolve(hermesHome)
++  const targetPath = path.join(targetDir, '.env')
++  let existing = ''
++  try {
++    existing = fsImpl.readFileSync(targetPath, 'utf8')
++  } catch {
++    // A missing target is the normal first-run case.
++  }
++
++  const present = existingEnvKeys(existing)
++  const imported = Object.entries(values).filter(([key]) => !present.has(key))
++
++  try {
++    fsImpl.mkdirSync(targetDir, { recursive: true, mode: 0o700 })
++    if (imported.length) {
++      const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing
++      const appended = imported.map(([key, value]) => `${key}=${quoteEnvValue(value)}`).join('\n')
++      const tempPath = `${targetPath}.migration-${process.pid}.tmp`
++      fsImpl.writeFileSync(tempPath, `${prefix}${appended}\n`, { mode: 0o600 })
++      fsImpl.renameSync(tempPath, targetPath)
++      try {
++        fsImpl.chmodSync(targetPath, 0o600)
++      } catch {
++        // Some filesystems do not expose POSIX modes; atomic write still won.
++      }
++    }
++    // Successful import (or an already-complete Hermes .env) ends the
++    // compatibility period. The retired encrypted store is not a live owner.
++    fsImpl.unlinkSync(legacyPath)
++  } catch {
++    return { migrated: false, reason: 'target-write-failed' }
++  }
++
++  return {
++    migrated: true,
++    importedKeys: imported.map(([key]) => key),
++    skippedExistingKeys: Object.keys(values).filter(key => present.has(key))
++  }
++}
++
++module.exports = {
++  LEGACY_PROVIDER_ENV,
++  migrateLegacyProviderEnvironment,
++  parseLegacyProviderEnvironment
++}
+diff --git a/apps/desktop/electron/legacy-provider-migration.test.cjs b/apps/desktop/electron/legacy-provider-migration.test.cjs
+new file mode 100644
+index 000000000..0a31c306d
+--- /dev/null
++++ b/apps/desktop/electron/legacy-provider-migration.test.cjs
+@@ -0,0 +1,85 @@
++const assert = require('node:assert/strict')
++const test = require('node:test')
++
++const {
++  migrateLegacyProviderEnvironment,
++  parseLegacyProviderEnvironment
++} = require('./legacy-provider-migration.cjs')
++
++test('legacy parser accepts provider values but rejects process-control injection', () => {
++  const parsed = parseLegacyProviderEnvironment(`
++    DEEPSEEK_API_KEY=secret-key
++    DEEPSEEK_BASE_URL=https://api.deepseek.com
++    export DEEPSEEK_MODEL="deepseek-chat"
++    HERMES_HOME=/tmp/attacker
++    PYTHONPATH=/tmp/attacker
++    PATH=/tmp/attacker
++  `)
++
++  assert.deepEqual(parsed, {
++    DEEPSEEK_API_KEY: 'secret-key',
++    DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
++    DEEPSEEK_MODEL: 'deepseek-chat'
++  })
++})
++
++test('legacy credentials migrate once into Hermes native env without overwriting it', () => {
++  const files = new Map([
++    ['/product/secrets/providers.env.encrypted', Buffer.from('encrypted-bytes')],
++    ['/product/agent-runtime/.env', 'DEEPSEEK_MODEL=existing-model\n']
++  ])
++  const removed = []
++
++  const result = migrateLegacyProviderEnvironment({
++    userDataPath: '/product',
++    hermesHome: '/product/agent-runtime',
++    safeStorage: {
++      isEncryptionAvailable: () => true,
++      decryptString: encrypted => {
++        assert.equal(String(encrypted), 'encrypted-bytes')
++        return 'DEEPSEEK_API_KEY=decrypted-key\nDEEPSEEK_MODEL=legacy-model\n'
++      }
++    },
++    fsImpl: {
++      existsSync: target => files.has(target),
++      readFileSync: (target, encoding) => {
++        const value = files.get(target)
++        if (value === undefined) throw new Error('ENOENT')
++        return encoding ? String(value) : value
++      },
++      mkdirSync: () => undefined,
++      writeFileSync: (target, value) => files.set(target, String(value)),
++      renameSync: (source, target) => {
++        files.set(target, files.get(source))
++        files.delete(source)
++      },
++      chmodSync: () => undefined,
++      unlinkSync: target => {
++        removed.push(target)
++        files.delete(target)
++      }
++    }
++  })
++
++  assert.equal(result.migrated, true)
++  assert.deepEqual(result.importedKeys, ['DEEPSEEK_API_KEY'])
++  assert.deepEqual(result.skippedExistingKeys, ['DEEPSEEK_MODEL'])
++  assert.equal(
++    files.get('/product/agent-runtime/.env'),
++    'DEEPSEEK_MODEL=existing-model\nDEEPSEEK_API_KEY=decrypted-key\n'
++  )
++  assert.deepEqual(removed, ['/product/secrets/providers.env.encrypted'])
++})
++
++test('migration leaves the legacy store untouched when secure storage is unavailable', () => {
++  const result = migrateLegacyProviderEnvironment({
++    userDataPath: '/product',
++    hermesHome: '/product/agent-runtime',
++    safeStorage: { isEncryptionAvailable: () => false }
++  })
++
++  assert.deepEqual(result, {
++    migrated: false,
++    reason: 'secure-storage-unavailable'
++  })
++})
+diff --git a/apps/desktop/electron/main.cjs b/apps/desktop/electron/main.cjs
+index db7fc253c..9b817ee62 100644
+--- a/apps/desktop/electron/main.cjs
++++ b/apps/desktop/electron/main.cjs
+@@ -42,7 +42,7 @@ const { waitForDashboardPortAnnouncement } = require('./backend-ready.cjs')
+ const { serializeJsonBody, setJsonRequestHeaders } = require('./oauth-net-request.cjs')
+ const { fetchMarketplaceThemes, searchMarketplaceThemes } = require('./vscode-marketplace.cjs')
+ const { buildDesktopBackendEnv, normalizeHermesHomeRoot } = require('./backend-env.cjs')
+-const { readWindowsUserEnvVar } = require('./windows-user-env.cjs')
++const { migrateLegacyProviderEnvironment } = require('./legacy-provider-migration.cjs')
+ const { readWslWindowsClipboardImage } = require('./wsl-clipboard-image.cjs')
+ const { nativeOverlayWidth: computeNativeOverlayWidth } = require('./titlebar-overlay-width.cjs')
+ const { readDirForIpc } = require('./fs-read-dir.cjs')
+@@ -289,43 +289,11 @@ if (INSTALL_STAMP) {
+   )
+ }
+ 
+-// HERMES_HOME — the user-facing root for everything Hermes-related. Mirrors
+-// scripts/install.ps1's $HermesHome and scripts/install.sh's $HERMES_HOME.
+-//
+-// Defaults:
+-//   Windows: %LOCALAPPDATA%\hermes (matches install.ps1)
+-//   macOS / Linux: ~/.hermes (matches install.sh)
+-//
+-// Special case for Windows: if the user has a legacy ~/.hermes directory
+-// (e.g., from a prior pip install or a manual setup) AND no
+-// %LOCALAPPDATA%\hermes yet, prefer the legacy path so we don't orphan their
+-// existing config / sessions / .env. New installs go to %LOCALAPPDATA%.
+-//
+-// HERMES_DESKTOP_USER_DATA_DIR (used by test:desktop:fresh) puts the sandbox
+-// HERMES_HOME beneath the throwaway userData dir so a fresh-install run never
+-// touches the user's real ~/.hermes / %LOCALAPPDATA%\hermes.
++// Marketing OS owns one app-scoped Hermes home. It must not depend on, mutate,
++// or silently split state with a user's separately installed ~/.hermes.
+ function resolveHermesHome() {
+   if (process.env.HERMES_HOME) return normalizeHermesHomeRoot(process.env.HERMES_HOME)
+-  if (USER_DATA_OVERRIDE) return path.join(path.resolve(USER_DATA_OVERRIDE), 'hermes-home')
+-  if (IS_WINDOWS) {
+-    // A GUI app launched from Explorer inherits the environment block captured
+-    // at login, so a HERMES_HOME set via `setx` AFTER login is invisible in
+-    // process.env even though the CLI (a fresh shell) sees it. Without this the
+-    // backend silently falls back to %LOCALAPPDATA%\hermes and reports "No
+-    // inference provider configured" despite a valid configured home (#45471).
+-    // Consult the live User-scoped registry value before the default below.
+-    const fromRegistry = readWindowsUserEnvVar('HERMES_HOME')
+-    if (fromRegistry) return normalizeHermesHomeRoot(fromRegistry)
+-  }
+-  if (IS_WINDOWS && process.env.LOCALAPPDATA) {
+-    const localappdata = path.join(process.env.LOCALAPPDATA, 'hermes')
+-    const legacy = path.join(app.getPath('home'), '.hermes')
+-    // Migrate transparently to LOCALAPPDATA, but honour an existing legacy
+-    // ~/.hermes setup (no LOCALAPPDATA install yet) so users don't lose state.
+-    if (!directoryExists(localappdata) && directoryExists(legacy)) return legacy
+-    return localappdata
+-  }
+-  return path.join(app.getPath('home'), '.hermes')
++  return path.join(path.resolve(USER_DATA_OVERRIDE || app.getPath('userData')), 'agent-runtime')
+ }
+ 
+ const HERMES_HOME = resolveHermesHome()
+@@ -5497,13 +5465,9 @@ async function startHermes() {
+         env: {
+           ...process.env,
+           // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
+-          // resolves to the SAME location our resolveHermesHome() picked. Without
+-          // this pin, Python falls back to ~/.hermes on every platform — fine on
+-          // mac/linux (where our default matches), but on Windows our default is
+-          // %LOCALAPPDATA%\hermes, which differs from C:\Users\<u>\.hermes.
+-          // Mismatch would split config / sessions / .env / logs across two
+-          // directories. install.ps1 sets HERMES_HOME via setx; the desktop
+-          // can't reliably do that, so we set it inline for every spawn.
++          // resolves to this product's app-scoped agent-runtime directory. The
++          // native Hermes settings API, sessions, profiles and logs therefore
++          // share one owner instead of falling back to a separate ~/.hermes.
+           HERMES_HOME,
+           ...backend.env,
+           TERMINAL_CWD: hermesCwd,
+@@ -7511,6 +7475,19 @@ app.on('open-url', (event, url) => {
+ })
+ 
+ app.whenReady().then(() => {
++  const providerMigration = migrateLegacyProviderEnvironment({
++    userDataPath: app.getPath('userData'),
++    hermesHome: HERMES_HOME,
++    safeStorage
++  })
++  if (providerMigration.migrated) {
++    rememberLog(
++      `[migration] moved ${providerMigration.importedKeys.length} legacy provider setting(s) ` +
++        'into Hermes native configuration'
++    )
++  } else if (!['no-legacy-store', 'secure-storage-unavailable'].includes(providerMigration.reason)) {
++    rememberLog(`[migration] legacy provider settings not migrated: ${providerMigration.reason}`)
++  }
+   if (IS_MAC) {
+     Menu.setApplicationMenu(buildApplicationMenu())
+   } else {
+diff --git a/apps/desktop/electron/windows-child-process.test.cjs b/apps/desktop/electron/windows-child-process.test.cjs
+index 0a91272fa..f823bd4c2 100644
+--- a/apps/desktop/electron/windows-child-process.test.cjs
++++ b/apps/desktop/electron/windows-child-process.test.cjs
+@@ -84,5 +84,5 @@ test('bootstrap PowerShell runner hides Windows console children', () => {
+   const source = readElectronFile('bootstrap-runner.cjs')
+ 
+   assert.match(source, /function hiddenWindowsChildOptions\(options = \{\}\)/)
+-  requireHiddenChildOptions(source, 'spawn(ps, fullArgs')
++  requireHiddenChildOptions(source, /spawn\(\s*ps,\s*fullArgs/)
+ })
+diff --git a/apps/desktop/package.json b/apps/desktop/package.json
+index 467cbb8c5..5389903c4 100644
+--- a/apps/desktop/package.json
++++ b/apps/desktop/package.json
+@@ -37,7 +37,7 @@
+     "test:desktop:nsis": "node scripts/test-desktop.mjs nsis",
+     "test:desktop:existing": "node scripts/test-desktop.mjs existing",
+     "test:desktop:fresh": "node scripts/test-desktop.mjs fresh",
+-    "test:desktop:platforms": "node --test electron/bootstrap-platform.test.cjs electron/hardening.test.cjs electron/backend-env.test.cjs electron/backend-probes.test.cjs electron/backend-ready.test.cjs electron/bootstrap-runner.test.cjs electron/connection-config.test.cjs electron/dashboard-token.test.cjs electron/gateway-ws-probe.test.cjs electron/oauth-net-request.test.cjs electron/desktop-uninstall.test.cjs electron/session-windows.test.cjs electron/link-title-window.test.cjs electron/workspace-cwd.test.cjs electron/fs-read-dir.test.cjs electron/git-root.test.cjs electron/git-worktree-ops.test.cjs electron/windows-child-process.test.cjs electron/update-remote.test.cjs electron/update-count.test.cjs electron/update-rebuild.test.cjs electron/update-marker.test.cjs electron/update-relaunch.test.cjs electron/windows-user-env.test.cjs electron/wsl-clipboard-image.test.cjs electron/titlebar-overlay-width.test.cjs electron/window-state.test.cjs electron/windows-hermes-resolution.test.cjs",
++    "test:desktop:platforms": "node --test electron/bootstrap-platform.test.cjs electron/hardening.test.cjs electron/backend-env.test.cjs electron/legacy-provider-migration.test.cjs electron/backend-probes.test.cjs electron/backend-ready.test.cjs electron/bootstrap-runner.test.cjs electron/connection-config.test.cjs electron/dashboard-token.test.cjs electron/gateway-ws-probe.test.cjs electron/oauth-net-request.test.cjs electron/desktop-uninstall.test.cjs electron/session-windows.test.cjs electron/link-title-window.test.cjs electron/workspace-cwd.test.cjs electron/fs-read-dir.test.cjs electron/git-root.test.cjs electron/git-worktree-ops.test.cjs electron/windows-child-process.test.cjs electron/update-remote.test.cjs electron/update-count.test.cjs electron/update-rebuild.test.cjs electron/update-marker.test.cjs electron/update-relaunch.test.cjs electron/windows-user-env.test.cjs electron/wsl-clipboard-image.test.cjs electron/titlebar-overlay-width.test.cjs electron/window-state.test.cjs electron/windows-hermes-resolution.test.cjs",
+     "typecheck": "tsc -p . --noEmit",
+     "lint": "eslint src/ electron/",
+     "lint:fix": "eslint src/ electron/ --fix",
+-- 
+2.54.0
+

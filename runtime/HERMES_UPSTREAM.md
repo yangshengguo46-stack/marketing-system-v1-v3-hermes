@@ -5,23 +5,23 @@
 - Baseline date: 2026-06-28
 - Local checkout: `runtime/hermes-agent`
 - Adaptation branch: `codex/marketing-os-runtime`
-- Product tree: `39acd04e2b7d84424ac381c0f77c647127744e24`
+- Product tree: `e932537cdf9a5c7f978da760ac6734db82e8c1cf`
 - Reproducible lock: `runtime/hermes-runtime.lock.json`
 - Patch series: `runtime/hermes-patches/*.patch`
 
-Product domain truth stays in `engine/agent_core`, but the Hermes fork is an actively maintained part of this product, not a frozen dependency. Patch it whenever the fork-level change materially improves continuity, initiative, context use, recovery or interaction quality and cannot be implemented more cleanly at the product boundary.
+Hermes fork 是产品唯一 Agent/desktop 主干，不是冻结依赖。重构首先审计 Hermes 原生能力：重叠且更成熟的直接复用；有缺口的在原 owner 内增强或重写；只有确实不存在的营销领域能力才新增。禁止为回避修改 Hermes 而另造 adapter、bridge、sidecar、第二套设置或第二份状态 owner。
 
 ## 2026-06-29 decision（历史）
 
 当时不需要 fork patch；上游 `AIAgent` callbacks、`SessionDB`、`interrupt()` 和 tool registry 足够完成最初 P0。该判断只描述当时，不再代表当前 fork 状态。
 
-## 2026-07-02 decision (user-authorized)
+## 2026-07-02 decision (historical)
 
 Direct modification of the Hermes fork is now permitted. Rules:
 
-- Choose the layer that produces the cleanest user experience and the least duplicated state. Adapter/gateway is preferred for product semantics; patch the fork for runtime behavior such as planning, context, interruption, recovery, initiative, tool-loop UX or event streaming.
+- 当时仍倾向把产品语义放在 adapter/gateway。该限制已被 2026-07-10 的 Hermes-native 重建基线覆盖。
 - Every patch must be minimal, carry a regression test, and be listed in the patch registry below.
-- Business truth stays in `engine/agent_core`; Hermes may understand product-neutral lifecycle and interaction contracts, but does not own account facts or marketing records.
+- 账号、内容、证据、发布等领域事实逐段迁入 Hermes 源码树中的原生 domain；每段完成后删除旧 owner，不长期双写。
 - Upstream upgrades follow RUN-16: replay patches on the new baseline, run contract tests, keep rollback possible.
 
 ### Patch registry
@@ -31,6 +31,8 @@ Direct modification of the Hermes fork is now permitted. Rules:
 | # | Date | Patch | Invariant | Regression test |
 |---|---|---|---|---|
 | 1 | 2026-07-10 | `0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch` | 飞书/微信只是同一个 Marketing OS Agent 的 communication surface；入站消息转入本机 Agent session/task，不再落回 Hermes 默认 persona；Feishu SOCKS 依赖随 extra 声明 | `tests/test_mobile_bridge.py`、`tests/test_channels.py` |
+| 13 | 2026-07-10 | `0013-feat-web-add-native-extraction-fallback.patch` | Hermes 原生 `web_extract` 在没有收费 Provider Key 时仍能安全读取公开 HTML；已配置的成熟 Provider 继续优先 | `tests/test_marketing_os_native_web_extract.py` 及 Web tool 回归 |
+| 14 | 2026-07-10 | `0014-refactor-desktop-make-Hermes-own-provider-configurat.patch` | Provider Catalog、模型设置和 `/api/env` 保持 Hermes 唯一 owner；旧 Marketing 密钥仓只迁移一次，随后退出 | `legacy-provider-migration.test.cjs`、desktop platform、Hermes env/provider 回归 |
 
 ## Reproduction contract
 

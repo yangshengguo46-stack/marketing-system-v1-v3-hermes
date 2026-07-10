@@ -8,15 +8,16 @@
 
 ## 执行纪律
 
-1. 一次只执行 00 总控中的一个 R-ID；完成后附代码路径、自动化证据、开发机证据、打包证据和真人证据。
-2. 不以新增字段、页面、Fake、单测数量或本地占位执行器冒充产品完成。
-3. 先核验开源方案；采用前记录版本/commit、许可证、数据流、秘密、失败回退和卸载路径。
-4. 不恢复已删除的旧插件、外部 Chrome/CDP、后端 Cookie、CLI 单轮 Agent 或运行时自动安装。
-5. （2026-07-10 用户纠偏）Hermes 源码是产品主干，Marketing OS 是其原生营销增强；UI、Agent loop、SessionDB、tools、gateway、cron、memory、skills、plugins 等源码均可深度改造。禁止为保持上游纯净而另造 adapter/bridge/sidecar 主链；改动仍须附回归测试、数据迁移和安全审计。
-6. Hermes 上游代码与 Marketing OS 既有代码都只是可拆解的材料，不是不可变边界。迁移按能力域重新组合，不按旧目录照搬；保留的是全周期经营、证据驱动、长期学习和真实回执闭环的设计哲学。
-7. 结构重塑必须服务同一纵向闭环；禁止另造第二套 Agent、数据库、浏览器身份或发布真相源。
-8. 统一使用 `designed / code / automated / dev-runtime / packaged / human-loop` 六级证据。
-9. 保留 Hermes 原生 MCP、Skill、Plugin 和工具中间件合同；生态组件可独立更新，Hermes 核心上游变更必须经 Marketing OS 版本集成与回归后发布，禁止终端用户原地覆盖产品 fork。
+1. 每个 R-ID 先审计 Hermes 原生能力：重叠且更成熟的直接复用；存在缺口的原地增强；确实不存在的才新增。禁止平行复制 owner。完整决策顺序见 `docs/architecture/REBUILD_BASELINE.md` 第零章。
+2. 一次只执行 00 总控中的一个 R-ID；完成后附代码路径、自动化证据、开发机证据、打包证据和真人证据。
+3. 不以新增字段、页面、Fake、单测数量或本地占位执行器冒充产品完成。
+4. 先核验开源方案；采用前记录版本/commit、许可证、数据流、秘密、失败回退和卸载路径。
+5. 不恢复已删除的旧插件、外部 Chrome/CDP、后端 Cookie、CLI 单轮 Agent 或运行时自动安装。
+6. （2026-07-10 用户纠偏）Hermes 源码是产品主干，Marketing OS 是其原生营销增强；UI、Agent loop、SessionDB、tools、gateway、cron、memory、skills、plugins 等源码均可深度改造。禁止为保持上游纯净而另造 adapter/bridge/sidecar 主链；改动仍须附回归测试、数据迁移和安全审计。
+7. Hermes 上游代码与 Marketing OS 既有代码都只是可拆解的材料，不是不可变边界。迁移按能力域重新组合，不按旧目录照搬；保留的是全周期经营、证据驱动、长期学习和真实回执闭环的设计哲学。
+8. 结构重塑必须服务同一纵向闭环；禁止另造第二套 Agent、数据库、浏览器身份或发布真相源。
+9. 统一使用 `designed / code / automated / dev-runtime / packaged / human-loop` 六级证据。
+10. 保留 Hermes 原生 MCP、Skill、Plugin 和工具中间件合同；生态组件可独立更新，Hermes 核心上游变更必须经 Marketing OS 版本集成与回归后发布，禁止终端用户原地覆盖产品 fork。
 
 ## 当前入口与历史台账
 

@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/NousResearch/hermes-agent.git",
   "baseline_commit": "4488fe134b1de4359f3a4f1f8368576413e6e268",
-  "product_tree": "4721cfa175b8c4758ab2f8f962760de36af846a8",
+  "product_tree": "e932537cdf9a5c7f978da760ac6734db82e8c1cf",
   "patches": [
     {
       "file": "hermes-patches/0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch",
@@ -50,6 +50,14 @@
     {
       "file": "hermes-patches/0012-feat-marketing-os-validate-native-article-bundles.patch",
       "sha256": "1a91e5b145a56c0d3ea2c4f7f83d3cea25a87d3ef1bd6de0ed1add56dcf6b2cf"
+    },
+    {
+      "file": "hermes-patches/0013-feat-web-add-native-extraction-fallback.patch",
+      "sha256": "6eb82360ab2de3335110489581c5145a153e8dca771e60d04ef8fb2d16d5289c"
+    },
+    {
+      "file": "hermes-patches/0014-refactor-desktop-make-Hermes-own-provider-configurat.patch",
+      "sha256": "053a35d0f96041e937a3b2c537b62a7dcbf251fc7d7e9a0805785beadb85e668"
     }
   ]
 }
