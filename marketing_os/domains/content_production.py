@@ -44,7 +44,7 @@ SHARED_CAPABILITIES = {
     },
     "evidence_research": {
         "purpose": "使用可回链来源核对事实、热点和案例，禁止模型补造数据。",
-        "native_tools": ["web_search", "web_extract"],
+        "native_tools": ["web_search", "web_extract", "marketing_read_evidence_pack"],
         "maturity": "ready",
     },
     "copywriting": {
@@ -160,8 +160,8 @@ class ContentProductionPlanner:
             },
             {
                 "id": "evidence",
-                "status": "references_supplied_needs_verification" if evidence else "needs_research",
-                "rule": "事实性主张必须绑定来源；创意表达不能冒充事实。",
+                "status": "verified_evidence_ready" if evidence else "needs_research",
+                "rule": "事实性主张必须绑定当前账号由 Hermes 真实采集的 EvidencePack ID；创意表达不能冒充事实。",
             },
             {
                 "id": "rights",
@@ -179,7 +179,7 @@ class ContentProductionPlanner:
         elif not evidence:
             next_action = "检索并核对支撑本选题的证据，再开始写父稿"
         else:
-            next_action = "核对证据引用后生成父稿，再保存为可恢复草稿"
+            next_action = "使用已固化的 EvidencePack 生成父稿，再保存为可恢复草稿"
 
         return {
             "status": "planned",

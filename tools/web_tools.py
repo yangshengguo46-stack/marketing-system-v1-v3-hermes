@@ -37,6 +37,7 @@ Usage:
 """
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -1138,12 +1139,25 @@ async def web_extract_tool(
                 content_length = len(result.get('raw_content', ''))
                 logger.info("%s (%d characters)", url, content_length)
         
-        # Trim output to minimal fields per entry: title, content, error
+        # Trim output to reviewable fields while preserving a deterministic
+        # fingerprint of the actual extracted source text. Long pages may be
+        # summarized by an auxiliary model, so hashing only ``content`` would
+        # fingerprint the summary rather than the fetched page. Product
+        # runtimes use this source hash for EvidencePack provenance.
         trimmed_results = [
             {
                 "url": r.get("url", ""),
                 "title": r.get("title", ""),
                 "content": r.get("content", ""),
+                "content_origin": (
+                    "llm_summary"
+                    if r.get("raw_content")
+                    and r.get("raw_content") != r.get("content")
+                    else "extracted_source"
+                ),
+                "source_content_sha256": hashlib.sha256(
+                    str(r.get("raw_content") or r.get("content") or "").encode("utf-8")
+                ).hexdigest(),
                 "error": r.get("error"),
                 **({  "blocked_by_policy": r["blocked_by_policy"]} if "blocked_by_policy" in r else {}),
             }
@@ -1338,7 +1352,7 @@ WEB_SEARCH_SCHEMA = {
 
 WEB_EXTRACT_SCHEMA = {
     "name": "web_extract",
-    "description": "Extract content from web page URLs. Returns page content in markdown format. Also works with PDF URLs (arxiv papers, documents, etc.) — pass the PDF link directly and it converts to markdown text. Pages under 5000 chars return full markdown; larger pages are LLM-summarized and capped at ~5000 chars per page. Pages over 2M chars are refused. If a URL fails or times out, use the browser tool to access it instead.",
+    "description": "Extract content from web page URLs. Returns page content in markdown format plus content_origin and a SHA-256 fingerprint of the extracted source text. Also works with PDF URLs (arxiv papers, documents, etc.) — pass the PDF link directly and it converts to markdown text. Pages under 5000 chars return full markdown; larger pages are LLM-summarized and capped at ~5000 chars per page while source_content_sha256 still fingerprints the pre-summary extraction. Pages over 2M chars are refused. If a URL fails or times out, use the browser tool to access it instead.",
     "parameters": {
         "type": "object",
         "properties": {

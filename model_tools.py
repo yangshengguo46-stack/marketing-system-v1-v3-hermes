@@ -1171,6 +1171,29 @@ def handle_function_call(
                     pass
         duration_ms = int((time.monotonic() - _dispatch_start) * 1000)
 
+        # Marketing OS is a Hermes product fork, not an outer agent service.
+        # Capture real web extraction results inside the native tool path so
+        # EvidencePack records are tied to the durable session/account scope.
+        # This seam runs only after the actual collector returns; the model has
+        # no parallel tool that can promote an arbitrary URL to verified data.
+        try:
+            from marketing_os.evidence_capture import enrich_tool_result_with_evidence
+
+            result = enrich_tool_result_with_evidence(
+                tool_name=function_name,
+                args=function_args,
+                result=result,
+                task_id=task_id or "",
+                session_id=session_id or "",
+                tool_call_id=tool_call_id or "",
+            )
+        except Exception as _evidence_capture_err:
+            logger.warning(
+                "native Marketing OS evidence capture failed for %s: %s",
+                function_name,
+                _evidence_capture_err,
+            )
+
         _emit_post_tool_call_hook(
             function_name=function_name,
             function_args=function_args,

@@ -1583,17 +1583,23 @@ def _ensure_session_db_row(session: dict) -> None:
     parent_session_id = session.get("parent_session_id") or None
     if parent_session_id:
         model_config["_branched_from"] = parent_session_id
+    create_kwargs = {
+        "source": _session_source(session),
+        "model": row_model,
+        "model_config": model_config or None,
+        "parent_session_id": parent_session_id,
+        "cwd": _session_cwd(session) if session.get("explicit_cwd") else None,
+    }
+    marketing_scope = session.get("marketing_scope") or {}
+    # Preserve the upstream SessionDB call contract for ordinary Hermes
+    # sessions. Product routing fields are supplied only when this desktop
+    # conversation is actually bound, so generic profiles/test doubles do not
+    # have to understand Marketing OS just to create a normal session row.
+    if marketing_scope.get("account_id"):
+        create_kwargs["marketing_user_id"] = marketing_scope.get("user_id") or "default"
+        create_kwargs["marketing_account_id"] = marketing_scope.get("account_id")
     try:
-        db.create_session(
-            key,
-            source=_session_source(session),
-            model=row_model,
-            model_config=model_config or None,
-            marketing_user_id=(session.get("marketing_scope") or {}).get("user_id"),
-            marketing_account_id=(session.get("marketing_scope") or {}).get("account_id"),
-            parent_session_id=parent_session_id,
-            cwd=_session_cwd(session) if session.get("explicit_cwd") else None,
-        )
+        db.create_session(key, **create_kwargs)
     except Exception:
         logger.debug("failed to persist desktop session row", exc_info=True)
     finally:

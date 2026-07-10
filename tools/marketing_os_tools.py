@@ -9,6 +9,7 @@ from marketing_os.domains import (
     AccountLifecycleRepository,
     ContentAssetRepository,
     ContentProductionPlanner,
+    EvidenceRepository,
 )
 from marketing_os.session_scope import enforce_tool_account_scope
 from tools.registry import registry
@@ -131,6 +132,28 @@ READ_CONTENT_ASSETS_SCHEMA = {
     },
 }
 
+READ_EVIDENCE_PACK_SCHEMA = {
+    "name": "marketing_read_evidence_pack",
+    "description": (
+        "Read evidence records automatically captured from successful native collectors for the "
+        "account bound to this conversation. Cite the returned evidence IDs in production tools. "
+        "A verified record proves source integrity, capture time and content hash; it does not by "
+        "itself prove every claim on the source page is true."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["captured", "verified", "rejected", "stale"],
+                "default": "verified",
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+        },
+        "required": [],
+    },
+}
+
 CREATE_CONTENT_DRAFT_SCHEMA = {
     "name": "marketing_draft_content_create",
     "description": (
@@ -238,12 +261,22 @@ def _plan_content_production(args: dict, **kwargs) -> str:
         require_bound=True,
     )
     context = AccountContextRepository().read(user_id=user_id, account_id=account_id)
+    evidence_refs = args.get("evidence_refs") or []
+    if evidence_refs:
+        evidence_refs = [
+            item["id"]
+            for item in EvidenceRepository().require_verified(
+                user_id=user_id,
+                account_id=account_id,
+                evidence_ids=evidence_refs,
+            )
+        ]
     result = ContentProductionPlanner().plan(
         objective=str(args.get("objective") or ""),
         kind=str(args.get("kind") or "auto"),
         platforms=args.get("platforms"),
         audience=str(args.get("audience") or ""),
-        evidence_refs=args.get("evidence_refs") or [],
+        evidence_refs=evidence_refs,
         constraints=args.get("constraints") or {},
         account_context=context,
     )
@@ -267,6 +300,22 @@ def _read_content_assets(args: dict, **kwargs) -> str:
         account_id=account_id,
         status=str(args.get("status") or "") or None,
         platform=str(args.get("platform") or "") or None,
+        limit=int(args.get("limit") or 20),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _read_evidence_pack(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = EvidenceRepository().list(
+        user_id=user_id,
+        account_id=account_id,
+        status=str(args.get("status") or "verified"),
         limit=int(args.get("limit") or 20),
     )
     return json.dumps(result, ensure_ascii=False)
@@ -339,6 +388,15 @@ registry.register(
     handler=_read_content_assets,
     description="Resume durable content work for the current account scope.",
     emoji="🗂️",
+)
+
+registry.register(
+    name="marketing_read_evidence_pack",
+    toolset="marketing",
+    schema=READ_EVIDENCE_PACK_SCHEMA,
+    handler=_read_evidence_pack,
+    description="Read source-integrity evidence captured by native Hermes collectors.",
+    emoji="🔎",
 )
 
 registry.register(

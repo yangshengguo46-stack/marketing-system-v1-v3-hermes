@@ -12,6 +12,7 @@ from typing import Any, Iterator
 
 from marketing_os.data_paths import MarketingDataPaths
 from marketing_os.domains.content_production import CONTENT_KINDS, VALID_PLATFORMS
+from marketing_os.domains.evidence import EvidenceRepository
 
 
 ASSET_TYPES = {"script", "video", "image", "caption"}
@@ -113,9 +114,16 @@ class ContentAssetRepository:
             raise ValueError("content must be a non-empty object")
         if any(str(key).startswith("_") for key in content):
             raise ValueError("content keys beginning with '_' are reserved")
+        verified_evidence = EvidenceRepository(self.paths).require_verified(
+            user_id=user_id,
+            account_id=account_id,
+            evidence_ids=evidence_refs or [],
+            require_any=True,
+        )
         payload = dict(content)
         payload["_production_kind"] = production_kind
-        payload["_provenance_evidence_refs"] = _bounded_refs(evidence_refs or [], "evidence_refs")
+        payload["_provenance_evidence_refs"] = [item["id"] for item in verified_evidence]
+        payload["_evidence_verification_level"] = "source_integrity"
         payload["_provenance_memory_refs"] = _bounded_refs(memory_refs or [], "memory_refs")
         payload["_created_by"] = "hermes-native-marketing"
         encoded = _bounded_json(payload, "content", 500_000)
