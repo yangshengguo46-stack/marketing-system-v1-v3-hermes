@@ -4,19 +4,16 @@
   "description": "智能营销系统 — AI驱动的短视频营销桌面应用",
   "author": "yucheng",
   "license": "MIT",
-  "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "dev:web": "vite",
-    "dev:electron": "electron .",
-    "build:backend": "node scripts/build-backend.mjs",
-    "prepare:hermes-runtime": "node scripts/prepare-hermes-runtime.mjs",
-    "prepare:mcp-runtime": "node scripts/prepare-mcp-runtime.mjs",
-    "build": "npm run build:backend && vite build && npm run prepare:mcp-runtime && node scripts/build-electron.mjs",
-    "build:mac": "npm run build:backend && vite build && npm run prepare:mcp-runtime && node scripts/build-electron.mjs --mac",
-    "build:win": "npm run build:backend && vite build && npm run prepare:mcp-runtime && node scripts/build-electron.mjs --win",
-    "preview": "vite preview",
+    "dev": "npm --prefix runtime/hermes-agent/apps/desktop run dev",
+    "dev:web": "npm --prefix runtime/hermes-agent/apps/desktop run dev:renderer",
+    "dev:electron": "npm --prefix runtime/hermes-agent/apps/desktop run dev:electron",
+    "build": "npm --prefix runtime/hermes-agent/apps/desktop run build",
+    "build:mac": "npm --prefix runtime/hermes-agent/apps/desktop run dist:mac",
+    "build:win": "npm --prefix runtime/hermes-agent/apps/desktop run dist:win",
+    "preview": "npm --prefix runtime/hermes-agent/apps/desktop run preview",
     "runtime:bootstrap": "./scripts/bootstrap-hermes-runtime.sh",
+    "runtime:verify": ".venv/bin/python scripts/verify-hermes-runtime.py",
     "runtime:status": "./scripts/run-hermes-source.sh status",
     "clean:local": "bash scripts/clean-local-artifacts.sh",
     "test:core": ".venv/bin/python -m pytest -q tests/test_agent_core.py",
@@ -52,53 +49,5 @@
     "typescript": "^5.8.0",
     "vite": "^6.3.0",
     "wait-on": "^8.0.0"
-  },
-  "build": {
-    "appId": "com.marketing-os.desktop",
-    "productName": "智能营销",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "src/assets/icon.png",
-      "package.json"
-    ],
-    "asarUnpack": [
-      "electron/channel_bridge.py"
-    ],
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "icon": "src/assets/icon.png",
-      "category": "public.app-category.business"
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ],
-      "icon": "src/assets/icon.png"
-    },
-    "extraResources": [
-      {
-        "from": "backend/dist",
-        "to": "backend"
-      },
-      {
-        "from": "engine",
-        "to": "engine"
-      },
-      {
-        "from": "build/mcp-runtime",
-        "to": "mcp-runtime"
-      },
-      {
-        "from": "build/hermes-runtime",
-        "to": "hermes-agent"
-      }
-    ]
   }
 }

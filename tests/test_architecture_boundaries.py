@@ -1,12 +1,29 @@
 """Regression tests for the 2026-06-29 rebuild boundaries."""
 
 import json
-import os
-import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_root_commands_only_launch_and_build_the_hermes_native_desktop():
+    """The frozen React/Electron shell must never remain the default product."""
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    scripts = package["scripts"]
+    desktop_prefix = "npm --prefix runtime/hermes-agent/apps/desktop run "
+
+    assert "main" not in package
+    assert "build" not in package
+    assert scripts["dev"] == f"{desktop_prefix}dev"
+    assert scripts["dev:web"] == f"{desktop_prefix}dev:renderer"
+    assert scripts["dev:electron"] == f"{desktop_prefix}dev:electron"
+    assert scripts["build"] == f"{desktop_prefix}build"
+    assert scripts["build:mac"] == f"{desktop_prefix}dist:mac"
+    assert scripts["build:win"] == f"{desktop_prefix}dist:win"
+    assert scripts["preview"] == f"{desktop_prefix}preview"
+    assert "build:backend" not in scripts
+    assert "prepare:mcp-runtime" not in scripts
 
 
 def test_legacy_business_tools_namespace_is_removed():
@@ -185,7 +202,9 @@ def test_playwright_mcp_supply_chain_pinned():
     assert (ROOT / "node_modules" / "@playwright" / "mcp" / "cli.js").exists(), \
         "playwright-mcp cli.js missing"
 
-    import subprocess, os
+    import os
+    import subprocess
+
     result = subprocess.run(
         [str(cli_bin.resolve()), "--version"],
         capture_output=True, text=True, timeout=15,

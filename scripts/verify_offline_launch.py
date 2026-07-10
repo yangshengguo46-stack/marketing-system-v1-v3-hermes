@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
-"""DESK-08: Offline first-launch verification.
+"""Verify the canonical Marketing OS Desktop package and offline delivery gate.
 
-Verifies that a packaged app can start its backend server without
-any network access or dev-environment dependencies.
-
-Checks:
-1. Backend binary exists and is executable
-2. MCP runtime manifest is valid and Chromium binary exists
-3. Hermes agent runtime is present
-4. Server starts and responds to /health within 30s
-5. MCP CLI is accessible
-6. No network calls during startup (basic check)
-
-Usage:
-    python scripts/verify_offline_launch.py [--release-dir release]
+The former checker validated the retired outer Electron/FastAPI package.  The
+canonical app now lives in ``runtime/hermes-agent/apps/desktop``.  Structural
+packaging and true offline first launch are deliberately separate: a thin app
+shell can be structurally valid while still failing the C-end delivery goal.
 """
 
 from __future__ import annotations
@@ -21,192 +12,131 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parent.parent
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DESKTOP_ROOT = PROJECT_ROOT / "runtime" / "hermes-agent" / "apps" / "desktop"
 
 
 def check_file(path: Path, description: str) -> bool:
-    if path.exists():
-        print(f"  ✅ {description}: {path.name}")
+    if path.is_file():
+        print(f"  OK {description}: {path.name}")
         return True
-    else:
-        print(f"  ❌ {description}: {path} not found")
-        return False
+    print(f"  MISSING {description}: {path}")
+    return False
 
 
 def check_executable(path: Path, description: str) -> bool:
     if not check_file(path, description):
         return False
     if os.access(path, os.X_OK):
-        print(f"    executable: yes")
         return True
-    else:
-        print(f"    ❌ not executable")
-        return False
+    print(f"  NOT EXECUTABLE {description}: {path}")
+    return False
+
+
+def _find_marketing_os_app(release_dir: Path) -> Path | None:
+    direct = release_dir / "Marketing OS.app"
+    if direct.is_dir():
+        return direct
+    candidates = sorted(release_dir.rglob("Marketing OS.app"))
+    return candidates[0] if candidates else None
 
 
 def verify_packaged_app(release_dir: Path) -> list[str]:
-    """Verify packaged app structure."""
+    """Validate the native app shell without pretending runtime is embedded."""
     errors: list[str] = []
-
-    # Find the .app or .dmg
-    app_paths = list(release_dir.glob("*.app"))
-    if not app_paths:
-        # Look in subdirectories
-        app_paths = list(release_dir.rglob("*.app"))
-
-    if not app_paths:
-        errors.append("no .app found in release directory")
-        return errors
-
-    app_path = app_paths[0]
-    print(f"\n[1] Checking app: {app_path.name}")
+    app_path = _find_marketing_os_app(release_dir)
+    if app_path is None:
+        return ["Marketing OS.app not found in release directory"]
 
     resources = app_path / "Contents" / "Resources"
-    if not resources.exists():
-        errors.append(f"Resources directory not found: {resources}")
-        return errors
+    binary = app_path / "Contents" / "MacOS" / "Marketing OS"
+    if not check_executable(binary, "Marketing OS executable"):
+        errors.append("Marketing OS executable missing or not executable")
+    if not check_file(resources / "app.asar", "native desktop app.asar"):
+        errors.append("native desktop app.asar missing")
 
-    # Check backend binary
-    backend_bin = resources / "backend" / "marketing-os-server"
-    if not check_executable(backend_bin, "backend binary"):
-        errors.append("backend binary missing or not executable")
-
-    # Check MCP runtime
-    mcp_runtime = resources / "mcp-runtime"
-    manifest_path = mcp_runtime / "runtime-manifest.json"
-    if not check_file(manifest_path, "MCP runtime manifest"):
-        errors.append("MCP runtime manifest missing")
+    stamp_path = resources / "install-stamp.json"
+    if not check_file(stamp_path, "runtime install stamp"):
+        errors.append("runtime install stamp missing")
     else:
         try:
-            manifest = json.loads(manifest_path.read_text())
-            print(f"    MCP: {manifest.get('mcp', '?')}, Playwright: {manifest.get('playwright', '?')}")
-            browser_rel = manifest.get("executableRelativePath", "")
-            browser_path = mcp_runtime / browser_rel
-            if not check_executable(browser_path, "Chromium binary"):
-                errors.append("Chromium binary missing or not executable")
-        except (json.JSONDecodeError, KeyError) as e:
-            errors.append(f"invalid runtime manifest: {e}")
-
-    # Check MCP CLI
-    mcp_cli = mcp_runtime / "modules" / "@playwright" / "mcp" / "cli.js"
-    if not check_file(mcp_cli, "MCP CLI"):
-        errors.append("MCP CLI missing")
-
-    # Check engine
-    engine_dir = resources / "engine"
-    if not check_file(engine_dir / "marketing-os" / "server.py", "engine server.py"):
-        errors.append("engine server.py missing")
-
-    # Check Hermes agent runtime.  The desktop conversation is not an optional
-    # plugin: a package without this source boundary is only a UI/API shell.
-    hermes_dir = resources / "hermes-agent"
-    if not hermes_dir.exists():
-        print(f"  ❌ Hermes agent runtime not found at {hermes_dir.name}")
-        errors.append("Hermes agent runtime missing")
-    else:
-        print(f"  ✅ Hermes agent runtime present")
-        if not check_file(hermes_dir / "run_agent.py", "Hermes run_agent.py"):
-            errors.append("Hermes run_agent.py missing")
-        manifest_path = hermes_dir / "runtime-manifest.json"
-        if not check_file(manifest_path, "Hermes runtime manifest"):
-            errors.append("Hermes runtime manifest missing")
+            stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"invalid runtime install stamp: {exc}")
         else:
-            try:
-                manifest = json.loads(manifest_path.read_text())
-                if not manifest.get("productTree"):
-                    errors.append("Hermes runtime manifest has no productTree")
-            except json.JSONDecodeError as exc:
-                errors.append(f"invalid Hermes runtime manifest: {exc}")
+            if not str(stamp.get("commit") or "").strip():
+                errors.append("runtime install stamp has no commit")
+            if "branch" not in stamp:
+                errors.append("runtime install stamp has no branch")
 
+    native_deps = resources / "native-deps" / "node-pty"
+    if not check_file(native_deps / "package.json", "node-pty package metadata"):
+        errors.append("node-pty native dependency missing")
+
+    # These resources prove the retired outer UI/FastAPI package was built.
+    forbidden = (
+        resources / "backend" / "marketing-os-server",
+        resources / "engine" / "marketing-os" / "server.py",
+        resources / "mcp-runtime" / "runtime-manifest.json",
+    )
+    for path in forbidden:
+        if path.exists():
+            errors.append(f"retired outer desktop resource is still packaged: {path.name}")
     return errors
 
 
-def verify_backend_health(port: int = 19519, timeout: int = 30) -> list[str]:
-    """Start backend and verify /health responds."""
+def verify_offline_runtime(app_path: Path) -> list[str]:
+    """Require the future self-contained runtime; current thin builds fail here."""
+    resources = app_path / "Contents" / "Resources"
+    runtime = resources / "marketing-os-runtime"
+    manifest = runtime / "runtime-manifest.json"
+    python = runtime / "python" / "bin" / "python3"
     errors: list[str] = []
-
-    import urllib.request
-    import urllib.error
-
-    # Try to hit health endpoint
-    url = f"http://127.0.0.1:{port}/health"
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            req = urllib.request.Request(url)
-            resp = urllib.request.urlopen(req, timeout=5)
-            if resp.status == 200:
-                print(f"  ✅ /health responded in {time.time() - start:.1f}s")
-                return errors
-        except (urllib.error.URLError, ConnectionError, OSError):
-            pass
-        time.sleep(1)
-
-    errors.append(f"/health did not respond within {timeout}s")
+    if not manifest.is_file():
+        errors.append(
+            "self-contained Marketing OS runtime missing; first launch still depends on "
+            "network bootstrap"
+        )
+    if not python.is_file() or not os.access(python, os.X_OK):
+        errors.append("embedded Python runtime missing or not executable")
     return errors
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="DESK-08 offline launch verification")
-    parser.add_argument("--release-dir", default=str(PROJECT_ROOT / "release"),
-                        help="path to release output directory")
-    parser.add_argument("--port", type=int, default=19519,
-                        help="backend port to check")
+    parser = argparse.ArgumentParser(description="Marketing OS offline delivery verifier")
+    parser.add_argument(
+        "--release-dir",
+        default=str(DESKTOP_ROOT / "release"),
+        help="canonical Hermes-native desktop release directory",
+    )
+    parser.add_argument(
+        "--structure-only",
+        action="store_true",
+        help="validate the app shell but do not claim offline first-launch readiness",
+    )
     args = parser.parse_args()
-
     release_dir = Path(args.release_dir)
-    print("[DESK-08] Offline first-launch verification")
-    print(f"  release dir: {release_dir}")
 
-    if not release_dir.exists():
-        print(f"\n❌ Release directory not found: {release_dir}")
-        print("   Run 'npm run build:mac' first to create a packaged app.")
-        return 2
+    errors = verify_packaged_app(release_dir)
+    app_path = _find_marketing_os_app(release_dir)
+    if not errors and app_path is not None and not args.structure_only:
+        errors.extend(verify_offline_runtime(app_path))
 
-    all_errors: list[str] = []
-
-    # Step 1: Verify packaged app structure
-    print("\n[1] Verifying packaged app structure...")
-    all_errors.extend(verify_packaged_app(release_dir))
-
-    # Step 2: Verify build artifacts exist
-    print("\n[2] Verifying build artifacts...")
-    build_artifacts = [
-        (PROJECT_ROOT / "backend" / "dist" / "marketing-os-server", "backend binary (dev)"),
-        (PROJECT_ROOT / "build" / "mcp-runtime" / "runtime-manifest.json", "MCP runtime manifest (dev)"),
-    ]
-    for path, desc in build_artifacts:
-        check_file(path, desc)
-
-    # Step 3: If app is running, check health
-    print("\n[3] Checking backend health (if running)...")
-    health_errors = verify_backend_health(args.port, timeout=5)
-    if health_errors:
-        print("  ⚠️ Backend not running (this is OK for structure-only verification)")
-    else:
-        all_errors.extend(health_errors)
-
-    # Summary
-    print("\n" + "=" * 50)
-    if all_errors:
-        print(f"❌ {len(all_errors)} error(s):")
-        for err in all_errors:
-            print(f"  - {err}")
+    if errors:
+        print("\nFAILED")
+        for error in errors:
+            print(f"  - {error}")
         return 1
+    print("\nPASS")
+    if args.structure_only:
+        print("  App shell is valid; offline runtime readiness was not asserted.")
     else:
-        print("✅ All structure checks passed.")
-        print("   For full offline verification:")
-        print("   1. Disconnect from network")
-        print("   2. Launch the .app from release/")
-        print("   3. Verify backend starts and UI loads")
-        print("   4. Verify MCP browser launches headless")
-        return 0
+        print("  App shell and self-contained runtime are present.")
+    return 0
 
 
 if __name__ == "__main__":
