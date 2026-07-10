@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/NousResearch/hermes-agent.git",
   "baseline_commit": "4488fe134b1de4359f3a4f1f8368576413e6e268",
-  "product_tree": "15e529a5b252cf497e2a6a25e4b06324ca9a966f",
+  "product_tree": "3956f1edc7f5bca678f8e9057c188f5d9e75ddd1",
   "patches": [
     {
       "file": "hermes-patches/0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch",
@@ -26,6 +26,10 @@
     {
       "file": "hermes-patches/0006-feat-marketing-os-bind-conversations-to-operating-ac.patch",
       "sha256": "84f5c8da28221c36198c26abd8e938788a505e4cd5046dcd19aeae8fa3c0c0fa"
+    },
+    {
+      "file": "hermes-patches/0007-feat-marketing-os-own-account-onboarding-lifecycle.patch",
+      "sha256": "5399c44eaced7cba04fd84dbfa67057bcf759f2b887548d871bae195c524dcfd"
     }
   ]
 }

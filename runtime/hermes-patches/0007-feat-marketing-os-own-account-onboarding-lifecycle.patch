@@ -1,0 +1,769 @@
+From ebc4004c4f2c7a8bacad0c5c5605e6104c12495a Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 19:43:59 +0800
+Subject: [PATCH] feat(marketing-os): own account onboarding lifecycle
+
+---
+ marketing_os/domains/__init__.py             |   3 +-
+ marketing_os/domains/account_lifecycle.py    | 289 +++++++++++++++++++
+ marketing_os/product.py                      |   5 +
+ marketing_os/session_scope.py                |  46 +++
+ tests/test_marketing_os_account_context.py   |   6 +-
+ tests/test_marketing_os_account_lifecycle.py | 172 +++++++++++
+ tools/marketing_os_tools.py                  | 113 +++++++-
+ toolsets.py                                  |   8 +-
+ 8 files changed, 633 insertions(+), 9 deletions(-)
+ create mode 100644 marketing_os/domains/account_lifecycle.py
+ create mode 100644 tests/test_marketing_os_account_lifecycle.py
+
+diff --git a/marketing_os/domains/__init__.py b/marketing_os/domains/__init__.py
+index 9f7b744d3..7123b2aa1 100644
+--- a/marketing_os/domains/__init__.py
++++ b/marketing_os/domains/__init__.py
+@@ -1,5 +1,6 @@
+ """Product-owned Marketing OS domain capabilities."""
+ 
+ from .account_context import AccountContextRepository
++from .account_lifecycle import AccountLifecycleRepository
+ 
+-__all__ = ["AccountContextRepository"]
++__all__ = ["AccountContextRepository", "AccountLifecycleRepository"]
+diff --git a/marketing_os/domains/account_lifecycle.py b/marketing_os/domains/account_lifecycle.py
+new file mode 100644
+index 000000000..f13d4494d
+--- /dev/null
++++ b/marketing_os/domains/account_lifecycle.py
+@@ -0,0 +1,289 @@
++"""Native, versioned account-onboarding writes for the Marketing OS fork."""
++
++from __future__ import annotations
++
++import json
++import sqlite3
++import uuid
++from contextlib import contextmanager
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any, Iterator
++
++from marketing_os.data_paths import MarketingDataPaths
++
++
++class AccountLifecycleRepository:
++    """Own the first account-strategy state transitions in the product fork."""
++
++    def __init__(self, paths: MarketingDataPaths | None = None):
++        self.paths = paths or MarketingDataPaths.from_env()
++        self._ensure_schema()
++
++    def begin_project(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        business_goal: str,
++        constraints: dict[str, Any] | None = None,
++    ) -> dict[str, Any]:
++        goal = _bounded_text(business_goal, field="business_goal", limit=500)
++        constraints_value = constraints or {}
++        if not isinstance(constraints_value, dict):
++            raise ValueError("constraints must be an object")
++        constraints_json = _bounded_json(constraints_value, field="constraints", limit=8_000)
++        with self._transaction() as db:
++            existing = db.execute(
++                """SELECT * FROM account_strategy_projects
++                WHERE user_id=? AND account_id=? AND status='active'""",
++                (user_id, account_id),
++            ).fetchone()
++            if existing is not None:
++                return _project_record(existing, operation="existing")
++            now = _now()
++            project_id = f"strategy_{uuid.uuid4().hex}"
++            db.execute(
++                """INSERT INTO account_strategy_projects
++                (id,user_id,account_id,business_goal,constraints_json,stage,status,created_at,updated_at)
++                VALUES (?,?,?,?,?,'goal_defined','active',?,?)""",
++                (project_id, user_id, account_id, goal, constraints_json, now, now),
++            )
++            row = db.execute(
++                "SELECT * FROM account_strategy_projects WHERE id=?",
++                (project_id,),
++            ).fetchone()
++        return _project_record(row, operation="created")
++
++    def draft_audience_hypothesis(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        project_id: str,
++        segments: list[Any],
++        pains: list[Any] | None = None,
++        scenarios: list[Any] | None = None,
++        exclusions: list[Any] | None = None,
++        data_gaps: list[Any] | None = None,
++    ) -> dict[str, Any]:
++        payload = {
++            "segments_json": _bounded_list(segments, field="segments", required=True),
++            "pains_json": _bounded_list(pains or [], field="pains"),
++            "scenarios_json": _bounded_list(scenarios or [], field="scenarios"),
++            "exclusions_json": _bounded_list(exclusions or [], field="exclusions"),
++            "data_gaps_json": _bounded_list(data_gaps or [], field="data_gaps"),
++        }
++        with self._transaction() as db:
++            _require_active_project(
++                db, user_id=user_id, account_id=account_id, project_id=project_id
++            )
++            version = int(
++                db.execute(
++                    "SELECT COALESCE(MAX(version), 0) + 1 FROM audience_hypotheses WHERE project_id=?",
++                    (project_id,),
++                ).fetchone()[0]
++            )
++            hypothesis_id = f"audience_{uuid.uuid4().hex}"
++            db.execute(
++                """INSERT INTO audience_hypotheses
++                (id,project_id,user_id,account_id,version,segments_json,pains_json,
++                 scenarios_json,exclusions_json,data_gaps_json,status,created_at)
++                VALUES (?,?,?,?,?,?,?,?,?,?,'draft',?)""",
++                (
++                    hypothesis_id,
++                    project_id,
++                    user_id,
++                    account_id,
++                    version,
++                    payload["segments_json"],
++                    payload["pains_json"],
++                    payload["scenarios_json"],
++                    payload["exclusions_json"],
++                    payload["data_gaps_json"],
++                    _now(),
++                ),
++            )
++            row = db.execute(
++                "SELECT * FROM audience_hypotheses WHERE id=?",
++                (hypothesis_id,),
++            ).fetchone()
++        return _hypothesis_record(row, operation="drafted")
++
++    def confirm_audience_hypothesis(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        project_id: str,
++        hypothesis_id: str,
++        confirmed_by_user: bool,
++    ) -> dict[str, Any]:
++        if confirmed_by_user is not True:
++            raise ValueError("explicit user confirmation is required")
++        with self._transaction() as db:
++            _require_active_project(
++                db, user_id=user_id, account_id=account_id, project_id=project_id
++            )
++            row = db.execute(
++                """SELECT * FROM audience_hypotheses
++                WHERE id=? AND project_id=? AND user_id=? AND account_id=?""",
++                (hypothesis_id, project_id, user_id, account_id),
++            ).fetchone()
++            if row is None:
++                raise KeyError("audience hypothesis not found in account scope")
++            if row["status"] == "confirmed":
++                return _hypothesis_record(row, operation="already_confirmed")
++            if row["status"] != "draft":
++                raise ValueError("only a draft audience hypothesis can be confirmed")
++            now = _now()
++            db.execute(
++                """UPDATE audience_hypotheses SET status='superseded'
++                WHERE project_id=? AND status='confirmed'""",
++                (project_id,),
++            )
++            db.execute(
++                """UPDATE audience_hypotheses
++                SET status='confirmed', confirmed_at=? WHERE id=?""",
++                (now, hypothesis_id),
++            )
++            db.execute(
++                """UPDATE account_strategy_projects
++                SET stage='audience_hypothesis_ready', updated_at=? WHERE id=?""",
++                (now, project_id),
++            )
++            confirmed = db.execute(
++                "SELECT * FROM audience_hypotheses WHERE id=?",
++                (hypothesis_id,),
++            ).fetchone()
++        return _hypothesis_record(confirmed, operation="confirmed")
++
++    def _ensure_schema(self) -> None:
++        self.paths.agent_db.parent.mkdir(parents=True, exist_ok=True)
++        with self._connect() as db:
++            db.executescript(
++                """
++                CREATE TABLE IF NOT EXISTS account_strategy_projects (
++                    id TEXT PRIMARY KEY,
++                    user_id TEXT NOT NULL,
++                    account_id TEXT NOT NULL,
++                    business_goal TEXT NOT NULL,
++                    constraints_json TEXT NOT NULL DEFAULT '{}',
++                    stage TEXT NOT NULL DEFAULT 'goal_defined',
++                    status TEXT NOT NULL DEFAULT 'active',
++                    created_at TEXT NOT NULL,
++                    updated_at TEXT NOT NULL
++                );
++                CREATE UNIQUE INDEX IF NOT EXISTS idx_strategy_projects_one_active
++                    ON account_strategy_projects(user_id, account_id) WHERE status='active';
++                CREATE INDEX IF NOT EXISTS idx_strategy_projects_scope
++                    ON account_strategy_projects(user_id, account_id, status);
++
++                CREATE TABLE IF NOT EXISTS audience_hypotheses (
++                    id TEXT PRIMARY KEY,
++                    project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
++                    user_id TEXT NOT NULL,
++                    account_id TEXT NOT NULL,
++                    version INTEGER NOT NULL,
++                    segments_json TEXT NOT NULL DEFAULT '[]',
++                    pains_json TEXT NOT NULL DEFAULT '[]',
++                    scenarios_json TEXT NOT NULL DEFAULT '[]',
++                    exclusions_json TEXT NOT NULL DEFAULT '[]',
++                    data_gaps_json TEXT NOT NULL DEFAULT '[]',
++                    status TEXT NOT NULL DEFAULT 'draft',
++                    created_at TEXT NOT NULL,
++                    confirmed_at TEXT,
++                    UNIQUE(project_id, version)
++                );
++                CREATE UNIQUE INDEX IF NOT EXISTS idx_audience_one_confirmed
++                    ON audience_hypotheses(project_id) WHERE status='confirmed';
++                CREATE INDEX IF NOT EXISTS idx_audience_scope
++                    ON audience_hypotheses(user_id, account_id, project_id);
++                """
++            )
++
++    def _connect(self) -> sqlite3.Connection:
++        db = sqlite3.connect(self.paths.agent_db, timeout=10)
++        db.row_factory = sqlite3.Row
++        db.execute("PRAGMA foreign_keys=ON")
++        return db
++
++    @contextmanager
++    def _transaction(self) -> Iterator[sqlite3.Connection]:
++        db = self._connect()
++        try:
++            db.execute("BEGIN IMMEDIATE")
++            yield db
++            db.commit()
++        except Exception:
++            db.rollback()
++            raise
++        finally:
++            db.close()
++
++
++def _require_active_project(
++    db: sqlite3.Connection, *, user_id: str, account_id: str, project_id: str
++) -> sqlite3.Row:
++    row = db.execute(
++        """SELECT * FROM account_strategy_projects
++        WHERE id=? AND user_id=? AND account_id=? AND status='active'""",
++        (project_id, user_id, account_id),
++    ).fetchone()
++    if row is None:
++        raise KeyError("active strategy project not found in account scope")
++    return row
++
++
++def _project_record(row: sqlite3.Row, *, operation: str) -> dict[str, Any]:
++    value = dict(row)
++    value["constraints"] = json.loads(value.pop("constraints_json"))
++    value["operation"] = operation
++    return value
++
++
++def _hypothesis_record(row: sqlite3.Row, *, operation: str) -> dict[str, Any]:
++    value = dict(row)
++    for key in (
++        "segments_json",
++        "pains_json",
++        "scenarios_json",
++        "exclusions_json",
++        "data_gaps_json",
++    ):
++        value[key.removesuffix("_json")] = json.loads(value.pop(key))
++    value["operation"] = operation
++    return value
++
++
++def _bounded_text(value: Any, *, field: str, limit: int) -> str:
++    text = str(value or "").strip()
++    if not text:
++        raise ValueError(f"{field} is required")
++    if len(text) > limit:
++        raise ValueError(f"{field} exceeds {limit} characters")
++    return text
++
++
++def _bounded_json(value: Any, *, field: str, limit: int) -> str:
++    try:
++        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
++    except (TypeError, ValueError) as exc:
++        raise ValueError(f"{field} must be JSON serializable") from exc
++    if len(encoded.encode("utf-8")) > limit:
++        raise ValueError(f"{field} exceeds {limit} bytes")
++    return encoded
++
++
++def _bounded_list(value: Any, *, field: str, required: bool = False) -> str:
++    if not isinstance(value, list):
++        raise ValueError(f"{field} must be a list")
++    if required and not value:
++        raise ValueError(f"{field} must contain at least one item")
++    if len(value) > 30:
++        raise ValueError(f"{field} exceeds 30 items")
++    return _bounded_json(value, field=field, limit=16_000)
++
++
++def _now() -> str:
++    return datetime.now(timezone.utc).isoformat()
+diff --git a/marketing_os/product.py b/marketing_os/product.py
+index 3a83ce33e..b5cf55683 100644
+--- a/marketing_os/product.py
++++ b/marketing_os/product.py
+@@ -41,6 +41,11 @@ PRODUCT_RUNTIME_GUIDANCE = (
+     "Before giving account-specific positioning, content or growth advice, use the "
+     "native Marketing OS account tools to read the selected account's verified "
+     "context; treat every missing field as an evidence gap instead of inventing it. "
++    "For a new or unpositioned account, turn the user's stated goal into a versioned "
++    "strategy project and a reviewable audience-hypothesis draft with the native "
++    "lifecycle tool. Ask only the few questions that materially change the draft, "
++    "and never confirm an audience hypothesis until the user explicitly accepts that "
++    "exact version. "
+     "Marketing decisions must distinguish verified facts, strategy inference and "
+     "creative suggestions. External effects, paid providers, publication and "
+     "sensitive account actions require the product's approval and receipt rules."
+diff --git a/marketing_os/session_scope.py b/marketing_os/session_scope.py
+index f1a4372b5..30107c273 100644
+--- a/marketing_os/session_scope.py
++++ b/marketing_os/session_scope.py
+@@ -88,6 +88,52 @@ def read_session_scope(session_db: Any, session_id: str) -> dict[str, Any] | Non
+     return scope_from_session_row(session_db.get_session(session_id))
+ 
+ 
++def read_tool_session_scope(
++    *, task_id: str | None = None, session_id: str | None = None
++) -> dict[str, Any] | None:
++    """Resolve the durable account scope for a native model-tool invocation."""
++
++    durable_id = str(session_id or task_id or "").strip()
++    if not durable_id:
++        return None
++    try:
++        from hermes_state import SessionDB
++
++        db = SessionDB()
++        try:
++            return read_session_scope(db, durable_id)
++        finally:
++            db.close()
++    except Exception:
++        return None
++
++
++def enforce_tool_account_scope(
++    args: dict[str, Any],
++    *,
++    task_id: str | None = None,
++    session_id: str | None = None,
++    require_bound: bool = False,
++) -> tuple[str, str]:
++    """Return ``(user_id, account_id)`` while preventing cross-account calls."""
++
++    scope = read_tool_session_scope(task_id=task_id, session_id=session_id)
++    requested_user = str(args.get("user_id") or "default").strip() or "default"
++    requested_account = str(args.get("account_id") or "").strip()
++    if scope:
++        if requested_user not in {"", "default", scope["user_id"]}:
++            raise ValueError("tool user_id does not match the bound conversation")
++        if requested_account and requested_account != scope["account_id"]:
++            raise ValueError("tool account_id does not match the bound conversation")
++        return str(scope["user_id"]), str(scope["account_id"])
++    if require_bound:
++        raise ValueError("this operation requires a conversation bound to a Marketing OS account")
++    return (
++        _normalize_id(requested_user, field="user_id"),
++        _normalize_id(requested_account, field="account_id"),
++    )
++
++
+ def build_account_scope_prompt(scope: dict[str, Any] | None) -> str:
+     """Build the compact, byte-stable account routing prompt for one session."""
+ 
+diff --git a/tests/test_marketing_os_account_context.py b/tests/test_marketing_os_account_context.py
+index 23d98c7d2..fc4ffb854 100644
+--- a/tests/test_marketing_os_account_context.py
++++ b/tests/test_marketing_os_account_context.py
+@@ -166,7 +166,11 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
+         enabled_toolsets=["marketing"],
+     ))
+ 
+-    assert names == {"marketing_read_accounts", "marketing_read_account_context"}
++    assert names == {
++        "marketing_read_accounts",
++        "marketing_read_account_context",
++        "marketing_update_account_lifecycle",
++    }
+     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
+     assert result["lifecycle"]["stage"] == "positioning_approved"
+     assert result["account_dna"]["taboos"] == ["虚构收益"]
+diff --git a/tests/test_marketing_os_account_lifecycle.py b/tests/test_marketing_os_account_lifecycle.py
+new file mode 100644
+index 000000000..12fffff59
+--- /dev/null
++++ b/tests/test_marketing_os_account_lifecycle.py
+@@ -0,0 +1,172 @@
++import json
++
++import pytest
++
++import hermes_state
++from hermes_state import SessionDB
++from marketing_os.data_paths import MarketingDataPaths
++from marketing_os.domains import AccountContextRepository, AccountLifecycleRepository
++from model_tools import handle_function_call
++
++
++def _paths(tmp_path):
++    config_dir = tmp_path / "config"
++    config_dir.mkdir()
++    (config_dir / "accounts.json").write_text(
++        json.dumps(
++            {
++                "accounts": [
++                    {
++                        "id": "acct-1",
++                        "platform": "douyin",
++                        "label": "主账号",
++                        "status": "active",
++                    },
++                    {
++                        "id": "acct-2",
++                        "platform": "xiaohongshu",
++                        "label": "副账号",
++                        "status": "active",
++                    },
++                ]
++            },
++            ensure_ascii=False,
++        ),
++        encoding="utf-8",
++    )
++    return MarketingDataPaths(
++        user_data=tmp_path,
++        config_dir=config_dir,
++        agent_db=tmp_path / "agent-runtime" / "agent_core.db",
++    )
++
++
++def _bind_env(monkeypatch, paths):
++    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
++    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
++    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
++
++
++def test_native_lifecycle_creates_versioned_audience_truth(tmp_path):
++    paths = _paths(tmp_path)
++    lifecycle = AccountLifecycleRepository(paths)
++
++    project = lifecycle.begin_project(
++        user_id="default",
++        account_id="acct-1",
++        business_goal="帮助职场人用 AI 提升工作效率",
++        constraints={"hours_per_week": 5},
++    )
++    draft = lifecycle.draft_audience_hypothesis(
++        user_id="default",
++        account_id="acct-1",
++        project_id=project["id"],
++        segments=[{"label": "想学 AI 的职场人"}],
++        pains=["不知道如何落地"],
++        scenarios=["下班后学习"],
++        exclusions=["只看娱乐内容的人"],
++        data_gaps=["真实年龄分布"],
++    )
++
++    with pytest.raises(ValueError, match="explicit user confirmation"):
++        lifecycle.confirm_audience_hypothesis(
++            user_id="default",
++            account_id="acct-1",
++            project_id=project["id"],
++            hypothesis_id=draft["id"],
++            confirmed_by_user=False,
++        )
++
++    confirmed = lifecycle.confirm_audience_hypothesis(
++        user_id="default",
++        account_id="acct-1",
++        project_id=project["id"],
++        hypothesis_id=draft["id"],
++        confirmed_by_user=True,
++    )
++    context = AccountContextRepository(paths).read(
++        user_id="default", account_id="acct-1"
++    )
++
++    assert confirmed["status"] == "confirmed"
++    assert context["lifecycle"]["stage"] == "audience_hypothesis_ready"
++    assert context["lifecycle"]["next_action"] == "complete_benchmark_evidence"
++    assert context["lifecycle"]["data_gaps"] == ["真实年龄分布"]
++
++
++def test_native_tool_writes_only_the_conversation_bound_account(
++    tmp_path, monkeypatch
++):
++    paths = _paths(tmp_path)
++    _bind_env(monkeypatch, paths)
++    state_path = tmp_path / "state.db"
++    monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", state_path)
++    db = SessionDB(db_path=state_path)
++    db.create_session(
++        "session-1",
++        "tui",
++        marketing_user_id="default",
++        marketing_account_id="acct-1",
++    )
++    db.close()
++
++    begun = json.loads(
++        handle_function_call(
++            "marketing_update_account_lifecycle",
++            {
++                "action": "begin_project",
++                "business_goal": "建立可信的 AI 教育账号",
++                "constraints": {"no_fake_metrics": True},
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    project_id = begun["result"]["id"]
++
++    drafted = json.loads(
++        handle_function_call(
++            "marketing_update_account_lifecycle",
++            {
++                "action": "draft_audience_hypothesis",
++                "project_id": project_id,
++                "segments": [{"label": "AI 入门职场人"}],
++                "data_gaps": ["真实兴趣分布"],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    hypothesis_id = drafted["result"]["id"]
++    confirmed = json.loads(
++        handle_function_call(
++            "marketing_update_account_lifecycle",
++            {
++                "action": "confirm_audience_hypothesis",
++                "project_id": project_id,
++                "hypothesis_id": hypothesis_id,
++                "confirmed_by_user": True,
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++    cross_account = json.loads(
++        handle_function_call(
++            "marketing_read_account_context",
++            {"account_id": "acct-2"},
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++
++    assert begun["account_context"]["account_id"] == "acct-1"
++    assert confirmed["account_context"]["lifecycle"]["stage"] == "audience_hypothesis_ready"
++    assert "does not match the bound conversation" in cross_account["error"]
++    assert AccountContextRepository(paths).read(
++        user_id="default", account_id="acct-2"
++    )["lifecycle"]["stage"] == "not_started"
+diff --git a/tools/marketing_os_tools.py b/tools/marketing_os_tools.py
+index aa0bc4404..1268cbe41 100644
+--- a/tools/marketing_os_tools.py
++++ b/tools/marketing_os_tools.py
+@@ -1,10 +1,11 @@
+-"""Native read tools for the Marketing OS account operating context."""
++"""Native tools for the Marketing OS account operating context."""
+ 
+ from __future__ import annotations
+ 
+ import json
+ 
+-from marketing_os.domains import AccountContextRepository
++from marketing_os.domains import AccountContextRepository, AccountLifecycleRepository
++from marketing_os.session_scope import enforce_tool_account_scope
+ from tools.registry import registry
+ 
+ 
+@@ -43,19 +44,112 @@ READ_ACCOUNT_CONTEXT_SCHEMA = {
+     },
+ }
+ 
++UPDATE_ACCOUNT_LIFECYCLE_SCHEMA = {
++    "name": "marketing_update_account_lifecycle",
++    "description": (
++        "Advance the bound account's versioned onboarding lifecycle. Use begin_project after the "
++        "user states a real operating goal; draft_audience_hypothesis to save a reviewable hypothesis; "
++        "and confirm_audience_hypothesis only after the user explicitly accepts that exact draft. "
++        "The account is taken from the current conversation and cannot be overridden."
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "action": {
++                "type": "string",
++                "enum": [
++                    "begin_project",
++                    "draft_audience_hypothesis",
++                    "confirm_audience_hypothesis",
++                ],
++            },
++            "business_goal": {"type": "string"},
++            "constraints": {"type": "object"},
++            "project_id": {"type": "string"},
++            "hypothesis_id": {"type": "string"},
++            "segments": {"type": "array", "items": {}},
++            "pains": {"type": "array", "items": {}},
++            "scenarios": {"type": "array", "items": {}},
++            "exclusions": {"type": "array", "items": {}},
++            "data_gaps": {"type": "array", "items": {}},
++            "confirmed_by_user": {
++                "type": "boolean",
++                "description": (
++                    "Set true only when the user explicitly accepted this exact draft in the current conversation."
++                ),
++            },
++        },
++        "required": ["action"],
++    },
++}
++
+ 
+ def _list_accounts(_args: dict, **_kwargs) -> str:
+     return json.dumps(AccountContextRepository().list_accounts(), ensure_ascii=False)
+ 
+ 
+-def _read_account_context(args: dict, **_kwargs) -> str:
++def _read_account_context(args: dict, **kwargs) -> str:
++    user_id, account_id = enforce_tool_account_scope(
++        args,
++        task_id=kwargs.get("task_id"),
++        session_id=kwargs.get("session_id"),
++    )
+     result = AccountContextRepository().read(
+-        user_id=str(args.get("user_id") or "default"),
+-        account_id=str(args.get("account_id") or ""),
++        user_id=user_id,
++        account_id=account_id,
+     )
+     return json.dumps(result, ensure_ascii=False)
+ 
+ 
++def _update_account_lifecycle(args: dict, **kwargs) -> str:
++    user_id, account_id = enforce_tool_account_scope(
++        {},
++        task_id=kwargs.get("task_id"),
++        session_id=kwargs.get("session_id"),
++        require_bound=True,
++    )
++    repository = AccountLifecycleRepository()
++    action = str(args.get("action") or "")
++    if action == "begin_project":
++        result = repository.begin_project(
++            user_id=user_id,
++            account_id=account_id,
++            business_goal=str(args.get("business_goal") or ""),
++            constraints=args.get("constraints") or {},
++        )
++    elif action == "draft_audience_hypothesis":
++        result = repository.draft_audience_hypothesis(
++            user_id=user_id,
++            account_id=account_id,
++            project_id=str(args.get("project_id") or ""),
++            segments=args.get("segments"),
++            pains=args.get("pains"),
++            scenarios=args.get("scenarios"),
++            exclusions=args.get("exclusions"),
++            data_gaps=args.get("data_gaps"),
++        )
++    elif action == "confirm_audience_hypothesis":
++        result = repository.confirm_audience_hypothesis(
++            user_id=user_id,
++            account_id=account_id,
++            project_id=str(args.get("project_id") or ""),
++            hypothesis_id=str(args.get("hypothesis_id") or ""),
++            confirmed_by_user=args.get("confirmed_by_user") is True,
++        )
++    else:
++        raise ValueError(f"unsupported lifecycle action: {action}")
++    return json.dumps(
++        {
++            "action": action,
++            "result": result,
++            "account_context": AccountContextRepository().read(
++                user_id=user_id, account_id=account_id
++            ),
++        },
++        ensure_ascii=False,
++    )
++
++
+ registry.register(
+     name="marketing_read_accounts",
+     toolset="marketing",
+@@ -73,3 +167,12 @@ registry.register(
+     description="Read verified audience, positioning and lifecycle context for one account.",
+     emoji="🧭",
+ )
++
++registry.register(
++    name="marketing_update_account_lifecycle",
++    toolset="marketing",
++    schema=UPDATE_ACCOUNT_LIFECYCLE_SCHEMA,
++    handler=_update_account_lifecycle,
++    description="Create and confirm versioned account goals and audience hypotheses.",
++    emoji="🧬",
++)
+diff --git a/toolsets.py b/toolsets.py
+index 68dd1923d..bed24e423 100644
+--- a/toolsets.py
++++ b/toolsets.py
+@@ -31,7 +31,7 @@ from typing import List, Dict, Any, Set, Optional
+ _HERMES_CORE_TOOLS = [
+     # Marketing OS product context. These bounded read tools are always present
+     # so desktop, messaging and cron sessions operate on the same accounts.
+-    "marketing_read_accounts", "marketing_read_account_context",
++    "marketing_read_accounts", "marketing_read_account_context", "marketing_update_account_lifecycle",
+     # Web
+     "web_search", "web_extract",
+     # Terminal + process management
+@@ -99,7 +99,11 @@ TOOLSETS = {
+     # Basic toolsets - individual tool categories
+     "marketing": {
+         "description": "Marketing OS account, audience, positioning and operating-context tools",
+-        "tools": ["marketing_read_accounts", "marketing_read_account_context"],
++        "tools": [
++            "marketing_read_accounts",
++            "marketing_read_account_context",
++            "marketing_update_account_lifecycle",
++        ],
+         "includes": [],
+     },
+ 
+-- 
+2.54.0
+
