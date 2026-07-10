@@ -1,7 +1,7 @@
 From abf3ae7cdc243b1f67d3e32847fc4ef3621cab89 Mon Sep 17 00:00:00 2001
 From: Marketing OS <marketing-os@local.invalid>
 Date: Fri, 10 Jul 2026 17:56:28 +0800
-Subject: [PATCH 2/3] feat(marketing-os): establish native product fork
+Subject: [PATCH 2/4] feat(marketing-os): establish native product fork
 
 ---
  agent/prompt_builder.py                       |  25 +--

@@ -1,0 +1,172 @@
+From 607090b31115ec419174513b3494893c5d7d4c85 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 18:46:50 +0800
+Subject: [PATCH 4/4] feat(marketing-os): register native account tools
+
+---
+ marketing_os/product.py                    |  3 +
+ tests/test_marketing_os_account_context.py | 22 +++++++
+ tools/marketing_os_tools.py                | 75 ++++++++++++++++++++++
+ toolsets.py                                |  9 +++
+ 4 files changed, 109 insertions(+)
+ create mode 100644 tools/marketing_os_tools.py
+
+diff --git a/marketing_os/product.py b/marketing_os/product.py
+index f5dd15783..3a83ce33e 100644
+--- a/marketing_os/product.py
++++ b/marketing_os/product.py
+@@ -38,6 +38,9 @@ PRODUCT_RUNTIME_GUIDANCE = (
+     "Inherited Hermes code and earlier Marketing OS modules may both be split, "
+     "rewritten and recomposed around capability boundaries; preserve the product's "
+     "full-cycle operating philosophy rather than any historical directory layout. "
++    "Before giving account-specific positioning, content or growth advice, use the "
++    "native Marketing OS account tools to read the selected account's verified "
++    "context; treat every missing field as an evidence gap instead of inventing it. "
+     "Marketing decisions must distinguish verified facts, strategy inference and "
+     "creative suggestions. External effects, paid providers, publication and "
+     "sensitive account actions require the product's approval and receipt rules."
+diff --git a/tests/test_marketing_os_account_context.py b/tests/test_marketing_os_account_context.py
+index 02dde9a45..9ee953f02 100644
+--- a/tests/test_marketing_os_account_context.py
++++ b/tests/test_marketing_os_account_context.py
+@@ -3,6 +3,8 @@ import sqlite3
+ 
+ from marketing_os.data_paths import MarketingDataPaths
+ from marketing_os.domains import AccountContextRepository
++from model_tools import get_tool_definitions, handle_function_call
++from toolsets import resolve_toolset
+ from tui_gateway import server
+ 
+ 
+@@ -146,3 +148,23 @@ def test_native_gateway_reads_same_marketing_store(tmp_path, monkeypatch):
+ 
+     assert response["result"]["account"]["platform"] == "douyin"
+     assert response["result"]["lifecycle"]["business_goal"] == "经营 AI 教育账号"
++
++
++def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_path, monkeypatch):
++    paths = _seed_product_store(tmp_path)
++    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
++    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
++    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
++
++    definitions = get_tool_definitions(enabled_toolsets=["marketing"], quiet_mode=True)
++    names = {item["function"]["name"] for item in definitions}
++    result = json.loads(handle_function_call(
++        "marketing_read_account_context",
++        {"account_id": "acct-1"},
++        enabled_toolsets=["marketing"],
++    ))
++
++    assert names == {"marketing_read_accounts", "marketing_read_account_context"}
++    assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
++    assert result["lifecycle"]["stage"] == "positioning_approved"
++    assert result["account_dna"]["taboos"] == ["虚构收益"]
+diff --git a/tools/marketing_os_tools.py b/tools/marketing_os_tools.py
+new file mode 100644
+index 000000000..aa0bc4404
+--- /dev/null
++++ b/tools/marketing_os_tools.py
+@@ -0,0 +1,75 @@
++"""Native read tools for the Marketing OS account operating context."""
++
++from __future__ import annotations
++
++import json
++
++from marketing_os.domains import AccountContextRepository
++from tools.registry import registry
++
++
++LIST_ACCOUNTS_SCHEMA = {
++    "name": "marketing_read_accounts",
++    "description": (
++        "List the user's connected social-media accounts from the canonical Marketing OS store. "
++        "Use this before account-specific advice when no account_id is already known. The result "
++        "contains no cookies, tokens, passwords or other login secrets."
++    ),
++    "parameters": {"type": "object", "properties": {}, "required": []},
++}
++
++READ_ACCOUNT_CONTEXT_SCHEMA = {
++    "name": "marketing_read_account_context",
++    "description": (
++        "Read one account's verified operating context: connected account summary, lifecycle stage, "
++        "confirmed audience hypothesis, approved positioning, Account DNA and the latest first-party "
++        "audience snapshot. Use it before proposing positioning, topics, content or growth actions. "
++        "Missing fields are evidence gaps and must not be invented."
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "account_id": {
++                "type": "string",
++                "description": "Marketing OS account id returned by marketing_read_accounts.",
++            },
++            "user_id": {
++                "type": "string",
++                "description": "Optional product user scope. Defaults to 'default'.",
++                "default": "default",
++            },
++        },
++        "required": ["account_id"],
++    },
++}
++
++
++def _list_accounts(_args: dict, **_kwargs) -> str:
++    return json.dumps(AccountContextRepository().list_accounts(), ensure_ascii=False)
++
++
++def _read_account_context(args: dict, **_kwargs) -> str:
++    result = AccountContextRepository().read(
++        user_id=str(args.get("user_id") or "default"),
++        account_id=str(args.get("account_id") or ""),
++    )
++    return json.dumps(result, ensure_ascii=False)
++
++
++registry.register(
++    name="marketing_read_accounts",
++    toolset="marketing",
++    schema=LIST_ACCOUNTS_SCHEMA,
++    handler=_list_accounts,
++    description="List connected Marketing OS accounts without exposing login secrets.",
++    emoji="📣",
++)
++
++registry.register(
++    name="marketing_read_account_context",
++    toolset="marketing",
++    schema=READ_ACCOUNT_CONTEXT_SCHEMA,
++    handler=_read_account_context,
++    description="Read verified audience, positioning and lifecycle context for one account.",
++    emoji="🧭",
++)
+diff --git a/toolsets.py b/toolsets.py
+index 1453c3505..68dd1923d 100644
+--- a/toolsets.py
++++ b/toolsets.py
+@@ -29,6 +29,9 @@ from typing import List, Dict, Any, Set, Optional
+ # Shared tool list for CLI and all messaging platform toolsets.
+ # Edit this once to update all platforms simultaneously.
+ _HERMES_CORE_TOOLS = [
++    # Marketing OS product context. These bounded read tools are always present
++    # so desktop, messaging and cron sessions operate on the same accounts.
++    "marketing_read_accounts", "marketing_read_account_context",
+     # Web
+     "web_search", "web_extract",
+     # Terminal + process management
+@@ -94,6 +97,12 @@ _HERMES_WEBHOOK_SAFE_TOOLS = [
+ # These can include individual tools or reference other toolsets
+ TOOLSETS = {
+     # Basic toolsets - individual tool categories
++    "marketing": {
++        "description": "Marketing OS account, audience, positioning and operating-context tools",
++        "tools": ["marketing_read_accounts", "marketing_read_account_context"],
++        "includes": [],
++    },
++
+     "web": {
+         "description": "Web research and content extraction tools",
+         "tools": ["web_search", "web_extract"],

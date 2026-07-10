@@ -1,7 +1,7 @@
 From 2942f6ad528c1c3da55467861eabf9dd16486992 Mon Sep 17 00:00:00 2001
 From: Marketing OS <marketing-os@local.invalid>
 Date: Fri, 10 Jul 2026 18:29:20 +0800
-Subject: [PATCH 3/3] feat(marketing-os): read native account operating context
+Subject: [PATCH 3/4] feat(marketing-os): read native account operating context
 
 ---
  apps/desktop/electron/main.cjs             |  11 +

@@ -62,7 +62,7 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 | 两套桌面 UI | 当前产品壳为根目录 `src/` + `electron/`；Hermes fork 自身已有 `apps/desktop/`（Electron + React、原生 chat/session/skills/messaging/cron/approval/settings，约 437 个 src 文件）。继续维护前者会形成第二套壳 |
 | 自动化 | 2026-07-10 当前工作树全量 Python：1325 passed，TypeScript `tsc --noEmit` 通过，秘密扫描通过；1 个已知 Starlette/httpx 弃用警告 |
 | 构建 | backend 43MB、Hermes 发行源树 39MB、MCP+Chromium 407MB；Electron x64 DMG 约 352MB（未签名） |
-| Hermes fork | 嵌套产品分支 `codex/marketing-os-runtime` 已提交至 `2942f6ad5`；上游 SHA + 产品 tree `4cfa99784e89` + 三个 checksummed patch 已锁定，nested repo clean，临时目录重放可得到同一 tree |
+| Hermes fork | 嵌套产品分支 `codex/marketing-os-runtime` 已提交至 `607090b31`；上游 SHA + 产品 tree `ec6f4d9e13f3` + 四个 checksummed patch 已锁定，nested repo clean，临时目录重放可得到同一 tree |
 | 打包验收 | 包内 Hermes manifest/source、MCP CLI/Chromium 均通过结构 hard gate；冻结 backend 真实创建 Agent session 并调用 L0，未调用外部模型 |
 
 ### 自动化不能证明的事情
@@ -89,6 +89,8 @@ UI 同样必须纠偏。`runtime/hermes-agent/apps/desktop` 已经拥有 Hermes 
 2026-07-10 原生切入基线已落地：fork 内新增唯一产品身份 `marketing_os/product.py`，默认 Agent identity 和系统指导直接由 fork 装配；`tui_gateway` 原生暴露产品状态；`apps/desktop` 根路由成为原生工作台，对话迁至 `/chat` 并兼容旧会话路由；安装包、窗口、协议、导航、通知和多语言用户文案统一为 Marketing OS。生产构建、类型检查、lint、3 个 Python 契约、10 个定向 UI 契约、14 个二级窗口路由契约均通过。该基线证明 fork 已可直接承载产品，但账号、证据、内容、发布和学习领域能力仍在迁移前，不能写成“套壳已经全部清除”。
 
 第一条领域纵切也已启动：fork 内的 `AccountContextRepository` 不回调 FastAPI、不复制数据，直接以只读方式消费现有 `accounts.json + agent_core.db` 真相源；原生 Gateway 提供 `marketing.accounts.list` 与 `marketing.account.context`，原生工作台已读取真实账号数量。6 个定向 Python 契约通过，并在本机真实数据上读到 1 个抖音账号；该账号当前生命周期仍为 `not_started`、没有 DNA/真实受众快照，这是真实数据缺口，不做 UI 伪填充。写入所有权和 schema migration 尚未迁入 fork。
+
+同一投影已注册为 Hermes 原生 `marketing` toolset：`marketing_read_accounts` 与 `marketing_read_account_context` 默认进入桌面、消息渠道和 cron 的核心工具集。真实工具 dispatcher 已在本机读取账号 `acct_194dedab3145` 并返回 `not_started → draft_audience_hypothesis`，不经过外层 `HermesAgentService/tool_manifest/FastAPI`。这完成了“UI 能看”到“Agent 自己能取证”的第一步；会话级账号绑定和写入动作仍待迁移。
 
 ### P0-00 迁移映射（当前 → 唯一目标）
 
@@ -219,7 +221,7 @@ UserGoal
 | 5 | R1-02 | 图文真实生产纵切 | Agent 正文/双平台变体进入 ContentAsset；缺正文、缺引用、复制/重复变体均阻断；不自动评分 | automated partial（迁入 fork 后必须重验） |
 | 6 | R2-01 | 发布单真相源 | 已确认 JSON/UI/SQL 双路径；暂不继续改，待 R0-00 迁移骨架确定后在新边界完成 | audit complete，implementation paused |
 | 7 | R2-02 | 未校准预测降级 | 软文已只给 uncalibrated readiness；不露脸视频及其他生产路线仍需清除固定区间 | automated partial（soft article only） |
-| 8 | R3-01 | 领域服务接入 fork | 取消 Tool Manifest → FastAPI server 反向依赖；Account/Content/Publishing 作为 fork 内建领域端口 | code + automated partial：Account 只读投影与原生 Gateway 已接入；写入、Content、Publishing pending |
+| 8 | R3-01 | 领域服务接入 fork | 取消 Tool Manifest → FastAPI server 反向依赖；Account/Content/Publishing 作为 fork 内建领域端口 | code + automated + dev-runtime partial：Account 只读投影、Gateway、原生 toolset 已接入并读到真实账号；会话绑定、写入、Content、Publishing pending |
 | 9 | R3-02 | 单一账号浏览器 profile | 登录与后台托管复用同一身份，跨重启不重复扫码 | pending |
 | 10 | R4-01 | 真人/打包验收门 | Electron UI E2E + 干净机 + 真实内容审稿 + 回执/指标闭环 | pending |
 

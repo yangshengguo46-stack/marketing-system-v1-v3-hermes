@@ -1,19 +1,23 @@
 {
   "repository": "https://github.com/NousResearch/hermes-agent.git",
   "baseline_commit": "4488fe134b1de4359f3a4f1f8368576413e6e268",
-  "product_tree": "4cfa99784e89d899268fdb63d5bfd45a96c50eb1",
+  "product_tree": "ec6f4d9e13f39f680f36f881cc967f8348e27061",
   "patches": [
     {
       "file": "hermes-patches/0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch",
-      "sha256": "4b6f97756e2511f2aa73f9cd846064fd40d0c37449a9b5ab887d1be5e2013ba5"
+      "sha256": "818a85781b02aebc1247231c50847f90e2bba135e26fe5ec7bb71bb86b5a4ff0"
     },
     {
       "file": "hermes-patches/0002-feat-marketing-os-establish-native-product-fork.patch",
-      "sha256": "f16a82f8cb1bf926976cc89069f5fef3837d63dc80147843d30b3cce1b74bf67"
+      "sha256": "534a3c97ddd4b208574d8f717408bccf9e07adc7805e54500759fa63f95b23a0"
     },
     {
       "file": "hermes-patches/0003-feat-marketing-os-read-native-account-operating-cont.patch",
-      "sha256": "2121c2b15039b590fb54067b624e3b40a01146bdc73c27008c5a8d550f30ab23"
+      "sha256": "95eb7a867332067506ed3ba5fbc0554ff4f59b5ae94d9e46de1dd8325b1766c5"
+    },
+    {
+      "file": "hermes-patches/0004-feat-marketing-os-register-native-account-tools.patch",
+      "sha256": "5019c772b943608cd14fc5b5d95af5baec16b58c676982a5549419f741da2ed0"
     }
   ]
 }
