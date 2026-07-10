@@ -1,15 +1,14 @@
 # 智能营销桌面 Agent
 
-面向长期账号运营的桌面智能体。Electron/React 提供账号、趋势、选题、任务与审批界面；营销引擎提供结构化业务能力；Hermes 源码作为可裁剪的 Agent Runtime，而不是外置 CLI 依赖。
+面向长期账号运营的桌面智能体。Hermes 源码是唯一 Agent 主运行时；Marketing OS 的账号、趋势、内容、发布与学习能力直接增强 Hermes 的原生会话、任务、记忆、工具和渠道链路，不建立第二套 Agent。
 
 ## 目录边界
 
 | 目录 | 责任 |
 |---|---|
-| `src/` | React 产品界面 |
-| `electron/` | 桌面生命周期、平台登录会话、安全边界与 IPC |
-| `engine/marketing-os/` | 本项目自己的 FastAPI、营销工具和技能源码 |
-| `runtime/hermes-agent/` | 官方 Hermes 上游源码工作副本，不存放业务数据 |
+| `runtime/hermes-agent/` | Hermes 主运行时、原生桌面与 Marketing OS 增强源码；不存放业务数据 |
+| `engine/marketing-os/` | 迁移期领域服务与旧 FastAPI，逐段并入 Hermes 原生能力边界 |
+| `src/`、`electron/` | 迁移期旧桌面交互来源；功能对等后退出默认产品路径 |
 | `backend/` | Python 后端打包配置与构建产物目录 |
 | `docs/research/` | Agent memory、harness 与长期学习资料库 |
 | `tests/` | 营销引擎和桌面契约测试 |

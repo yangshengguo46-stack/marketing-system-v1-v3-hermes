@@ -177,17 +177,16 @@
 - 随身助手内部重排：微信/飞书渠道卡在左侧，二维码/连接提示固定在右侧；未连接时显示“等待扫码”占位，出 QR 时不再把页面撑散。
 - 已连接账号行重构为 `平台标识 / 账号身份 / 指标组 / 状态 / 操作组`，修复抖音多一个“托管”按钮时把在线状态和操作按钮挤在一起的问题。
 - 白天模式同步补齐 `account-panel`、`channel-onboarding`、`diagnostic-item`、`connected-list`、`account-stat` 的背景、边框和文字颜色。
-- 当前验证：微信 bridge 复测 1.7 秒返回 `liteapp.weixin.qq.com` QR URL 和 `qr_image`；`python3 -m pytest tests/test_channels.py tests/test_mobile_bridge.py -q` 7 项通过；`npx tsc --noEmit`、`npx vite build`、`git diff --check` 通过。
+- 当前验证：微信扫码辅助进程复测 1.7 秒返回 `liteapp.weixin.qq.com` QR URL 和 `qr_image`；二维码事件回归、`npx tsc --noEmit`、`npx vite build`、`git diff --check` 通过。消息进入 Agent 后的路由已由下节 2026-07-10 原生收口方案接管。
 
-### CLOSE-02 随身助手消息路由修复（2026-07-08）
+### CLOSE-02 随身助手消息路由原生收口（2026-07-10，覆盖 07-08 HTTP 转发方案）
 
-- 本机实际存在三层 Hermes 相关目录：全局旧配置 `~/.hermes`、项目内源码 `runtime/hermes-agent`、桌面应用隔离 runtime `~/Library/Application Support/marketing-os-desktop/agent-runtime`。飞书当前使用的是后两者，不应回落到全局旧 Hermes 心智。
-- 根因：飞书扫码授权成功后，入站消息仍由 `hermes gateway` 默认 Agent 会话处理，所以回复表现为 Hermes 原始人格，而不是 Marketing OS Agent。
-- 修复：新增 `gateway/marketing_os_bridge.py`，在 Hermes gateway 收到飞书/微信已授权用户私聊时，短路默认 Hermes 对话循环，转发到本机 Marketing OS API：`/agent/sessions` → `/agent/messages` → `/agent/runs/{task_id}` → `/agent/sessions/{session_id}/messages`，再通过原平台 adapter 回发。
-- 移动端会话映射写入 app runtime 的 `marketing_os_mobile_sessions.json`，同一飞书/微信用户连续对话会复用同一 Marketing OS 会话，不复制第二套 memory 或任务系统。
-- Electron 启动 Hermes/channel bridge 时注入并持久化 `MARKETING_OS_API_BASE`、`MARKETING_OS_API_TOKEN`、`MARKETING_OS_MOBILE_BRIDGE_ENABLED=1`；`channel_bridge.py configure` 检测这些值变更后会重启 gateway。
-- Hermes gateway 重启策略从单次 `gateway restart` 改为显式 `gateway stop` + `gateway start`，避免 launchd 下 restart 超时但半成功导致前端误报。
-- 当前验证：`python3 -m pytest tests/test_mobile_bridge.py tests/test_channels.py tests/test_product_closure_guard.py -q` 15 项通过；`npx tsc --noEmit`、`python3 -m py_compile electron/channel_bridge.py runtime/hermes-agent/gateway/marketing_os_bridge.py`、`git diff --check` 通过；本机 launchd gateway PID 65776 已连上飞书，安装 `python-socks` 后最新日志不再出现 SOCKS 代理缺包错误。
+- 架构校准：Hermes 是唯一主运行时；Marketing OS 的账号、证据、内容、发布和学习模块是写入 Hermes 源码与工具链的原生增强，不拥有第二套 Agent 生命周期。
+- 删除 `gateway/marketing_os_bridge.py`。飞书/微信消息不再短路到本机 FastAPI 的 `/agent/sessions` 和 `/agent/messages`，也不再维护 `marketing_os_mobile_sessions.json` 映射。
+- 入站消息现在继续走同一条 Hermes gateway 原生链：授权 → Hermes session → Marketing OS 系统指导与账号工具 → 原生 memory/task/tool loop → 原平台回发。桌面、飞书、微信只是不同行为 surface，不再是不同 Agent。
+- `marketing_os/messaging.py` 只在原生入站管线前增加产品便利：可信首个私聊自动设为通知窗口；中文“设为通知窗口”转换为 Hermes 内建 `/sethome`。它不发 HTTP、不创建会话、不执行模型。
+- Electron 不再注入或持久化 `MARKETING_OS_MOBILE_BRIDGE_ENABLED`，`channel_bridge.py configure` 也不再把 API 地址和 token 写入 Hermes 配置；仅同步营销数据目录。扫码辅助进程仍负责二维码和 gateway 启停，不参与 Agent 推理。
+- 自动化证据：原生产品身份、消息准备、Gateway 产品状态 10 项通过；未知用户不能认领通知窗口，普通 Hermes 环境不受产品便利逻辑影响。真实飞书/微信连续对话仍需重启新版 gateway 后人工复验。
 
 ### CLOSE-04/05 内容生产端三线工单收口（2026-07-08）
 
