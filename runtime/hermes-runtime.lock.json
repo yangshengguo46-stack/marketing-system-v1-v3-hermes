@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/NousResearch/hermes-agent.git",
   "baseline_commit": "4488fe134b1de4359f3a4f1f8368576413e6e268",
-  "product_tree": "5ef8d1441386faf8c16ef57e114136d694d6fd74",
+  "product_tree": "db867f9ae326154f6908d910702529658c251b9a",
   "patches": [
     {
       "file": "hermes-patches/0001-feat-gateway-route-mobile-messages-to-Marketing-OS-a.patch",
@@ -42,6 +42,10 @@
     {
       "file": "hermes-patches/0010-feat-marketing-os-own-native-content-production-chec.patch",
       "sha256": "75f5ff50d8eded81654ffe78146a59a139f7b9c29a6b30c4a1857074d244ccf7"
+    },
+    {
+      "file": "hermes-patches/0011-feat-marketing-os-capture-native-evidence-packs.patch",
+      "sha256": "0ebb2593648f08f5412b70a56654401c1b26fa4bd252585a5c66e245b37ab137"
     }
   ]
 }

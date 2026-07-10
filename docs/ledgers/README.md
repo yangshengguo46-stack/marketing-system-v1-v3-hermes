@@ -1,6 +1,6 @@
 # 产品台账索引
 
-> 2026-07-10 重塑：[`00-current-product-status.md`](./00-current-product-status.md) 是唯一实时执行入口。
+> 2026-07-10 重塑：[`00-current-product-status.md`](./00-current-product-status.md) 是唯一实时执行入口；[`../architecture/REBUILD_BASELINE.md`](../architecture/REBUILD_BASELINE.md) 是唯一目标架构与删除门定义。
 
 `LEDGER.md` 和 `AGENT_CORE_LEDGER.md` 保留第一版产品宪法和历史判断；编号子台账保留领域设计、测试证据与事故记录。任何旧文件中的“当前入口”“下一领取任务”“完成百分比”如果与 00 总控冲突，以 00 总控和当前代码为准。
 
@@ -12,7 +12,7 @@
 2. 不以新增字段、页面、Fake、单测数量或本地占位执行器冒充产品完成。
 3. 先核验开源方案；采用前记录版本/commit、许可证、数据流、秘密、失败回退和卸载路径。
 4. 不恢复已删除的旧插件、外部 Chrome/CDP、后端 Cookie、CLI 单轮 Agent 或运行时自动安装。
-5. （2026-07-10 用户纠偏）Marketing OS 是 Hermes 的产品 fork；UI、Agent loop、SessionDB、tools、gateway、cron、memory、skills、plugins 等源码均可深度改造。禁止为保持上游纯净而另造 adapter/bridge/sidecar 主链；改动仍须附回归测试、数据迁移和安全审计。
+5. （2026-07-10 用户纠偏）Hermes 源码是产品主干，Marketing OS 是其原生营销增强；UI、Agent loop、SessionDB、tools、gateway、cron、memory、skills、plugins 等源码均可深度改造。禁止为保持上游纯净而另造 adapter/bridge/sidecar 主链；改动仍须附回归测试、数据迁移和安全审计。
 6. Hermes 上游代码与 Marketing OS 既有代码都只是可拆解的材料，不是不可变边界。迁移按能力域重新组合，不按旧目录照搬；保留的是全周期经营、证据驱动、长期学习和真实回执闭环的设计哲学。
 7. 结构重塑必须服务同一纵向闭环；禁止另造第二套 Agent、数据库、浏览器身份或发布真相源。
 8. 统一使用 `designed / code / automated / dev-runtime / packaged / human-loop` 六级证据。
@@ -46,7 +46,7 @@
 只执行 docs/ledgers/00-current-product-status.md 中的一个 R-ID。
 先读该总控、LEDGER.md、AGENT_CORE_LEDGER.md 和 docs/architecture/REBUILD_BASELINE.md；
 再按需要读取对应领域台账，不从旧台账领取“当前任务”。
-不得修改两个冻结总台账，不得扩大任务范围，不得把测试或占位实现标记为真人完成。
+两个冻结总台账只作历史证据，不从其中领取架构限制或任务；不得扩大任务范围，不得把测试或占位实现标记为真人完成。
 先给出当前代码证据和纵向闭环影响，再实现；结束时回填代码路径、自动化、开发机、
 打包、真人证据和未完成风险。不得以单测数量、mock、占位 provider 或页面展示冒充用户可用。
 ```

@@ -1,0 +1,1127 @@
+From 9d27abc3b167f12c0d367e976a9de645a42f3c36 Mon Sep 17 00:00:00 2001
+From: Marketing OS <marketing-os@local.invalid>
+Date: Fri, 10 Jul 2026 21:46:35 +0800
+Subject: [PATCH] feat(marketing-os): capture native evidence packs
+
+---
+ hermes_cli/browser_connect.py                 |   7 -
+ marketing_os/domains/__init__.py              |   2 +
+ marketing_os/domains/content_assets.py        |  10 +-
+ marketing_os/domains/content_production.py    |   8 +-
+ marketing_os/domains/evidence.py              | 334 ++++++++++++++++++
+ marketing_os/evidence_capture.py              |  65 ++++
+ marketing_os/product.py                       |   6 +-
+ model_tools.py                                |  23 ++
+ tests/test_marketing_os_account_context.py    |   5 +-
+ tests/test_marketing_os_content_production.py | 217 +++++++++++-
+ tests/test_tui_gateway_server.py              |   6 +-
+ tools/marketing_os_tools.py                   |  60 +++-
+ tools/web_tools.py                            |  18 +-
+ toolsets.py                                   |   3 +-
+ tui_gateway/server.py                         |  28 +-
+ 15 files changed, 755 insertions(+), 37 deletions(-)
+ create mode 100644 marketing_os/domains/evidence.py
+ create mode 100644 marketing_os/evidence_capture.py
+
+diff --git a/hermes_cli/browser_connect.py b/hermes_cli/browser_connect.py
+index 7ed4f2e4d..ca548151e 100644
+--- a/hermes_cli/browser_connect.py
++++ b/hermes_cli/browser_connect.py
+@@ -177,13 +177,6 @@ def manual_chrome_debug_command(port: int = DEFAULT_BROWSER_CDP_PORT, system: st
+         argv = [candidates[0], *_chrome_debug_args(port)]
+         return subprocess.list2cmdline(argv) if system == "Windows" else shlex.join(argv)
+ 
+-    if system == "Darwin":
+-        data_dir = chrome_debug_data_dir()
+-        return (
+-            f'open -a "Google Chrome" --args --remote-debugging-port={port} '
+-            f'--user-data-dir="{data_dir}" --no-first-run --no-default-browser-check'
+-        )
+-
+     return None
+ 
+ 
+diff --git a/marketing_os/domains/__init__.py b/marketing_os/domains/__init__.py
+index 2c08a01f6..9e9891b52 100644
+--- a/marketing_os/domains/__init__.py
++++ b/marketing_os/domains/__init__.py
+@@ -4,10 +4,12 @@ from .account_context import AccountContextRepository
+ from .account_lifecycle import AccountLifecycleRepository
+ from .content_assets import ContentAssetRepository
+ from .content_production import ContentProductionPlanner
++from .evidence import EvidenceRepository
+ 
+ __all__ = [
+     "AccountContextRepository",
+     "AccountLifecycleRepository",
+     "ContentAssetRepository",
+     "ContentProductionPlanner",
++    "EvidenceRepository",
+ ]
+diff --git a/marketing_os/domains/content_assets.py b/marketing_os/domains/content_assets.py
+index 0d63e8140..3477ccb55 100644
+--- a/marketing_os/domains/content_assets.py
++++ b/marketing_os/domains/content_assets.py
+@@ -12,6 +12,7 @@ from typing import Any, Iterator
+ 
+ from marketing_os.data_paths import MarketingDataPaths
+ from marketing_os.domains.content_production import CONTENT_KINDS, VALID_PLATFORMS
++from marketing_os.domains.evidence import EvidenceRepository
+ 
+ 
+ ASSET_TYPES = {"script", "video", "image", "caption"}
+@@ -113,9 +114,16 @@ class ContentAssetRepository:
+             raise ValueError("content must be a non-empty object")
+         if any(str(key).startswith("_") for key in content):
+             raise ValueError("content keys beginning with '_' are reserved")
++        verified_evidence = EvidenceRepository(self.paths).require_verified(
++            user_id=user_id,
++            account_id=account_id,
++            evidence_ids=evidence_refs or [],
++            require_any=True,
++        )
+         payload = dict(content)
+         payload["_production_kind"] = production_kind
+-        payload["_provenance_evidence_refs"] = _bounded_refs(evidence_refs or [], "evidence_refs")
++        payload["_provenance_evidence_refs"] = [item["id"] for item in verified_evidence]
++        payload["_evidence_verification_level"] = "source_integrity"
+         payload["_provenance_memory_refs"] = _bounded_refs(memory_refs or [], "memory_refs")
+         payload["_created_by"] = "hermes-native-marketing"
+         encoded = _bounded_json(payload, "content", 500_000)
+diff --git a/marketing_os/domains/content_production.py b/marketing_os/domains/content_production.py
+index 453824120..ecfc4fdf7 100644
+--- a/marketing_os/domains/content_production.py
++++ b/marketing_os/domains/content_production.py
+@@ -44,7 +44,7 @@ SHARED_CAPABILITIES = {
+     },
+     "evidence_research": {
+         "purpose": "使用可回链来源核对事实、热点和案例，禁止模型补造数据。",
+-        "native_tools": ["web_search", "web_extract"],
++        "native_tools": ["web_search", "web_extract", "marketing_read_evidence_pack"],
+         "maturity": "ready",
+     },
+     "copywriting": {
+@@ -160,8 +160,8 @@ class ContentProductionPlanner:
+             },
+             {
+                 "id": "evidence",
+-                "status": "references_supplied_needs_verification" if evidence else "needs_research",
+-                "rule": "事实性主张必须绑定来源；创意表达不能冒充事实。",
++                "status": "verified_evidence_ready" if evidence else "needs_research",
++                "rule": "事实性主张必须绑定当前账号由 Hermes 真实采集的 EvidencePack ID；创意表达不能冒充事实。",
+             },
+             {
+                 "id": "rights",
+@@ -179,7 +179,7 @@ class ContentProductionPlanner:
+         elif not evidence:
+             next_action = "检索并核对支撑本选题的证据，再开始写父稿"
+         else:
+-            next_action = "核对证据引用后生成父稿，再保存为可恢复草稿"
++            next_action = "使用已固化的 EvidencePack 生成父稿，再保存为可恢复草稿"
+ 
+         return {
+             "status": "planned",
+diff --git a/marketing_os/domains/evidence.py b/marketing_os/domains/evidence.py
+new file mode 100644
+index 000000000..3c757dabc
+--- /dev/null
++++ b/marketing_os/domains/evidence.py
+@@ -0,0 +1,334 @@
++"""Account-scoped evidence captured by the native Hermes tool runtime."""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import re
++import sqlite3
++from contextlib import contextmanager
++from datetime import datetime, timezone
++from typing import Any, Iterator
++from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
++
++from marketing_os.data_paths import MarketingDataPaths
++
++
++VERIFIED_STATUS = "verified"
++_TRACKING_QUERY_KEYS = {
++    "fbclid",
++    "gclid",
++    "mc_cid",
++    "mc_eid",
++    "spm",
++}
++
++
++class EvidenceRepository:
++    """Persist evidence only after a real Hermes collector returned content.
++
++    The repository has no model-facing create method.  The native tool result
++    seam calls :meth:`capture_web_extract_result`; model tools may only read
++    the generated records and cite their system-generated IDs.
++    """
++
++    def __init__(self, paths: MarketingDataPaths | None = None):
++        self.paths = paths or MarketingDataPaths.from_env()
++        self._ensure_schema()
++
++    def capture_web_extract_result(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        result: Any,
++        session_id: str,
++        tool_call_id: str = "",
++        requested_urls: list[str] | None = None,
++    ) -> list[dict[str, Any]]:
++        payload = _decode_result(result)
++        result_items = payload.get("results") if isinstance(payload, dict) else None
++        if not isinstance(result_items, list):
++            return []
++
++        captured: list[dict[str, Any]] = []
++        for item in result_items:
++            if not isinstance(item, dict) or item.get("error"):
++                continue
++            canonical_url = _canonical_url(item.get("url"))
++            content = str(item.get("content") or "").strip()
++            if not canonical_url or not content:
++                continue
++            title = _optional_text(item.get("title"), 500)
++            reported_hash = str(item.get("source_content_sha256") or "").strip().lower()
++            content_hash = (
++                reported_hash
++                if re.fullmatch(r"[0-9a-f]{64}", reported_hash)
++                else hashlib.sha256(content.encode("utf-8")).hexdigest()
++            )
++            digest = hashlib.sha256(
++                f"{user_id}\0{account_id}\0web_extract\0{canonical_url}\0{content_hash}".encode(
++                    "utf-8"
++                )
++            ).hexdigest()[:28]
++            evidence_id = f"evidence_{digest}"
++            now = _now()
++            excerpt = _excerpt(content)
++            metadata = {
++                "collector": "hermes.web_extract",
++                "content_characters": len(content),
++                "excerpt_origin": str(item.get("content_origin") or "extracted_source"),
++                "source_hash_origin": (
++                    "native_collector_raw_content"
++                    if re.fullmatch(r"[0-9a-f]{64}", reported_hash)
++                    else "returned_content_fallback"
++                ),
++                "requested_urls": [
++                    value
++                    for value in (_canonical_url(url) for url in (requested_urls or []))
++                    if value
++                ][:20],
++                "claim_truth_verified": False,
++                "verification_note": (
++                    "Source integrity was verified by a successful native fetch; "
++                    "individual claims may still require cross-source verification."
++                ),
++            }
++            with self._transaction() as db:
++                db.execute(
++                    """INSERT INTO evidence_records
++                    (id,user_id,account_id,source_type,provider,canonical_url,title,excerpt,
++                     content_sha256,status,verification_level,captured_at,session_id,
++                     tool_call_id,metadata_json,created_at,updated_at)
++                    VALUES (?,?,?,'web',?,?,?,?,?,'verified','source_integrity',?,?,?,?,?,?)
++                    ON CONFLICT(id) DO UPDATE SET
++                        title=excluded.title,
++                        excerpt=excluded.excerpt,
++                        session_id=excluded.session_id,
++                        tool_call_id=excluded.tool_call_id,
++                        metadata_json=excluded.metadata_json,
++                        updated_at=excluded.updated_at""",
++                    (
++                        evidence_id,
++                        user_id,
++                        account_id,
++                        "hermes_web_extract",
++                        canonical_url,
++                        title,
++                        excerpt,
++                        content_hash,
++                        now,
++                        session_id,
++                        tool_call_id,
++                        json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
++                        now,
++                        now,
++                    ),
++                )
++                row = db.execute(
++                    "SELECT * FROM evidence_records WHERE id=?", (evidence_id,)
++                ).fetchone()
++            captured.append(_record(row))
++        return captured
++
++    def require_verified(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        evidence_ids: list[str],
++        require_any: bool = True,
++    ) -> list[dict[str, Any]]:
++        refs = _evidence_ids(evidence_ids)
++        if require_any and not refs:
++            raise ValueError(
++                "content production requires at least one verified EvidencePack record"
++            )
++        if not refs:
++            return []
++        placeholders = ",".join("?" for _ in refs)
++        with self._connect() as db:
++            rows = db.execute(
++                f"""SELECT * FROM evidence_records
++                WHERE user_id=? AND account_id=? AND status='verified'
++                  AND id IN ({placeholders})""",
++                [user_id, account_id, *refs],
++            ).fetchall()
++        found = {row["id"]: _record(row) for row in rows}
++        missing = [ref for ref in refs if ref not in found]
++        if missing:
++            raise ValueError(
++                "evidence_refs must be verified records captured in the current account scope: "
++                + ", ".join(missing)
++            )
++        return [found[ref] for ref in refs]
++
++    def list(
++        self,
++        *,
++        user_id: str,
++        account_id: str,
++        status: str | None = VERIFIED_STATUS,
++        limit: int = 20,
++    ) -> dict[str, Any]:
++        safe_limit = max(1, min(int(limit), 100))
++        query = "SELECT * FROM evidence_records WHERE user_id=? AND account_id=?"
++        params: list[Any] = [user_id, account_id]
++        if status:
++            if status not in {"captured", "verified", "rejected", "stale"}:
++                raise ValueError("unsupported evidence status")
++            query += " AND status=?"
++            params.append(status)
++        query += " ORDER BY captured_at DESC, id DESC LIMIT ?"
++        params.append(safe_limit)
++        with self._connect() as db:
++            rows = db.execute(query, params).fetchall()
++        records = [_record(row) for row in rows]
++        return {
++            "user_id": user_id,
++            "account_id": account_id,
++            "records": records,
++            "total": len(records),
++            "verification_semantics": (
++                "verified means source integrity is complete; it does not assert every claim is true"
++            ),
++        }
++
++    def _ensure_schema(self) -> None:
++        self.paths.agent_db.parent.mkdir(parents=True, exist_ok=True)
++        with self._connect() as db:
++            db.executescript(
++                """
++                CREATE TABLE IF NOT EXISTS evidence_records (
++                    id TEXT PRIMARY KEY,
++                    user_id TEXT NOT NULL,
++                    account_id TEXT NOT NULL,
++                    source_type TEXT NOT NULL,
++                    provider TEXT NOT NULL,
++                    canonical_url TEXT NOT NULL,
++                    title TEXT NOT NULL DEFAULT '',
++                    excerpt TEXT NOT NULL,
++                    content_sha256 TEXT NOT NULL,
++                    status TEXT NOT NULL,
++                    verification_level TEXT NOT NULL,
++                    captured_at TEXT NOT NULL,
++                    session_id TEXT NOT NULL,
++                    tool_call_id TEXT NOT NULL DEFAULT '',
++                    metadata_json TEXT NOT NULL DEFAULT '{}',
++                    created_at TEXT NOT NULL,
++                    updated_at TEXT NOT NULL
++                );
++                CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_scope_content
++                    ON evidence_records(user_id, account_id, provider, canonical_url, content_sha256);
++                CREATE INDEX IF NOT EXISTS idx_evidence_scope_status
++                    ON evidence_records(user_id, account_id, status, captured_at);
++                """
++            )
++
++    def _connect(self) -> sqlite3.Connection:
++        db = sqlite3.connect(self.paths.agent_db, timeout=10)
++        db.row_factory = sqlite3.Row
++        db.execute("PRAGMA foreign_keys=ON")
++        return db
++
++    @contextmanager
++    def _transaction(self) -> Iterator[sqlite3.Connection]:
++        db = self._connect()
++        try:
++            db.execute("BEGIN IMMEDIATE")
++            yield db
++            db.commit()
++        except Exception:
++            db.rollback()
++            raise
++        finally:
++            db.close()
++
++
++def _decode_result(result: Any) -> dict[str, Any]:
++    if isinstance(result, dict):
++        return result
++    if not isinstance(result, str):
++        return {}
++    try:
++        value = json.loads(result)
++    except (TypeError, ValueError):
++        return {}
++    return value if isinstance(value, dict) else {}
++
++
++def _canonical_url(value: Any) -> str:
++    text = str(value or "").strip()
++    if not text:
++        return ""
++    try:
++        parsed = urlsplit(text)
++    except ValueError:
++        return ""
++    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
++        return ""
++    if parsed.username or parsed.password:
++        return ""
++    hostname = parsed.hostname.lower()
++    try:
++        port = parsed.port
++    except ValueError:
++        return ""
++    netloc = hostname
++    if port and not (
++        (parsed.scheme.lower() == "http" and port == 80)
++        or (parsed.scheme.lower() == "https" and port == 443)
++    ):
++        netloc = f"{hostname}:{port}"
++    query = [
++        (key, item)
++        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
++        if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_QUERY_KEYS
++    ]
++    return urlunsplit(
++        (
++            parsed.scheme.lower(),
++            netloc,
++            parsed.path or "/",
++            urlencode(sorted(query)),
++            "",
++        )
++    )
++
++
++def _excerpt(content: str, limit: int = 4_000) -> str:
++    compact = re.sub(r"\s+", " ", content).strip()
++    if not compact:
++        raise ValueError("evidence content is empty")
++    return compact[:limit]
++
++
++def _evidence_ids(value: Any) -> list[str]:
++    if not isinstance(value, list):
++        raise ValueError("evidence_refs must be a list")
++    result: list[str] = []
++    for item in value:
++        ref = str(item or "").strip()
++        if not ref:
++            continue
++        if not re.fullmatch(r"evidence_[0-9a-f]{28}", ref):
++            raise ValueError(f"invalid EvidencePack id: {ref}")
++        if ref not in result:
++            result.append(ref)
++    if len(result) > 100:
++        raise ValueError("evidence_refs exceeds 100 records")
++    return result
++
++
++def _record(row: sqlite3.Row) -> dict[str, Any]:
++    value = dict(row)
++    value["metadata"] = json.loads(value.pop("metadata_json") or "{}")
++    return value
++
++
++def _optional_text(value: Any, limit: int) -> str:
++    return str(value or "").strip()[:limit]
++
++
++def _now() -> str:
++    return datetime.now(timezone.utc).isoformat()
+diff --git a/marketing_os/evidence_capture.py b/marketing_os/evidence_capture.py
+new file mode 100644
+index 000000000..66ad955e5
+--- /dev/null
++++ b/marketing_os/evidence_capture.py
+@@ -0,0 +1,65 @@
++"""Native Hermes tool-result seam for Marketing OS EvidencePack capture."""
++
++from __future__ import annotations
++
++import json
++from typing import Any
++
++from marketing_os.domains.evidence import EvidenceRepository
++from marketing_os.session_scope import read_tool_session_scope
++
++
++def enrich_tool_result_with_evidence(
++    *,
++    tool_name: str,
++    args: dict[str, Any],
++    result: Any,
++    task_id: str = "",
++    session_id: str = "",
++    tool_call_id: str = "",
++) -> Any:
++    """Capture successful native extraction output and expose generated IDs.
++
++    This is intentionally invoked *after* the real tool handler.  There is no
++    model-facing evidence-create operation, so an arbitrary URL or model-written
++    excerpt cannot enter the verified store through the marketing toolset.
++    """
++
++    if tool_name != "web_extract" or not isinstance(result, str):
++        return result
++    scope = read_tool_session_scope(task_id=task_id, session_id=session_id)
++    if not scope:
++        return result
++    try:
++        payload = json.loads(result)
++    except (TypeError, ValueError):
++        return result
++    if not isinstance(payload, dict) or payload.get("error"):
++        return result
++
++    records = EvidenceRepository().capture_web_extract_result(
++        user_id=str(scope["user_id"]),
++        account_id=str(scope["account_id"]),
++        result=payload,
++        session_id=str(session_id or task_id),
++        tool_call_id=str(tool_call_id or ""),
++        requested_urls=args.get("urls") if isinstance(args.get("urls"), list) else [],
++    )
++    if not records:
++        return result
++    payload["marketing_evidence"] = {
++        "records": [
++            {
++                "evidence_id": record["id"],
++                "url": record["canonical_url"],
++                "status": record["status"],
++                "verification_level": record["verification_level"],
++                "content_sha256": record["content_sha256"],
++            }
++            for record in records
++        ],
++        "citation_rule": (
++            "Use these evidence_id values in marketing content tools; raw URLs and source: strings are not valid evidence_refs."
++        ),
++    }
++    return json.dumps(payload, ensure_ascii=False, indent=2)
+diff --git a/marketing_os/product.py b/marketing_os/product.py
+index 59533d041..a5f34a983 100644
+--- a/marketing_os/product.py
++++ b/marketing_os/product.py
+@@ -87,7 +87,11 @@ PRODUCT_RUNTIME_GUIDANCE = (
+     "and never confirm an audience hypothesis until the user explicitly accepts that "
+     "exact version. "
+     "For content production, call marketing_plan_content_production before substantial "
+-    "drafting, resolve its audience and evidence gaps, then pass its returned plan_id when "
++    "drafting. Use web_search only to discover candidate sources, then call web_extract; successful "
++    "native extraction automatically returns system-generated EvidencePack IDs. Raw URLs, source: "
++    "strings and model-written excerpts are not verified evidence. Use marketing_read_evidence_pack "
++    "to resume captured research, resolve the audience and evidence gaps, then pass the plan_id and "
++    "verified evidence IDs when "
+     "saving the actual output with marketing_draft_content_create. Resume drafts with marketing_read_content_assets; "
+     "never put complete articles, scripts or transient drafts into long-term memory. "
+     "Marketing decisions must distinguish verified facts, strategy inference and "
+diff --git a/model_tools.py b/model_tools.py
+index fb16bb745..0e76d191c 100644
+--- a/model_tools.py
++++ b/model_tools.py
+@@ -1171,6 +1171,29 @@ def handle_function_call(
+                     pass
+         duration_ms = int((time.monotonic() - _dispatch_start) * 1000)
+ 
++        # Marketing OS is a Hermes product fork, not an outer agent service.
++        # Capture real web extraction results inside the native tool path so
++        # EvidencePack records are tied to the durable session/account scope.
++        # This seam runs only after the actual collector returns; the model has
++        # no parallel tool that can promote an arbitrary URL to verified data.
++        try:
++            from marketing_os.evidence_capture import enrich_tool_result_with_evidence
++
++            result = enrich_tool_result_with_evidence(
++                tool_name=function_name,
++                args=function_args,
++                result=result,
++                task_id=task_id or "",
++                session_id=session_id or "",
++                tool_call_id=tool_call_id or "",
++            )
++        except Exception as _evidence_capture_err:
++            logger.warning(
++                "native Marketing OS evidence capture failed for %s: %s",
++                function_name,
++                _evidence_capture_err,
++            )
++
+         _emit_post_tool_call_hook(
+             function_name=function_name,
+             function_args=function_args,
+diff --git a/tests/test_marketing_os_account_context.py b/tests/test_marketing_os_account_context.py
+index db3c366e0..f4dafa436 100644
+--- a/tests/test_marketing_os_account_context.py
++++ b/tests/test_marketing_os_account_context.py
+@@ -170,8 +170,9 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
+         "marketing_read_accounts",
+         "marketing_read_account_context",
+         "marketing_update_account_lifecycle",
+-        "marketing_plan_content_production",
+-        "marketing_read_content_assets",
++            "marketing_plan_content_production",
++            "marketing_read_evidence_pack",
++            "marketing_read_content_assets",
+         "marketing_draft_content_create",
+     }
+     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
+diff --git a/tests/test_marketing_os_content_production.py b/tests/test_marketing_os_content_production.py
+index ed884797d..3bc75729b 100644
+--- a/tests/test_marketing_os_content_production.py
++++ b/tests/test_marketing_os_content_production.py
+@@ -1,10 +1,13 @@
+ import json
++import hashlib
+ 
+ import hermes_state
++import model_tools
+ import pytest
+ from hermes_state import SessionDB
+ from marketing_os.data_paths import MarketingDataPaths
+-from marketing_os.domains import ContentAssetRepository, ContentProductionPlanner
++from marketing_os.domains import ContentAssetRepository, ContentProductionPlanner, EvidenceRepository
++from marketing_os.evidence_capture import enrich_tool_result_with_evidence
+ from model_tools import get_tool_definitions, handle_function_call
+ 
+ 
+@@ -48,6 +51,37 @@ def _bind_session(tmp_path, monkeypatch, account_id="acct-1"):
+     return paths
+ 
+ 
++def _capture_evidence(*, session_id="session-1", task_id="session-1"):
++    raw_content = "该报告记录了 AI 辅助工作流程的原始样本、方法与研究边界。"
++    summary = "该报告记录了 AI 辅助工作流程的样本和研究边界。"
++    enriched = enrich_tool_result_with_evidence(
++        tool_name="web_extract",
++        args={"urls": ["https://Example.com/report?utm_source=test#section"]},
++        result=json.dumps(
++            {
++                "results": [
++                    {
++                        "url": "https://Example.com/report?utm_source=test#section",
++                        "title": "AI 工作方式报告",
++                        "content": summary,
++                        "content_origin": "llm_summary",
++                        "source_content_sha256": hashlib.sha256(
++                            raw_content.encode("utf-8")
++                        ).hexdigest(),
++                        "error": None,
++                    }
++                ]
++            },
++            ensure_ascii=False,
++        ),
++        task_id=task_id,
++        session_id=session_id,
++        tool_call_id="call-web-1",
++    )
++    payload = json.loads(enriched)
++    return payload, payload["marketing_evidence"]["records"][0]["evidence_id"]
++
++
+ @pytest.mark.parametrize(
+     ("objective", "kind"),
+     [
+@@ -70,11 +104,12 @@ def test_native_planner_selects_three_connected_lanes(objective, kind):
+ 
+ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, monkeypatch):
+     paths = _bind_session(tmp_path, monkeypatch)
++    extract_result, evidence_id = _capture_evidence()
+     plan_args = {
+         "objective": "写一篇面向 AI 入门职场人的公众号软文",
+         "platforms": ["wechat_official"],
+         "audience": "想提高效率的职场人",
+-        "evidence_refs": ["source:https://example.com/report"],
++        "evidence_refs": [evidence_id],
+     }
+     planned = json.loads(
+         handle_function_call(
+@@ -99,7 +134,7 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
+                 "content": {
+                     "markdown": "# 普通人如何把 AI 变成工作搭档\n\n这是一份可审阅草稿。"
+                 },
+-                "evidence_refs": ["source:https://example.com/report"],
++                "evidence_refs": [evidence_id],
+             },
+             task_id="session-1",
+             session_id="session-1",
+@@ -127,10 +162,13 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
+ 
+     assert planned["account_scope"]["account_id"] == "acct-1"
+     assert planned["checkpoint_status"] == "planned"
+-    assert planned["recommended_next_action"].startswith("核对证据引用")
++    assert planned["recommended_next_action"].startswith("使用已固化")
++    assert extract_result["marketing_evidence"]["records"][0]["status"] == "verified"
+     assert created["account_id"] == "acct-1"
+     assert created["content"]["_created_by"] == "hermes-native-marketing"
+     assert created["content"]["_production_plan_id"] == planned["plan_id"]
++    assert created["content"]["_provenance_evidence_refs"] == [evidence_id]
++    assert created["content"]["_evidence_verification_level"] == "source_integrity"
+     assert listed["total"] == 1
+     assert listed["assets"][0]["id"] == created["id"]
+     assert replanned["plan_id"] == planned["plan_id"]
+@@ -147,6 +185,7 @@ def test_content_write_schema_cannot_override_account_scope():
+ 
+     assert "account_id" not in create_properties
+     assert "account_id" not in plan_properties
++    assert "marketing_read_evidence_pack" in by_name
+     assert "marketing_read_content_assets" in by_name
+ 
+ 
+@@ -170,6 +209,20 @@ def test_content_repository_rejects_reserved_provenance_keys(tmp_path):
+ def test_draft_requires_real_plan_in_same_account_scope(tmp_path):
+     paths = _paths(tmp_path)
+     repository = ContentAssetRepository(paths)
++    evidence_id = EvidenceRepository(paths).capture_web_extract_result(
++        user_id="default",
++        account_id="acct-1",
++        result={
++            "results": [
++                {
++                    "url": "https://example.com/report",
++                    "title": "报告",
++                    "content": "真实采集的正文",
++                }
++            ]
++        },
++        session_id="session-1",
++    )[0]["id"]
+ 
+     with pytest.raises(KeyError, match="plan not found"):
+         repository.create_draft(
+@@ -181,4 +234,160 @@ def test_draft_requires_real_plan_in_same_account_scope(tmp_path):
+             platform="zhihu",
+             production_kind="article_soft",
+             content={"markdown": "正文"},
++            evidence_refs=[evidence_id],
+         )
++
++
++def test_raw_url_cannot_be_promoted_to_verified_evidence(tmp_path, monkeypatch):
++    _bind_session(tmp_path, monkeypatch)
++
++    result = json.loads(
++        handle_function_call(
++            "marketing_plan_content_production",
++            {
++                "objective": "写一篇有事实依据的知乎文章",
++                "audience": "AI 入门用户",
++                "evidence_refs": ["source:https://example.com/report"],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++
++    assert "invalid EvidencePack id" in result["error"]
++
++
++def test_evidence_capture_is_idempotent_and_account_scoped(tmp_path, monkeypatch):
++    paths = _bind_session(tmp_path, monkeypatch)
++    first_payload, evidence_id = _capture_evidence()
++    second_payload, second_id = _capture_evidence()
++
++    assert evidence_id == second_id
++    assert first_payload["marketing_evidence"]["citation_rule"].startswith("Use these evidence_id")
++    pack = EvidenceRepository(paths).list(user_id="default", account_id="acct-1")
++    assert pack["total"] == 1
++    assert pack["records"][0]["id"] == evidence_id
++    assert pack["records"][0]["canonical_url"] == "https://example.com/report"
++    assert len(pack["records"][0]["content_sha256"]) == 64
++    assert pack["records"][0]["content_sha256"] == hashlib.sha256(
++        "该报告记录了 AI 辅助工作流程的原始样本、方法与研究边界。".encode("utf-8")
++    ).hexdigest()
++    assert pack["records"][0]["metadata"]["excerpt_origin"] == "llm_summary"
++    assert pack["records"][0]["metadata"]["source_hash_origin"] == "native_collector_raw_content"
++    assert pack["records"][0]["metadata"]["claim_truth_verified"] is False
++    assert EvidenceRepository(paths).list(user_id="default", account_id="acct-2")["total"] == 0
++
++
++def test_failed_or_empty_web_extract_is_not_evidence(tmp_path, monkeypatch):
++    paths = _bind_session(tmp_path, monkeypatch)
++    unchanged = enrich_tool_result_with_evidence(
++        tool_name="web_extract",
++        args={"urls": ["https://example.com/missing"]},
++        result=json.dumps(
++            {
++                "results": [
++                    {
++                        "url": "https://example.com/missing",
++                        "content": "",
++                        "error": "not found",
++                    }
++                ]
++            }
++        ),
++        task_id="session-1",
++        session_id="session-1",
++    )
++
++    assert "marketing_evidence" not in json.loads(unchanged)
++    assert EvidenceRepository(paths).list(user_id="default", account_id="acct-1")["total"] == 0
++
++
++def test_model_tools_dispatch_native_seam_returns_evidence_ids(tmp_path, monkeypatch):
++    paths = _bind_session(tmp_path, monkeypatch)
++
++    def fake_dispatch(name, args, **_kwargs):
++        assert name == "web_extract"
++        assert args["urls"] == ["https://example.com/native"]
++        return json.dumps(
++            {
++                "results": [
++                    {
++                        "url": "https://example.com/native",
++                        "title": "原生采集",
++                        "content": "这是经过 Hermes web_extract 主调度器返回的内容。",
++                    }
++                ]
++            },
++            ensure_ascii=False,
++        )
++
++    monkeypatch.setattr(model_tools.registry, "dispatch", fake_dispatch)
++    result = json.loads(
++        model_tools.handle_function_call(
++            "web_extract",
++            {"urls": ["https://example.com/native"]},
++            task_id="session-1",
++            session_id="session-1",
++            tool_call_id="native-call-1",
++            enabled_toolsets=["web", "marketing"],
++        )
++    )
++
++    evidence_id = result["marketing_evidence"]["records"][0]["evidence_id"]
++    record = EvidenceRepository(paths).require_verified(
++        user_id="default",
++        account_id="acct-1",
++        evidence_ids=[evidence_id],
++    )[0]
++    assert record["tool_call_id"] == "native-call-1"
++    assert record["session_id"] == "session-1"
++
++
++def test_draft_rejects_evidence_from_another_account(tmp_path, monkeypatch):
++    paths = _bind_session(tmp_path, monkeypatch)
++    foreign_id = EvidenceRepository(paths).capture_web_extract_result(
++        user_id="default",
++        account_id="acct-2",
++        result={
++            "results": [
++                {
++                    "url": "https://example.com/foreign",
++                    "title": "副账号资料",
++                    "content": "只属于副账号的证据",
++                }
++            ]
++        },
++        session_id="session-2",
++    )[0]["id"]
++    planned = json.loads(
++        handle_function_call(
++            "marketing_plan_content_production",
++            {
++                "objective": "写一篇公众号软文",
++                "audience": "AI 入门用户",
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++
++    result = json.loads(
++        handle_function_call(
++            "marketing_draft_content_create",
++            {
++                "title": "不能串账号",
++                "plan_id": planned["plan_id"],
++                "platform": "wechat_official",
++                "production_kind": "article_soft",
++                "content": {"markdown": "正文"},
++                "evidence_refs": [foreign_id],
++            },
++            task_id="session-1",
++            session_id="session-1",
++            enabled_toolsets=["marketing"],
++        )
++    )
++
++    assert "current account scope" in result["error"]
+diff --git a/tests/test_tui_gateway_server.py b/tests/test_tui_gateway_server.py
+index 01a0859fd..266e30a17 100644
+--- a/tests/test_tui_gateway_server.py
++++ b/tests/test_tui_gateway_server.py
+@@ -735,10 +735,10 @@ def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):
+         config_mod, "load_config", lambda: {"platform_toolsets": {"cli": ["memory"]}}
+     )
+ 
+-    # Sorted: ["kanban", "memory", "project"]. `kanban` is auto-recovered by
++    # Sorted: ["kanban", "marketing", "memory", "project"]. `kanban` is auto-recovered by
+     # _get_platform_tools (a non-configurable platform toolset in hermes-cli's
+     # universe); `project` is GUI-only, folded in by _load_enabled_toolsets.
+-    assert server._load_enabled_toolsets() == ["kanban", "memory", "project"]
++    assert server._load_enabled_toolsets() == ["kanban", "marketing", "memory", "project"]
+     err = capsys.readouterr().err
+     assert "ignoring disabled MCP servers" in err
+     assert "mcp-off" in err
+@@ -759,7 +759,7 @@ def test_load_enabled_toolsets_falls_back_when_tui_env_invalid(monkeypatch, caps
+         config_mod, "load_config", lambda: {"platform_toolsets": {"cli": ["memory"]}}
+     )
+ 
+-    assert server._load_enabled_toolsets() == ["kanban", "memory", "project"]
++    assert server._load_enabled_toolsets() == ["kanban", "marketing", "memory", "project"]
+     assert "using configured CLI toolsets" in capsys.readouterr().err
+ 
+ 
+diff --git a/tools/marketing_os_tools.py b/tools/marketing_os_tools.py
+index 6a64b4d68..d4f348905 100644
+--- a/tools/marketing_os_tools.py
++++ b/tools/marketing_os_tools.py
+@@ -9,6 +9,7 @@ from marketing_os.domains import (
+     AccountLifecycleRepository,
+     ContentAssetRepository,
+     ContentProductionPlanner,
++    EvidenceRepository,
+ )
+ from marketing_os.session_scope import enforce_tool_account_scope
+ from tools.registry import registry
+@@ -131,6 +132,28 @@ READ_CONTENT_ASSETS_SCHEMA = {
+     },
+ }
+ 
++READ_EVIDENCE_PACK_SCHEMA = {
++    "name": "marketing_read_evidence_pack",
++    "description": (
++        "Read evidence records automatically captured from successful native collectors for the "
++        "account bound to this conversation. Cite the returned evidence IDs in production tools. "
++        "A verified record proves source integrity, capture time and content hash; it does not by "
++        "itself prove every claim on the source page is true."
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "status": {
++                "type": "string",
++                "enum": ["captured", "verified", "rejected", "stale"],
++                "default": "verified",
++            },
++            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
++        },
++        "required": [],
++    },
++}
++
+ CREATE_CONTENT_DRAFT_SCHEMA = {
+     "name": "marketing_draft_content_create",
+     "description": (
+@@ -238,12 +261,22 @@ def _plan_content_production(args: dict, **kwargs) -> str:
+         require_bound=True,
+     )
+     context = AccountContextRepository().read(user_id=user_id, account_id=account_id)
++    evidence_refs = args.get("evidence_refs") or []
++    if evidence_refs:
++        evidence_refs = [
++            item["id"]
++            for item in EvidenceRepository().require_verified(
++                user_id=user_id,
++                account_id=account_id,
++                evidence_ids=evidence_refs,
++            )
++        ]
+     result = ContentProductionPlanner().plan(
+         objective=str(args.get("objective") or ""),
+         kind=str(args.get("kind") or "auto"),
+         platforms=args.get("platforms"),
+         audience=str(args.get("audience") or ""),
+-        evidence_refs=args.get("evidence_refs") or [],
++        evidence_refs=evidence_refs,
+         constraints=args.get("constraints") or {},
+         account_context=context,
+     )
+@@ -272,6 +305,22 @@ def _read_content_assets(args: dict, **kwargs) -> str:
+     return json.dumps(result, ensure_ascii=False)
+ 
+ 
++def _read_evidence_pack(args: dict, **kwargs) -> str:
++    user_id, account_id = enforce_tool_account_scope(
++        {},
++        task_id=kwargs.get("task_id"),
++        session_id=kwargs.get("session_id"),
++        require_bound=True,
++    )
++    result = EvidenceRepository().list(
++        user_id=user_id,
++        account_id=account_id,
++        status=str(args.get("status") or "verified"),
++        limit=int(args.get("limit") or 20),
++    )
++    return json.dumps(result, ensure_ascii=False)
++
++
+ def _create_content_draft(args: dict, **kwargs) -> str:
+     user_id, account_id = enforce_tool_account_scope(
+         {},
+@@ -341,6 +390,15 @@ registry.register(
+     emoji="🗂️",
+ )
+ 
++registry.register(
++    name="marketing_read_evidence_pack",
++    toolset="marketing",
++    schema=READ_EVIDENCE_PACK_SCHEMA,
++    handler=_read_evidence_pack,
++    description="Read source-integrity evidence captured by native Hermes collectors.",
++    emoji="🔎",
++)
++
+ registry.register(
+     name="marketing_draft_content_create",
+     toolset="marketing",
+diff --git a/tools/web_tools.py b/tools/web_tools.py
+index 133489b0a..b3954ce97 100644
+--- a/tools/web_tools.py
++++ b/tools/web_tools.py
+@@ -37,6 +37,7 @@ Usage:
+ """
+ 
+ import json
++import hashlib
+ import logging
+ import os
+ import re
+@@ -1138,12 +1139,25 @@ async def web_extract_tool(
+                 content_length = len(result.get('raw_content', ''))
+                 logger.info("%s (%d characters)", url, content_length)
+         
+-        # Trim output to minimal fields per entry: title, content, error
++        # Trim output to reviewable fields while preserving a deterministic
++        # fingerprint of the actual extracted source text. Long pages may be
++        # summarized by an auxiliary model, so hashing only ``content`` would
++        # fingerprint the summary rather than the fetched page. Product
++        # runtimes use this source hash for EvidencePack provenance.
+         trimmed_results = [
+             {
+                 "url": r.get("url", ""),
+                 "title": r.get("title", ""),
+                 "content": r.get("content", ""),
++                "content_origin": (
++                    "llm_summary"
++                    if r.get("raw_content")
++                    and r.get("raw_content") != r.get("content")
++                    else "extracted_source"
++                ),
++                "source_content_sha256": hashlib.sha256(
++                    str(r.get("raw_content") or r.get("content") or "").encode("utf-8")
++                ).hexdigest(),
+                 "error": r.get("error"),
+                 **({  "blocked_by_policy": r["blocked_by_policy"]} if "blocked_by_policy" in r else {}),
+             }
+@@ -1338,7 +1352,7 @@ WEB_SEARCH_SCHEMA = {
+ 
+ WEB_EXTRACT_SCHEMA = {
+     "name": "web_extract",
+-    "description": "Extract content from web page URLs. Returns page content in markdown format. Also works with PDF URLs (arxiv papers, documents, etc.) — pass the PDF link directly and it converts to markdown text. Pages under 5000 chars return full markdown; larger pages are LLM-summarized and capped at ~5000 chars per page. Pages over 2M chars are refused. If a URL fails or times out, use the browser tool to access it instead.",
++    "description": "Extract content from web page URLs. Returns page content in markdown format plus content_origin and a SHA-256 fingerprint of the extracted source text. Also works with PDF URLs (arxiv papers, documents, etc.) — pass the PDF link directly and it converts to markdown text. Pages under 5000 chars return full markdown; larger pages are LLM-summarized and capped at ~5000 chars per page while source_content_sha256 still fingerprints the pre-summary extraction. Pages over 2M chars are refused. If a URL fails or times out, use the browser tool to access it instead.",
+     "parameters": {
+         "type": "object",
+         "properties": {
+diff --git a/toolsets.py b/toolsets.py
+index f8ec7efca..bde5cb0d5 100644
+--- a/toolsets.py
++++ b/toolsets.py
+@@ -32,7 +32,7 @@ _HERMES_CORE_TOOLS = [
+     # Marketing OS product context. These bounded read tools are always present
+     # so desktop, messaging and cron sessions operate on the same accounts.
+     "marketing_read_accounts", "marketing_read_account_context", "marketing_update_account_lifecycle",
+-    "marketing_plan_content_production", "marketing_read_content_assets", "marketing_draft_content_create",
++    "marketing_plan_content_production", "marketing_read_evidence_pack", "marketing_read_content_assets", "marketing_draft_content_create",
+     # Web
+     "web_search", "web_extract",
+     # Terminal + process management
+@@ -105,6 +105,7 @@ TOOLSETS = {
+             "marketing_read_account_context",
+             "marketing_update_account_lifecycle",
+             "marketing_plan_content_production",
++            "marketing_read_evidence_pack",
+             "marketing_read_content_assets",
+             "marketing_draft_content_create",
+         ],
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index c483a4f53..462ccae7f 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -1583,17 +1583,23 @@ def _ensure_session_db_row(session: dict) -> None:
+     parent_session_id = session.get("parent_session_id") or None
+     if parent_session_id:
+         model_config["_branched_from"] = parent_session_id
+-    try:
+-        db.create_session(
+-            key,
+-            source=_session_source(session),
+-            model=row_model,
+-            model_config=model_config or None,
+-            marketing_user_id=(session.get("marketing_scope") or {}).get("user_id"),
+-            marketing_account_id=(session.get("marketing_scope") or {}).get("account_id"),
+-            parent_session_id=parent_session_id,
+-            cwd=_session_cwd(session) if session.get("explicit_cwd") else None,
+-        )
++    create_kwargs = {
++        "source": _session_source(session),
++        "model": row_model,
++        "model_config": model_config or None,
++        "parent_session_id": parent_session_id,
++        "cwd": _session_cwd(session) if session.get("explicit_cwd") else None,
++    }
++    marketing_scope = session.get("marketing_scope") or {}
++    # Preserve the upstream SessionDB call contract for ordinary Hermes
++    # sessions. Product routing fields are supplied only when this desktop
++    # conversation is actually bound, so generic profiles/test doubles do not
++    # have to understand Marketing OS just to create a normal session row.
++    if marketing_scope.get("account_id"):
++        create_kwargs["marketing_user_id"] = marketing_scope.get("user_id") or "default"
++        create_kwargs["marketing_account_id"] = marketing_scope.get("account_id")
++    try:
++        db.create_session(key, **create_kwargs)
+     except Exception:
+         logger.debug("failed to persist desktop session row", exc_info=True)
+     finally:
+-- 
+2.54.0
+

@@ -211,10 +211,13 @@ Claude 写的 `engine/video_core` / `engine/video_agents` 不是废物，但它�
 | CPF-NATIVE-03 | 草稿强制走工单 | `marketing_draft_content_create` 不接受 `account_id`；必须携带当前账号真实 `plan_id`，管线或平台不匹配直接拒绝 | automated |
 | CPF-NATIVE-04 | 内容资产可恢复 | `marketing_read_content_assets` 只读取当前 Hermes session 绑定账号；完整草稿进入 `content_assets`，不进入长期记忆 | automated |
 | CPF-NATIVE-05 | 原生工具链 | `marketing_plan_content_production / marketing_read_content_assets / marketing_draft_content_create` 进入 Hermes `marketing` toolset，并默认覆盖桌面、消息渠道与 cron surface | automated |
+| CPF-NATIVE-06 | 原生证据捕获 | Hermes `model_tools` 在真实 `web_extract` handler 返回后按当前 SessionDB 账号自动固化 `evidence_records`；模型没有 create-evidence 工具 | automated |
+| CPF-NATIVE-07 | 原文指纹与摘要边界 | `web_extract` 对预摘要原始抓取内容计算 SHA-256，并显式返回 `content_origin`；EvidencePack 区分 source integrity 与 claim truth | automated |
+| CPF-NATIVE-08 | 证据引用强校验 | 计划和草稿只接受当前账号真实 verified `evidence_id`；原始 URL、`source:` 字符串、跨账号引用、失败或空抓取被拒绝 | automated |
 
-边界：本轮完成的是“工单 → 草稿资产”的原生状态所有权，不等于真实软文质量、素材下载、视频渲染、发布或指标回收已完成。证据引用当前只保存 provenance reference，不把模型传入的 URL 自动升级为“已验证事实”；仍需后续原生 EvidencePack 服务完成来源校验。
+边界：当前完成的是“工单 → 真实来源捕获 → 草稿资产”的原生状态所有权，不等于真实软文质量、主张级多源核验、素材下载、视频渲染、发布或指标回收已完成。EvidencePack 的 `verified/source_integrity` 只证明真实 collector、来源、时间与内容哈希完整，不把页面中的每句话宣布为客观事实。
 
-验证：Hermes SessionDB、Gateway protocol、账号工具、内容工具和 updater 组合回归 443 项通过；新内容纵切定向 20 项通过。
+验证：Hermes 产品/SessionDB/Gateway/账号/内容组合回归 622 项通过；原生 EvidencePack 定向 12 项通过；ModelTools/Web/异步桥/浏览器组合 124 项通过；Web 抽取、站点策略、秘密阻断与证据哈希组合 57 项通过；Ruff 与 py_compile 通过。以上测试存在集合重叠，不以相加数字冒充独立用例数。
 
 ## 六、下一步执行清单
 

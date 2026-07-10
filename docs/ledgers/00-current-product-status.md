@@ -3,7 +3,7 @@
 > 基线日期：2026-07-10
 > 当前分支：`codex/product-architecture-checkpoint-2026-07-09`
 > 作用：这是唯一的实时执行入口。`LEDGER.md` 与 `AGENT_CORE_LEDGER.md` 保留第一版产品宪法；其余编号台账是领域历史和实现证据，不再各自宣布“当前主线”。
-> **2026-07-10 内核纠偏（最高优先级）：Hermes 是唯一主运行时，Marketing OS 是直接写入 Hermes 源码的原生营销增强，不是一个调用 Hermes 的外层应用，也不是第二套 Agent。** 本条覆盖历史资料中“业务差异优先放 adapter/插件”“产品业务逻辑仍留在 `engine/agent_core`、Hermes 只承载少量 runtime patch”“改动最小化”等旧约束。`run_agent.py`、SessionDB、model tools、gateway、cron、memory、skills、plugins、TUI 和 `apps/desktop` 均可按产品体验深度重构；上游可重放/可 rebase 不再高于产品正确性。
+> **2026-07-10 内核纠偏（最高优先级）：Hermes 源码是产品主干，Marketing OS 是直接写入这套主干的原生营销增强，不是一个调用 Hermes 的外层应用，也不是第二套 Agent。** 本条覆盖历史资料中“业务差异优先放 adapter/插件”“产品业务逻辑仍留在 `engine/agent_core`、Hermes 只承载少量 runtime patch”“改动最小化”等旧约束。`run_agent.py`、SessionDB、model tools、gateway、cron、memory、skills、plugins、TUI 和 `apps/desktop` 均可按产品体验深度重构；上游可重放/可 rebase 不再高于产品正确性。唯一目标架构、所有权矩阵和旧路径删除门见 `docs/architecture/REBUILD_BASELINE.md`。
 
 ## 一、第一版没有变的目标
 
@@ -62,7 +62,7 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 | 两套桌面 UI | 当前产品壳为根目录 `src/` + `electron/`；Hermes fork 自身已有 `apps/desktop/`（Electron + React、原生 chat/session/skills/messaging/cron/approval/settings，约 437 个 src 文件）。继续维护前者会形成第二套壳 |
 | 自动化 | 2026-07-10 当前工作树全量 Python：1325 passed，TypeScript `tsc --noEmit` 通过，秘密扫描通过；1 个已知 Starlette/httpx 弃用警告 |
 | 构建 | backend 43MB、Hermes 发行源树 39MB、MCP+Chromium 407MB；Electron x64 DMG 约 352MB（未签名） |
-| Hermes 主运行时 | 嵌套产品分支 `codex/marketing-os-runtime` 已提交至 `77e92e9f8`；上游 SHA + 产品 tree `5ef8d1441386` + 十个 checksummed patch 已锁定，nested repo clean，bootstrap/verifier 可得到同一 tree |
+| Hermes 主运行时 | 嵌套产品分支 `codex/marketing-os-runtime` 已提交至 `9d27abc3b`；上游 SHA + 产品 tree `db867f9ae326` + 十一个 checksummed patch 已锁定，nested repo clean，bootstrap/verifier 可得到同一 tree |
 | 打包验收 | 包内 Hermes manifest/source、MCP CLI/Chromium 均通过结构 hard gate；冻结 backend 真实创建 Agent session 并调用 L0，未调用外部模型 |
 
 ### 自动化不能证明的事情
@@ -100,7 +100,9 @@ Hermes 生态兼容被明确保留：原生 MCP catalog/自定义 MCP、MCP 动�
 
 消息渠道的双运行时旁路已经删除：原 `gateway/marketing_os_bridge.py` 会把飞书/微信消息通过 HTTP 送回外层 FastAPI 并创建第二类会话，现已改为 `marketing_os/messaging.py` 只做可信通知窗口准备，随后继续进入 Hermes 原生 Gateway 的授权、session、memory、task 与工具循环。产品状态明确为 `hermes-native-marketing / single-runtime`。这是“以 Hermes 为主、营销模块做增强”的首个反向拆壳样板；真实飞书/微信连续对话仍待人工复验。
 
-内容生产的第一段所有权也已进入 Hermes：原生 `ContentProductionPlanner` 负责三条互通 lane 和共享能力池，`content_production_plans` 把工单变成账号级持久 checkpoint；`marketing_draft_content_create` 必须引用当前账号真实 `plan_id`，模型不能传 `account_id`，跨账号、跨管线或跨平台草稿会被拒绝；`marketing_read_content_assets` 可恢复当前账号草稿。完整内容仍写入现有 `content_assets` 真相源，不复制数据库、不塞入长期记忆。组合回归 443 项通过；EvidencePack 校验、真实父稿生成、素材/渲染和发布仍待迁移，不能宣称内容闭环完成。
+内容生产的第一段所有权也已进入 Hermes：原生 `ContentProductionPlanner` 负责三条互通 lane 和共享能力池，`content_production_plans` 把工单变成账号级持久 checkpoint；`marketing_draft_content_create` 必须引用当前账号真实 `plan_id`，模型不能传 `account_id`，跨账号、跨管线或跨平台草稿会被拒绝；`marketing_read_content_assets` 可恢复当前账号草稿。完整内容仍写入现有 `content_assets` 真相源，不复制数据库、不塞入长期记忆。
+
+EvidencePack 的首个真实采集纵切也已进入 Hermes 主调度器：`web_search` 仍只发现候选来源，成功的 `web_extract` 在工具结果返回模型前自动按 SessionDB 当前账号固化 `evidence_records`，系统计算 URL、采集时间、原始抓取内容 SHA-256、摘要来源、session/tool call 和 source-integrity 状态，再把不可伪造的 `evidence_id` 返回模型；没有任何模型可调用的 evidence-create 工具。生产计划和草稿只接受当前账号的 verified EvidencePack ID，原始 URL、`source:` 字符串、跨账号 ID 和失败抓取均被拒绝。这里的 verified 仅证明来源完整性，不宣称网页每个主张为真；多源交叉验证、真实父稿/平台变体、素材/渲染和发布仍待完成，不能宣称内容闭环完成。
 
 ### P0-00 迁移映射（当前 → 唯一目标）
 
@@ -118,7 +120,7 @@ Hermes 生态兼容被明确保留：原生 MCP catalog/自定义 MCP、MCP 动�
 
 ### P0-01 Hermes 源码与包内运行时已形成 packaged smoke，干净机仍待验
 
-此前开发机依赖一个被主仓库忽略且自身 dirty 的 `runtime/hermes-agent`。2026-07-10 已将增强后的 Hermes 改为“固定上游 commit + 产品 tree + checksummed patch series”，bootstrap 遇 dirty/未知 revision hard fail，自动化可从 baseline 重建相同 tree；未接入且无来源的泛化 skill 草稿已清除。第九个补丁删除移动端 Agent HTTP 旁路，第十个补丁接管内容工单 checkpoint 与草稿资产。构建现会生成受校验发行源树，并把 Hermes 核心依赖编入冻结 backend；包内 backend 已真实创建 session 和调用 L0。剩余阻断是干净机、代码签名、真实 Provider 对话和 Electron UI 验收。
+此前开发机依赖一个被主仓库忽略且自身 dirty 的 `runtime/hermes-agent`。2026-07-10 已将增强后的 Hermes 改为“固定上游 commit + 产品 tree + checksummed patch series”，bootstrap 遇 dirty/未知 revision hard fail，自动化可从 baseline 重建相同 tree；未接入且无来源的泛化 skill 草稿已清除。第九个补丁删除移动端 Agent HTTP 旁路，第十个补丁接管内容工单 checkpoint 与草稿资产，第十一个补丁把 EvidencePack 捕获写入 Hermes 原生工具结果主链。构建现会生成受校验发行源树，并把 Hermes 核心依赖编入冻结 backend；包内 backend 已真实创建 session 和调用 L0。剩余阻断是干净机、代码签名、真实 Provider 对话和 Electron UI 验收。
 
 ### P0-02 工具结果与审批状态契约（已完成 automated 修复）
 
@@ -225,13 +227,13 @@ UserGoal
 | 顺序 | ID | 工作 | 完成证据 | 状态 |
 |---:|---|---|---|---|
 | 1 | R0-00 | Hermes 主运行时原生增强 | `apps/desktop` 成为唯一 UI；Hermes 保持唯一 Agent 主干；Marketing OS 领域能力直接进入其工具和状态链；最终删除根目录旧 UI/IPC/adapter 主路径 | code + automated partial：原生身份/gateway/workbench/chat route/branding、账号读写首段、移动消息 HTTP 旁路删除已完成；其余领域迁移与旧主路径删除 pending |
-| 2 | R0-01 | Hermes 增强分支可复现基线 | 当前 lock/patch 可复现；保持可直接开发、提交、构建的 Hermes 主源码边界 | automated complete：nested commit + tree lock + 10-patch replay；verifier/bootstrap 及 reproducibility tests passed；upstream integration CI pending |
+| 2 | R0-01 | Hermes 增强分支可复现基线 | 当前 lock/patch 可复现；保持可直接开发、提交、构建的 Hermes 主源码边界 | automated complete：nested commit + tree lock + 11-patch replay；verifier/bootstrap 及 reproducibility tests passed；upstream integration CI pending |
 | 3 | R0-02 | 打包 runtime 闭环 | Hermes/MCP 缺失 hard fail；冻结 backend 真实创建 session + L0；真实 Provider 对话和干净机待验 | packaged partial（结构、session、L0、MCP CLI 已通过） |
 | 4 | R1-01 | 统一 ToolOutcome | blocked/error 不再被标 completed；审批等待/回执按 approval_id 投影；未知外部结果不自动重试 | automated complete（迁入 fork 后必须重验） |
-| 5 | R1-02 | 图文真实生产纵切 | 原生工单 checkpoint 和账号级 ContentAsset 写入已接管；下一步让 Hermes 生成真实父稿/双平台变体，并由 EvidencePack 阻断缺来源内容 | automated partial（plan→draft state complete；quality/evidence pending） |
+| 5 | R1-02 | 图文真实生产纵切 | 原生工单 checkpoint、账号级 EvidencePack 和 ContentAsset 写入已接管；下一步让 Hermes 生成真实父稿/知乎与公众号变体，并建立主张级多源核对 | automated partial（plan→evidence capture→draft state complete；real provider quality pending） |
 | 6 | R2-01 | 发布单真相源 | 已确认 JSON/UI/SQL 双路径；暂不继续改，待 R0-00 迁移骨架确定后在新边界完成 | audit complete，implementation paused |
 | 7 | R2-02 | 未校准预测降级 | 软文已只给 uncalibrated readiness；不露脸视频及其他生产路线仍需清除固定区间 | automated partial（soft article only） |
-| 8 | R3-01 | 领域服务接入 Hermes | 取消 Tool Manifest → FastAPI server 反向依赖；Account/Content/Publishing 成为 Hermes 内建领域端口 | code + automated + dev-runtime partial：Account 读写首段、SessionDB 账号作用域、移动消息原生路由、Content 工单 checkpoint/草稿资产已接入；Evidence/Content 质量、Publishing pending |
+| 8 | R3-01 | 领域服务接入 Hermes | 取消 Tool Manifest → FastAPI server 反向依赖；Account/Evidence/Content/Publishing 成为 Hermes 内建领域端口 | code + automated + dev-runtime partial：Account 读写首段、SessionDB 账号作用域、移动消息原生路由、EvidencePack 首个 web collector、Content 工单 checkpoint/草稿资产已接入；Content 质量、Publishing pending |
 | 9 | R3-02 | 单一账号浏览器 profile | 登录与后台托管复用同一身份，跨重启不重复扫码 | pending |
 | 10 | R4-01 | 真人/打包验收门 | Electron UI E2E + 干净机 + 真实内容审稿 + 回执/指标闭环 | pending |
 

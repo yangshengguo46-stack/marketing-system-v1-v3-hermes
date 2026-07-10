@@ -1,86 +1,146 @@
-# Agent Core 重建基线
+# Hermes-native Marketing OS 重建基线
 
-## 一、目标架构
+> 状态：active / superseding
+>
+> 2026-07-10 起，本文件取代此前的“Marketing Agent Service + Hermes loop adapter”架构。Hermes 源码是产品主干，不是依赖、插件、子进程里的黑盒或需要保护不动的上游内核。Marketing OS 是直接长在这套主干里的原生营销能力。
+
+## 一、产品只有一个 Agent
 
 ```text
-React UI / 微信 / 飞书 / Web 视频工作台
-                 │
-          Product Event API
-                 │
-┌────────────────▼─────────────────┐
-│ Electron Runtime Host            │
-│ 登录 session / secrets / L3动作 │
-└───────────────┬──────────────────┘
-                │ typed capabilities
-┌───────────────▼──────────────────┐
-│ Marketing Agent Service          │
-│ Hermes loop adapter              │
-│ AgentTask + approvals + traces   │
-│ Context assembler + policy       │
-└───────┬───────────────┬──────────┘
-        │               │
-┌───────▼──────┐  ┌─────▼────────────────────┐
-│ Marketing    │  │ State / Memory / Results │
-│ Tool Gateway │  │ SQLite first             │
-└──────────────┘  └───────────────────────────┘
+桌面 / 飞书 / 微信 / Cron / Web surface
+                    │
+                    ▼
+┌────────────────────────────────────────────────────┐
+│ Marketing OS — Hermes product fork                │
+│                                                    │
+│ conversation loop / sessions / long tasks         │
+│ plans / checkpoints / interrupt / resume           │
+│ tool registry / middleware / approvals / effects   │
+│ memory / skills / MCP / plugins / channels         │
+│ apps/desktop / gateway / event stream              │
+└────────────────────────┬───────────────────────────┘
+                         │ account-scoped domain ports
+                         ▼
+┌────────────────────────────────────────────────────┐
+│ Native marketing domains                           │
+│ Account | Evidence | Content | Publishing          │
+│ Receipt | Metrics | Learning | Platform profiles   │
+└────────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────┐
+│ Canonical data and artifacts                       │
+│ SessionDB + business SQLite + artifact store       │
+└────────────────────────────────────────────────────┘
+
+Electron capability host (inside the same product)
+  └─ secret / window / account profile / file / L3 side effect
 ```
 
-## 二、代码边界
+这里没有第二个 `Marketing Agent Service`，也没有 `Hermes loop adapter`。桌面、消息渠道和定时任务只是同一个 Agent 的不同入口。FastAPI 如果迁移期仍存在，只能是薄 DTO/平台能力传输层，不能创建另一类 session、task、plan、approval、memory 或 event。
 
-| 路径 | 边界 |
+## 二、源码所有权
+
+| 能力 | 唯一目标 owner | 允许的配合边界 | 必须删除的旧 owner |
+|---|---|---|---|
+| 对话、会话、历史、流式事件 | Hermes conversation loop + SessionDB + gateway | surface 只渲染事件 | 外层 `HermesAgentService` 会话循环 |
+| 长任务、计划、checkpoint、恢复 | Hermes native task/session state | 领域仓储保存业务 checkpoint | 通过 prompt 猜计划、resume prompt 冒充恢复 |
+| 工具、审批、effect | Hermes registry/middleware/approval chain | Electron 执行获批的宿主副作用 | Tool Manifest 动态 import FastAPI handler |
+| 记忆、Skill、MCP、Plugin | Hermes 原生生态合同 | Marketing 治理规则原生增强 | 第二套记忆/技能/MCP 注册表 |
+| 账号作用域 | SessionDB 中的 `marketing_user_id/account_id` | Account domain 读取当前事实 | UI 临时选中值、模型传入 account_id |
+| 证据 | Hermes 工具结果捕获 + Evidence repository | Web/MCP/API 是采集器 | 模型提供 URL 即视为已验证 |
+| 内容 | Content domain + canonical ContentAsset | Agent 负责创作，确定性代码负责校验/版本 | 完整草稿塞进长期记忆、旧 JSON 草稿 |
+| 发布、回执、指标 | Publishing/Receipt/Metrics domains | Electron/MCP/API 是 provider | `publishing.json` 与 SQL 双写 |
+| 产品 UI | `runtime/hermes-agent/apps/desktop` | 迁入旧工作台已验证交互 | 根目录 `src/` + `electron/` 永久并行 |
+
+`runtime/hermes-agent/marketing_os/domains` 是 Hermes 源码树中的产品领域包，不是外部业务插件。若现有 Hermes 文件形态阻碍体验或状态正确性，可以拆分、重写或删除；约束保护的是单运行时、单真相源、安全审批和生态合同，不是旧目录。
+
+## 三、一次请求的真实路径
+
+```text
+User goal
+  → native Hermes session (bind user/account once)
+  → account context (verified facts + explicit gaps)
+  → native task/plan/checkpoint
+  → evidence acquisition through Hermes tools
+  → deterministic capture into EvidencePack
+  → Agent-authored parent draft
+  → platform variants + asset references
+  → deterministic preflight
+  → human approval where required
+  → provider execution
+  → immutable receipt + metric checkpoints
+  → governed retrospective candidate
+  → next session retrieves accepted learning
+```
+
+页面切换、窗口隐藏和渠道切换不能中断这条路径。所有 surface 使用同一 `session_id/task_id`；任何外部副作用使用同一 `approval_id/effect_id/idempotency_key`。
+
+## 四、证据不是一段提示词
+
+EvidencePack 的最低合同：
+
+| 字段 | 含义 |
 |---|---|
-| `runtime/hermes-agent` | 官方上游源码与必要 fork patch，不放业务数据 |
-| `engine/agent_core` | 我们的 task/event/policy/memory/effect/harness adapter |
-| `engine/marketing-os` | 热点、账号、内容、发布等领域工具 |
-| `electron` | 登录会话、秘密、平台副作用和本机生命周期 |
-| `src` | 面向用户的目标、进度、证据、审批、记忆和产物体验 |
+| `evidence_id` | 系统生成、不可由模型指定的稳定 ID |
+| `user_id/account_id` | 与当前 Hermes 会话相同的不可越权作用域 |
+| `source_type/provider` | `web_extract`、官方 API、创作者中心 MCP 等真实采集器 |
+| `canonical_url/source_ref` | 可回链来源；没有 URL 的一方数据使用稳定 source ref |
+| `title/excerpt` | 可审阅内容，不等于模型结论 |
+| `captured_at` | 系统时钟写入的采集时间 |
+| `content_sha256` | 对捕获内容计算，禁止调用方提交 |
+| `status` | `captured / verified / rejected / stale` |
+| `tool_call_id/session_id` | 能追溯到真实执行 |
+| `verification` | 确定性完整性结果与后续人工/交叉验证记录 |
 
-## 三、第一批稳定接口
+`web_search` 只产生候选来源；`web_extract` 成功取得正文后才可 `captured`。模型不能通过营销工具提交任意正文并把它标成 verified。首版“verified”只表示来源、内容、时间、哈希和作用域完整且采集器成功，不表示页面中的每个观点客观正确；需要多源交叉验证的主张必须保留该差异。
 
-### Agent runtime
+内容草稿可以有创意表达，但只要声明使用了事实性证据，其 `evidence_refs` 必须解析为当前账号的真实 Evidence 记录。原始 URL、`source:` 字符串和模型自造 ID 不能通过。
 
-- `POST /agent/sessions`：创建或恢复用户/工作区 session。
-- `POST /agent/messages`：追加用户目标，立即返回 `task_id/run_id`。
-- `GET /agent/runs/{id}/events`：SSE/stream，输出计划、步骤、工具、证据、审批、产物和完成事件。
-- `POST /agent/tasks/{id}/pause|resume|cancel`。
-- `POST /agent/approvals/{id}/approve|reject`。
+## 五、边界与安全
 
-### Memory
+1. Cookie、Token、Key 只在 Electron/profile/provider 能力边界内使用，不写入 prompt、工具结果和业务库。
+2. 模型不能选择任意账号；写工具从 SessionDB 强制取得作用域。
+3. 发布、删除、发送、付费和敏感账号动作必须持久审批，并以 effect receipt 幂等。
+4. 不保存模型私有推理；只保存用户可见计划、证据、决策摘要、产物和回执。
+5. 不以向量相似度替代账号隔离、时效、来源可信度和显式用户纠正。
+6. 未知结果不写成成功，缺失指标不写成 0，未校准启发式不包装成预测。
+7. Hermes MCP、Hub/User Skill、Plugin 和工具中间件合同继续兼容；Hermes core 通过 Marketing OS 产品版本升级，不允许终端用户原地覆盖 fork。
 
-- `POST /memory/candidates`：只创建候选，不允许调用方绕过治理直接写长期记忆。
-- `GET /memory?scope=...`：结构化查询和证据。
-- `POST /memory/{id}/correct|forget|lock`。
+## 六、迁移纪律
 
-### Effects
+每次只迁一条可运行的纵切：
 
-- `POST /effects/intents`：创建发布/发送/费用意图和预览。
-- `POST /effects/{id}/execute`：仅 Electron capability host 可执行，要求有效 approval 与幂等键。
+1. 在 Hermes 主干建立原生 owner 和 schema migration。
+2. 让原生 desktop/gateway/tool 主链真实消费。
+3. 用自动化证明作用域、恢复、失败和兼容合同。
+4. 用开发机证明真实数据路径。
+5. 切换默认入口。
+6. 删除同能力旧写路径、桥接状态和重复测试。
+7. 更新 runtime patch lock、台账和可复现验证。
 
-## 四、数据真相源
+禁止“先留两套以后再说”。兼容期只能读旧数据或执行一次性迁移；不得再给旧 UI、旧 adapter、旧 FastAPI Agent 路由和旧 JSON 真相源加功能。
 
-- `task_events` 是任务状态重建的真相源；`agent_tasks` 是当前投影。
-- `effect_receipts` 是是否已产生外部副作用的真相源。
-- `memory_facts` 保存当前/历史事实；`memory_evidence` 保存来源。
-- `content_assets / publications / metrics / experiments` 保存业务结果，不塞进 message 文本。
-- `skill_candidates / skill_versions / skill_evaluations` 管理程序性记忆。
+## 七、删除门
 
-## 五、不可妥协项
+| Gate | 达成条件 | 达成后动作 |
+|---|---|---|
+| G1 Account | 原生 session 绑定、账号读取和生命周期写入覆盖首轮使用 | 删除旧 Agent 账号上下文装配 |
+| G2 Evidence | Hermes 采集结果自动固化，草稿引用强校验 | 删除外层 evidence prompt/URL 守门 |
+| G3 Content | 父稿、平台变体、版本、素材引用都由原生链持久化 | 冻结并删除旧 content production owner |
+| G4 Publish | 单一 SQL task/effect/receipt/metric 链被原生 Agent 使用 | 停止并迁移 `publishing.json` |
+| G5 Desktop | 工作台、账号、内容、审批和设置全部迁入原生桌面 | 删除根 `src/`、`electron/` 和旧构建入口 |
+| G6 Agent | 原生桌面/渠道覆盖 create/history/status/interrupt/resume | 删除 `HermesAgentService` 和 FastAPI `/agent/*` |
 
-1. Cookie、Token、Key 不跨 Electron capability boundary。
-2. Agent 不拥有任意 Shell、sudo、系统设置和任意文件权限。
-3. 发布、删除、发送、付费每次走持久审批和 effect receipt。
-4. 不把模型私有推理存入用户数据；只保存可解释摘要和证据。
-5. 不以向量相似度替代账号隔离、时间有效性、权限和可信度过滤。
-6. 不因 UI 关闭或进程重启丢任务；不因重试重复外部动作。
+## 八、v0.1 完成证据
 
-## 六、首轮完成定义
+1. 新用户通过自然对话得到可确认的受众假设和账号方向。
+2. 已登录用户的建议明确来自真实账号事实或明确的数据缺口。
+3. 一篇知乎/公众号父稿和平台变体引用真实 EvidencePack，可审阅、可修改、可恢复。
+4. 发布前审批和 preflight 不把未知、无版权或未校准结果包装成完成。
+5. 至少一条人工或自动发布拥有不可变回执，指标能按 checkpoint 回收。
+6. 回执形成待治理复盘候选，用户拒绝不会被系统偷偷学成偏好。
+7. 切页、隐藏和重启不丢任务、不重复副作用。
+8. 干净 macOS 不依赖全局 Hermes、Python 或 Chrome，也能完成真实 Provider 对话和一个 L0 营销能力。
 
-用户输入“帮我整理 AI 教育行业今天适合抖音账号 A 的热点”：
-
-1. Agent 自然理解目标，绑定账号 A 和抖音。
-2. 生成可见计划，不触碰 Cookie。
-3. Electron 复用账号 A 登录 session 完成只读采集。
-4. Agent 返回带来源、时间和置信度的热点与选题。
-5. 需要进入草稿或发布时形成审批卡，未确认不产生外部动作。
-6. App 隐藏/重启后继续同一 task。
-7. 用户采纳、拒绝及原因进入事件；不会立刻形成未经验证的永久规律。
+只有自动化测试不能把上述条目标成完成；统一使用 `designed / code / automated / dev-runtime / packaged / human-loop` 六级证据。
