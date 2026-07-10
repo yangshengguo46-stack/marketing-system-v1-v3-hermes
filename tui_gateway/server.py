@@ -12790,6 +12790,30 @@ def _(rid, _params: dict) -> dict:
     )
 
 
+@method("marketing.accounts.list")
+def _(rid, _params: dict) -> dict:
+    """Read connected account summaries from the canonical product store."""
+    from marketing_os.domains import AccountContextRepository
+
+    return _ok(rid, AccountContextRepository().list_accounts())
+
+
+@method("marketing.account.context")
+def _(rid, params: dict) -> dict:
+    """Read the native operating context for one user-scoped account."""
+    from marketing_os.domains import AccountContextRepository
+
+    params = params if isinstance(params, dict) else {}
+    try:
+        result = AccountContextRepository().read(
+            user_id=str(params.get("user_id") or "default"),
+            account_id=str(params.get("account_id") or ""),
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
+
+
 @method("insights.get")
 def _(rid, params: dict) -> dict:
     days = params.get("days", 30)

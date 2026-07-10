@@ -13,6 +13,12 @@ interface MarketingProductStatus {
   surfaces: string[]
 }
 
+interface MarketingAccountsSummary {
+  accounts: Array<{ id: string; label?: string; platform?: string; username?: string }>
+  total: number
+  source: string
+}
+
 interface WorkbenchViewProps {
   onNewChat: () => void
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
@@ -20,6 +26,7 @@ interface WorkbenchViewProps {
 
 export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps) {
   const [status, setStatus] = useState<MarketingProductStatus | null>(null)
+  const [accounts, setAccounts] = useState<MarketingAccountsSummary | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -28,6 +35,14 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
     void requestGateway<MarketingProductStatus>('marketing.product.status')
       .then(result => {
         if (active) setStatus(result)
+      })
+      .catch(reason => {
+        if (active) setError(reason instanceof Error ? reason.message : String(reason))
+      })
+
+    void requestGateway<MarketingAccountsSummary>('marketing.accounts.list')
+      .then(result => {
+        if (active) setAccounts(result)
       })
       .catch(reason => {
         if (active) setError(reason instanceof Error ? reason.message : String(reason))
@@ -57,7 +72,15 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
 
         <section className="grid gap-4 md:grid-cols-3">
           <WorkbenchSignal label="智能体" value={status ? '原生运行' : '正在连接'} detail="会话、长任务、记忆和技能由同一个内核运行" />
-          <WorkbenchSignal label="经营主线" value="账号全周期" detail="受众、定位、内容、发布、指标与复盘连续推进" />
+          <WorkbenchSignal
+            label="经营对象"
+            value={accounts ? `${accounts.total} 个账号` : '正在读取'}
+            detail={
+              accounts?.accounts[0]
+                ? `${accounts.accounts[0].platform || '平台'} · ${accounts.accounts[0].label || accounts.accounts[0].username || accounts.accounts[0].id}`
+                : '未登录也可以先从自然对话建立目标受众和账号方向'
+            }
+          />
           <WorkbenchSignal label="产品界面" value="原生桌面" detail="工作台、对话和后台任务共享同一会话与运行时" />
         </section>
 
