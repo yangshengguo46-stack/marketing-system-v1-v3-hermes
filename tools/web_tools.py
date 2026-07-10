@@ -1074,12 +1074,16 @@ async def _native_extract_urls(urls: List[str]) -> List[Dict[str, Any]]:
                     raise ValueError("too many redirects")
             except Exception as exc:
                 if not appended:
+                    detail = str(exc).strip() or type(exc).__name__
                     results.append(
                         {
                             "url": current_url,
                             "title": "",
                             "content": "",
-                            "error": f"Native extraction failed: {exc}",
+                            "error": (
+                                "Native extraction failed "
+                                f"({type(exc).__name__}): {detail}"
+                            ),
                         }
                     )
     return results

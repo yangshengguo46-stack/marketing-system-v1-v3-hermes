@@ -134,6 +134,46 @@ async def test_native_extract_rechecks_redirect_for_ssrf(monkeypatch):
     assert payload["results"][0]["content"] == ""
 
 
+@pytest.mark.asyncio
+async def test_native_extract_names_timeout_when_exception_message_is_blank(monkeypatch):
+    _force_native_provider(monkeypatch)
+
+    async def safe_url(_url):
+        return True
+
+    monkeypatch.setattr(web_tools, "async_is_safe_url", safe_url)
+
+    class TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, method, request_url, **_kwargs):
+            class TimeoutStream:
+                async def __aenter__(self):
+                    request = httpx.Request(method, request_url)
+                    raise httpx.ReadTimeout("", request=request)
+
+                async def __aexit__(self, *_args):
+                    return None
+
+            return TimeoutStream()
+
+    monkeypatch.setattr(web_tools.httpx, "AsyncClient", lambda **_kwargs: TimeoutClient())
+
+    payload = json.loads(
+        await web_tools.web_extract_tool(
+            ["https://example.com/slow"], use_llm_processing=False
+        )
+    )
+
+    assert payload["results"][0]["error"] == (
+        "Native extraction failed (ReadTimeout): ReadTimeout"
+    )
+
+
 def test_native_extract_is_visible_without_search_provider_and_captures_evidence(
     tmp_path, monkeypatch
 ):
