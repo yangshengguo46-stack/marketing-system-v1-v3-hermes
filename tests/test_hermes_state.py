@@ -96,6 +96,36 @@ class TestSessionLifecycle:
     def test_get_nonexistent_session(self, db):
         assert db.get_session("nonexistent") is None
 
+    def test_marketing_scope_is_native_pristine_and_inherited(self, db):
+        db.create_session(
+            session_id="s1",
+            source="tui",
+            marketing_user_id="user-1",
+            marketing_account_id="acct-1",
+        )
+        db.create_session(
+            session_id="s2",
+            source="tui",
+            parent_session_id="s1",
+        )
+
+        assert db.get_session("s2")["marketing_user_id"] == "user-1"
+        assert db.get_session("s2")["marketing_account_id"] == "acct-1"
+        assert db.update_session_marketing_scope(
+            "s2",
+            marketing_user_id="user-1",
+            marketing_account_id="acct-2",
+        )
+        assert db.get_session("s2")["marketing_account_id"] == "acct-2"
+
+        db.update_token_counts("s2", api_call_count=1)
+        assert not db.update_session_marketing_scope(
+            "s2",
+            marketing_user_id="user-1",
+            marketing_account_id="acct-3",
+        )
+        assert db.get_session("s2")["marketing_account_id"] == "acct-2"
+
     def test_update_session_cwd_persists_git_branch(self, db):
         db.create_session(session_id="s1", source="cli")
         db.update_session_cwd("s1", "/work/repo", git_branch="pets-feature")

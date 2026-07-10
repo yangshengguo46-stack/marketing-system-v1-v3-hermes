@@ -343,6 +343,8 @@ export interface SessionInfo {
   is_active: boolean
   last_active: number
   message_count: number
+  marketing_account_id?: null | string
+  marketing_user_id?: null | string
   model: null | string
   output_tokens: number
   /** Parent conversation when this row is a /branch fork. */
@@ -415,6 +417,12 @@ export interface SessionRuntimeInfo {
   usage?: Partial<UsageStats>
   version?: string
   yolo?: boolean
+  marketing_scope?: {
+    account_id: string
+    connected: boolean
+    platform: string
+    user_id: string
+  } | null
 }
 
 export interface UsageStats {

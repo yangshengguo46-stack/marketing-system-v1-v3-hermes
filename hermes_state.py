@@ -121,7 +121,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 # ---------------------------------------------------------------------------
 # WAL-compatibility fallback
@@ -676,6 +676,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     handoff_error TEXT,
     rewind_count INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
+    marketing_user_id TEXT,
+    marketing_account_id TEXT,
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
 );
 
@@ -1483,17 +1485,31 @@ class SessionDB:
         chat_id: str = None,
         chat_type: str = None,
         thread_id: str = None,
+        marketing_user_id: str = None,
+        marketing_account_id: str = None,
         parent_session_id: str = None,
         cwd: str = None,
     ) -> None:
         """Shared INSERT OR IGNORE for session rows."""
         def _do(conn):
+            scope_user_id = marketing_user_id
+            scope_account_id = marketing_account_id
+            if parent_session_id and not scope_account_id:
+                parent_scope = conn.execute(
+                    "SELECT marketing_user_id, marketing_account_id "
+                    "FROM sessions WHERE id = ?",
+                    (parent_session_id,),
+                ).fetchone()
+                if parent_scope is not None:
+                    scope_user_id = parent_scope["marketing_user_id"]
+                    scope_account_id = parent_scope["marketing_account_id"]
             conn.execute(
                 """INSERT OR IGNORE INTO sessions (
                    id, source, user_id, session_key, chat_id, chat_type, thread_id,
-                   model, model_config, system_prompt, parent_session_id, cwd, started_at
+                   model, model_config, system_prompt, marketing_user_id,
+                   marketing_account_id, parent_session_id, cwd, started_at
                 )
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     source,
@@ -1505,6 +1521,8 @@ class SessionDB:
                     model,
                     json.dumps(model_config) if model_config else None,
                     system_prompt,
+                    scope_user_id,
+                    scope_account_id,
                     parent_session_id,
                     cwd,
                     time.time(),
@@ -1844,6 +1862,38 @@ class SessionDB:
                 (model_config_json, model, session_id),
             )
         self._execute_write(_do)
+
+    def update_session_marketing_scope(
+        self,
+        session_id: str,
+        *,
+        marketing_user_id: Optional[str],
+        marketing_account_id: Optional[str],
+        require_pristine: bool = True,
+    ) -> bool:
+        """Bind a conversation to one Marketing OS account.
+
+        The scope participates in the stable per-conversation prompt prefix.
+        By default it can therefore only change before the first model call.
+        The guarded UPDATE makes that invariant atomic with respect to turn
+        persistence instead of relying on a caller-side check.
+        """
+
+        def _do(conn):
+            sql = (
+                "UPDATE sessions SET marketing_user_id = ?, "
+                "marketing_account_id = ? WHERE id = ?"
+            )
+            params: tuple[Any, ...] = (
+                marketing_user_id,
+                marketing_account_id,
+                session_id,
+            )
+            if require_pristine:
+                sql += " AND COALESCE(api_call_count, 0) = 0"
+            return conn.execute(sql, params).rowcount > 0
+
+        return bool(self._execute_write(_do))
 
     def update_system_prompt(self, session_id: str, system_prompt: str) -> None:
         """Store the full assembled system prompt snapshot."""

@@ -353,6 +353,8 @@ def test_session_resume_defaults_to_deferred_build(server, monkeypatch):
                 "id": target,
                 "model": "vendor/cool-model",
                 "model_config": {"provider": "vendor"},
+                "marketing_user_id": "default",
+                "marketing_account_id": "prospect_test",
             }
 
         def get_session_by_title(self, _title):
@@ -404,9 +406,11 @@ def test_session_resume_defaults_to_deferred_build(server, monkeypatch):
     assert result["info"]["model"] == "vendor/cool-model"
     assert result["info"]["provider"] == "vendor"
     assert result["info"]["desktop_contract"] == server.DESKTOP_BACKEND_CONTRACT
+    assert result["info"]["marketing_scope"]["account_id"] == "prospect_test"
 
     sid = result["session_id"]
     session = server._sessions[sid]
+    assert session["marketing_scope"]["account_id"] == "prospect_test"
     # Registered but not built: agent is None and the resume key is carried so a
     # later prompt.submit / _sess() upgrade continues THIS stored conversation.
     assert session["agent"] is None

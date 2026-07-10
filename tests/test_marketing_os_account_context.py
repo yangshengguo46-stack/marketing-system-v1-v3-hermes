@@ -3,6 +3,8 @@ import sqlite3
 
 from marketing_os.data_paths import MarketingDataPaths
 from marketing_os.domains import AccountContextRepository
+from marketing_os.session_scope import build_account_scope_prompt, resolve_account_scope
+from hermes_state import SessionDB
 from model_tools import get_tool_definitions, handle_function_call
 from toolsets import resolve_toolset
 from tui_gateway import server
@@ -168,3 +170,68 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
     assert result["lifecycle"]["stage"] == "positioning_approved"
     assert result["account_dna"]["taboos"] == ["虚构收益"]
+
+
+def test_session_scope_keeps_only_stable_routing_identity_in_prompt(tmp_path):
+    repository = AccountContextRepository(_seed_product_store(tmp_path))
+
+    scope = resolve_account_scope(
+        user_id="default",
+        account_id="acct-1",
+        repository=repository,
+    )
+    prompt = build_account_scope_prompt(scope)
+
+    assert scope == {
+        "user_id": "default",
+        "account_id": "acct-1",
+        "platform": "douyin",
+        "connected": True,
+    }
+    assert "account_id=acct-1" in prompt
+    assert "marketing_read_account_context" in prompt
+    assert "经营 AI 教育账号" not in prompt
+
+
+def test_native_gateway_binds_pristine_session_to_account(tmp_path, monkeypatch):
+    paths = _seed_product_store(tmp_path)
+    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
+    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
+    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
+    state_db = SessionDB(db_path=tmp_path / "state.db")
+    monkeypatch.setattr(server, "_db", state_db)
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda _sid: None)
+
+    response = server.handle_request({
+        "jsonrpc": "2.0",
+        "id": "create-scoped-session",
+        "method": "session.create",
+        "params": {"marketing_account_id": "acct-1"},
+    })
+    sid = response["result"]["session_id"]
+    session = server._sessions[sid]
+    try:
+        assert response["result"]["info"]["marketing_scope"]["account_id"] == "acct-1"
+        server._ensure_session_db_row(session)
+        row = state_db.get_session(session["session_key"])
+        assert row["marketing_account_id"] == "acct-1"
+
+        bound = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": "read-scope",
+            "method": "marketing.session.account.get",
+            "params": {"session_id": sid},
+        })
+        assert bound["result"]["scope"]["platform"] == "douyin"
+
+        session["history"].append({"role": "user", "content": "hello"})
+        rejected = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": "change-scope",
+            "method": "marketing.session.account.set",
+            "params": {"session_id": sid, "account_id": "prospect_new"},
+        })
+        assert rejected["error"]["code"] == 4095
+    finally:
+        server._close_session_by_id(sid, end_reason="test_cleanup")
+        state_db.close()

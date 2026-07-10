@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { getSessionMessages, type SessionInfo } from '@/hermes'
 import { createClientSessionState } from '@/lib/chat-runtime'
+import { $selectedMarketingAccountId } from '@/store/marketing'
 import { $activeGatewayProfile, $newChatProfile } from '@/store/profile'
 import {
   $activeSessionId,
@@ -114,6 +115,7 @@ describe('createBackendSessionForSend profile routing', () => {
     $newChatProfile.set(null)
     $activeGatewayProfile.set('default')
     $currentCwd.set('')
+    $selectedMarketingAccountId.set('')
     vi.restoreAllMocks()
   })
 
@@ -154,6 +156,17 @@ describe('createBackendSessionForSend profile routing', () => {
     })
 
     expect(params).toMatchObject({ cwd: '/remote/worktree' })
+  })
+
+  it('binds a new conversation to the selected Marketing OS account', async () => {
+    const params = await createWith(() => {
+      $selectedMarketingAccountId.set('acct-creator-1')
+    })
+
+    expect(params).toMatchObject({
+      marketing_user_id: 'default',
+      marketing_account_id: 'acct-creator-1'
+    })
   })
 })
 

@@ -1202,6 +1202,8 @@ def _start_agent_build(sid: str, session: dict) -> None:
                 # id — pass it through so the upgrade continues that session
                 # instead of starting a fresh one under the same key.
                 kw = {"session_db": session_db}
+                if current.get("marketing_scope"):
+                    kw["marketing_scope"] = current["marketing_scope"]
                 if resume_sid := current.get("resume_session_id"):
                     kw["session_id"] = resume_sid
                 resume_overrides = current.get("resume_runtime_overrides")
@@ -1587,6 +1589,8 @@ def _ensure_session_db_row(session: dict) -> None:
             source=_session_source(session),
             model=row_model,
             model_config=model_config or None,
+            marketing_user_id=(session.get("marketing_scope") or {}).get("user_id"),
+            marketing_account_id=(session.get("marketing_scope") or {}).get("account_id"),
             parent_session_id=parent_session_id,
             cwd=_session_cwd(session) if session.get("explicit_cwd") else None,
         )
@@ -3110,6 +3114,7 @@ def _session_info(agent, session: dict | None = None) -> dict:
         "update_command": "",
         "usage": _get_usage(agent),
         "profile_name": _current_profile_name(),
+        "marketing_scope": (session or {}).get("marketing_scope"),
     }
     try:
         from hermes_cli import __version__, __release_date__
@@ -4180,6 +4185,7 @@ def _make_agent(
     provider_override: str | None = None,
     reasoning_config_override: dict | None = None,
     service_tier_override: str | None = None,
+    marketing_scope: dict | None = None,
 ):
     from run_agent import AIAgent
 
@@ -4219,6 +4225,27 @@ def _make_agent(
             system_prompt = "\n\n".join(
                 part for part in (system_prompt, skills_prompt) if part
             ).strip()
+    # A conversation has one stable Marketing OS account scope. Resolve it
+    # from durable session state on resume, or use the explicit scope attached
+    # to a not-yet-persisted desktop draft. Mutable account facts never enter
+    # this cached prefix; the native account tool remains authoritative.
+    from marketing_os.session_scope import (
+        build_account_scope_prompt,
+        read_session_scope,
+    )
+
+    stable_scope = marketing_scope
+    if stable_scope is None:
+        stable_scope = read_session_scope(
+            session_db if session_db is not None else _get_db(),
+            session_id or key,
+        )
+    base_ephemeral_prompt = system_prompt
+    account_scope_prompt = build_account_scope_prompt(stable_scope)
+    if account_scope_prompt:
+        system_prompt = "\n\n".join(
+            part for part in (system_prompt, account_scope_prompt) if part
+        ).strip()
     # Prefer a per-session model override (set by a prior in-session /model
     # switch) over global config/env resolution. Resume-time stored sessions may
     # also pass scalar model/provider/runtime knobs from the persisted DB row.
@@ -4273,7 +4300,7 @@ def _make_agent(
             "target_model": model or None,
         })
     _pr = _load_provider_routing()
-    return AIAgent(
+    agent = AIAgent(
         model=model,
         max_iterations=_cfg_max_turns(cfg, 90),
         provider=runtime.get("provider"),
@@ -4320,6 +4347,12 @@ def _make_agent(
         fallback_model=_load_fallback_model(),
         **_agent_cbs(sid),
     )
+    # Updating account scope is cache-safe only before the first model call.
+    # Keep the non-account prefix so the guarded RPC can rebuild the overlay
+    # without accumulating duplicate prompts.
+    agent._marketing_base_ephemeral_prompt = base_ephemeral_prompt
+    agent._marketing_scope = stable_scope
+    return agent
 
 
 def _init_session(
@@ -4363,10 +4396,14 @@ def _init_session(
     db = session_db if session_db is not None else _get_db()
     if db is not None:
         row = db.get_session(key)
-        if row and row.get("cwd"):
+        if row:
+            from marketing_os.session_scope import scope_from_session_row
+
             with _sessions_lock:
                 if sid in _sessions:
-                    _sessions[sid]["cwd"] = row["cwd"]
+                    if row.get("cwd"):
+                        _sessions[sid]["cwd"] = row["cwd"]
+                    _sessions[sid]["marketing_scope"] = scope_from_session_row(row)
         else:
             try:
                 _cwd = _sessions[sid]["cwd"]
@@ -4860,6 +4897,17 @@ def _(rid, params: dict) -> dict:
         explicit_cwd = False
     resolved_cwd = _completion_cwd(params)
     source = str(params.get("source") or "tui").strip() or "tui"
+    marketing_scope = None
+    if account_id := str(params.get("marketing_account_id") or "").strip():
+        from marketing_os.session_scope import resolve_account_scope
+
+        try:
+            marketing_scope = resolve_account_scope(
+                user_id=str(params.get("marketing_user_id") or "default"),
+                account_id=account_id,
+            )
+        except ValueError as exc:
+            return _err(rid, -32602, str(exc))
     _enable_gateway_prompts()
 
     # ``profile`` (app-global remote mode): a new chat started under a non-launch
@@ -4868,6 +4916,33 @@ def _(rid, params: dict) -> dict:
     # and each turn re-bind HERMES_HOME. None/own profile → launch (unchanged).
     profile = (params.get("profile") or "").strip() or None
     profile_home = _profile_home(profile)
+    if parent_session_id:
+        from hermes_state import SessionDB
+        from marketing_os.session_scope import read_session_scope
+
+        parent_db = None
+        close_parent_db = False
+        try:
+            if profile_home is not None:
+                parent_db = SessionDB(db_path=Path(profile_home) / "state.db")
+                close_parent_db = True
+            else:
+                parent_db = _get_db()
+            parent_scope = read_session_scope(parent_db, parent_session_id)
+        finally:
+            if close_parent_db and parent_db is not None:
+                parent_db.close()
+        if parent_scope:
+            if (
+                marketing_scope
+                and marketing_scope.get("account_id") != parent_scope.get("account_id")
+            ):
+                return _err(
+                    rid,
+                    4095,
+                    "a branched conversation must inherit its parent account scope",
+                )
+            marketing_scope = parent_scope
 
     # The desktop composer owns its model/effort/fast as plain UI state and ships
     # it on every session.create. Honor each as a PER-SESSION override (built into
@@ -4918,6 +4993,7 @@ def _(rid, params: dict) -> dict:
             "inflight_turn": None,
             "last_active": now,
             "model_override": session_model_override,
+            "marketing_scope": marketing_scope,
             "create_reasoning_override": create_reasoning_override,
             "create_service_tier_override": create_service_tier_override,
             "parent_session_id": parent_session_id,
@@ -4977,6 +5053,7 @@ def _(rid, params: dict) -> dict:
                 "lazy": True,
                 "desktop_contract": DESKTOP_BACKEND_CONTRACT,
                 "profile_name": _current_profile_name(),
+                "marketing_scope": marketing_scope,
             },
         },
     )
@@ -5019,6 +5096,8 @@ def _(rid, params: dict) -> dict:
                         "started_at": s.get("started_at") or 0,
                         "message_count": s.get("message_count") or 0,
                         "source": s.get("source") or "",
+                        "marketing_user_id": s.get("marketing_user_id"),
+                        "marketing_account_id": s.get("marketing_account_id"),
                     }
                     for s in rows
                 ]
@@ -5114,7 +5193,13 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, {"verification": {"status": "unknown", "evidence": None}})
 
 
-def _lazy_resume_info(cwd: str, *, model: str = "", provider: str = "") -> dict:
+def _lazy_resume_info(
+    cwd: str,
+    *,
+    model: str = "",
+    provider: str = "",
+    marketing_scope: dict | None = None,
+) -> dict:
     """session.info for a not-yet-built session (the shape session.create
     returns). tools/skills land later when the deferred build emits session.info."""
     info = {
@@ -5126,6 +5211,7 @@ def _lazy_resume_info(cwd: str, *, model: str = "", provider: str = "") -> dict:
         "lazy": True,
         "desktop_contract": DESKTOP_BACKEND_CONTRACT,
         "profile_name": _current_profile_name(),
+        "marketing_scope": marketing_scope,
     }
     if provider:
         info["provider"] = provider
@@ -5146,6 +5232,7 @@ def _deferred_session_record(
     lazy: bool = False,
     model_override=None,
     resume_runtime_overrides: dict | None = None,
+    marketing_scope: dict | None = None,
 ) -> dict:
     """A live-session record whose AIAgent is built later (lazy watch / cold
     resume) — _init_session's shape minus the agent."""
@@ -5171,6 +5258,7 @@ def _deferred_session_record(
         "last_active": now,
         "lazy": lazy,
         "model_override": model_override,
+        "marketing_scope": marketing_scope,
         "pending_title": None,
         "profile_home": str(profile_home) if profile_home is not None else None,
         "resume_runtime_overrides": resume_runtime_overrides,
@@ -5287,6 +5375,9 @@ def _(rid, params: dict) -> dict:
     profile_resume_cwd = str(found.get("cwd") or "").strip() or _profile_configured_cwd(
         profile_home
     )
+    from marketing_os.session_scope import scope_from_session_row
+
+    marketing_scope = scope_from_session_row(found)
 
     def _reuse_live_payload(sid: str, session: dict) -> dict:
         payload = _live_session_payload(
@@ -5343,6 +5434,7 @@ def _(rid, params: dict) -> dict:
             close_on_disconnect=is_truthy_value(params.get("close_on_disconnect", False)),
             profile_home=profile_home,
             lazy=True,
+            marketing_scope=marketing_scope,
         )
         if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
             return _ok(rid, _reuse_live_payload(*live))
@@ -5357,7 +5449,7 @@ def _(rid, params: dict) -> dict:
                 "resumed": target,
                 "message_count": len(messages),
                 "messages": messages,
-                "info": _lazy_resume_info(cwd),
+                "info": _lazy_resume_info(cwd, marketing_scope=marketing_scope),
                 "inflight": None,
                 "running": child_running,
                 "session_key": target,
@@ -5418,6 +5510,7 @@ def _(rid, params: dict) -> dict:
             profile_home=profile_home,
             model_override=overrides.get("model_override"),
             resume_runtime_overrides=overrides or None,
+            marketing_scope=marketing_scope,
         )
         if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
             return _ok(rid, _reuse_live_payload(*live))
@@ -5437,6 +5530,7 @@ def _(rid, params: dict) -> dict:
                     cwd,
                     model=model_override.get("model") or "",
                     provider=overrides.get("provider_override") or "",
+                    marketing_scope=marketing_scope,
                 ),
                 "inflight": None,
                 "running": False,
@@ -12812,6 +12906,100 @@ def _(rid, params: dict) -> dict:
     except ValueError as exc:
         return _err(rid, -32602, str(exc))
     return _ok(rid, result)
+
+
+@method("marketing.session.account.get")
+def _(rid, params: dict) -> dict:
+    """Return the account routing scope owned by a live conversation."""
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    scope = session.get("marketing_scope")
+    if scope is None:
+        from marketing_os.session_scope import read_session_scope
+
+        with _session_db(session) as db:
+            scope = read_session_scope(db, session.get("session_key") or "")
+        session["marketing_scope"] = scope
+    return _ok(rid, {"scope": scope})
+
+
+@method("marketing.session.account.set")
+def _(rid, params: dict) -> dict:
+    """Bind a pristine conversation to one account without breaking caching."""
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    if session.get("running"):
+        return _err(rid, 4095, "cannot change account while the agent is running")
+    if session.get("history"):
+        return _err(
+            rid,
+            4095,
+            "account scope is immutable after conversation history begins; create a new chat",
+        )
+
+    from marketing_os.session_scope import (
+        build_account_scope_prompt,
+        resolve_account_scope,
+    )
+
+    account_id = str(params.get("account_id") or "").strip()
+    try:
+        scope = (
+            resolve_account_scope(
+                user_id=str(params.get("user_id") or "default"),
+                account_id=account_id,
+            )
+            if account_id
+            else None
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+
+    key = str(session.get("session_key") or "")
+    with _session_db(session) as db:
+        row = db.get_session(key) if db is not None else None
+        if row and int(row.get("api_call_count") or 0) > 0:
+            return _err(
+                rid,
+                4095,
+                "account scope is immutable after the first model call; create a new chat",
+            )
+        if row and not db.update_session_marketing_scope(
+            key,
+            marketing_user_id=(scope or {}).get("user_id"),
+            marketing_account_id=(scope or {}).get("account_id"),
+        ):
+            return _err(
+                rid,
+                4095,
+                "account scope changed concurrently with the first model call",
+            )
+
+    session["marketing_scope"] = scope
+    # session.create normally supplies scope before deferred construction. The
+    # RPC also supports a just-opened draft whose agent finished pre-warming:
+    # changing the ephemeral suffix is safe while zero model calls exist.
+    if session.get("agent") is None and session.get("agent_build_started"):
+        wait_error = _wait_agent(session, rid)
+        if wait_error:
+            return wait_error
+    agent = session.get("agent")
+    if agent is not None:
+        if int(getattr(agent, "session_api_calls", 0) or 0) > 0:
+            return _err(
+                rid,
+                4095,
+                "account scope is immutable after the first model call; create a new chat",
+            )
+        base = str(getattr(agent, "_marketing_base_ephemeral_prompt", "") or "")
+        overlay = build_account_scope_prompt(scope)
+        agent.ephemeral_system_prompt = "\n\n".join(
+            part for part in (base, overlay) if part
+        ).strip() or None
+        agent._marketing_scope = scope
+    return _ok(rid, {"scope": scope})
 
 
 @method("insights.get")

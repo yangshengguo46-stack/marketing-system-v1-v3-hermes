@@ -10,6 +10,7 @@ import { embeddedImageUrls, textWithoutEmbeddedImages } from '@/lib/embedded-ima
 import { setSessionYolo } from '@/lib/yolo-session'
 import { clearQueuedPrompts } from '@/store/composer-queue'
 import { $pinnedSessionIds } from '@/store/layout'
+import { $selectedMarketingAccountId } from '@/store/marketing'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
 import { requestDesktopOnboarding } from '@/store/onboarding'
 import {
@@ -498,6 +499,7 @@ export function useSessionActions({
         const uiProvider = $currentProvider.get().trim()
         const uiEffort = $currentReasoningEffort.get().trim()
         const uiFast = $currentFastMode.get()
+        const marketingAccountId = $selectedMarketingAccountId.get().trim() || 'prospect_default'
 
         const created = await requestGateway<SessionCreateResponse>('session.create', {
           cols: 96,
@@ -505,7 +507,9 @@ export function useSessionActions({
           ...(newChatProfile ? { profile: newChatProfile } : {}),
           ...(uiModel ? { model: uiModel, ...(uiProvider ? { provider: uiProvider } : {}) } : {}),
           ...(uiEffort ? { reasoning_effort: uiEffort } : {}),
-          ...(uiFast ? { fast: true } : {})
+          ...(uiFast ? { fast: true } : {}),
+          marketing_user_id: 'default',
+          marketing_account_id: marketingAccountId
         })
 
         const stored = created.stored_session_id ?? null

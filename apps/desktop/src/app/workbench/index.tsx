@@ -1,8 +1,15 @@
+import { useStore } from '@nanostores/react'
 import { useEffect, useState } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
 import { PRODUCT_NAME, PRODUCT_TAGLINE } from '@/product'
+import {
+  $selectedMarketingAccountId,
+  type MarketingAccountSummary,
+  selectMarketingAccount,
+  setMarketingAccounts
+} from '@/store/marketing'
 
 interface MarketingProductStatus {
   product_id: string
@@ -14,7 +21,7 @@ interface MarketingProductStatus {
 }
 
 interface MarketingAccountsSummary {
-  accounts: Array<{ id: string; label?: string; platform?: string; username?: string }>
+  accounts: MarketingAccountSummary[]
   total: number
   source: string
 }
@@ -28,24 +35,39 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
   const [status, setStatus] = useState<MarketingProductStatus | null>(null)
   const [accounts, setAccounts] = useState<MarketingAccountsSummary | null>(null)
   const [error, setError] = useState('')
+  const selectedAccountId = useStore($selectedMarketingAccountId)
+
+  const startForAccount = (accountId: string) => {
+    selectMarketingAccount(accountId)
+    onNewChat()
+  }
 
   useEffect(() => {
     let active = true
 
     void requestGateway<MarketingProductStatus>('marketing.product.status')
       .then(result => {
-        if (active) setStatus(result)
+        if (active) {
+          setStatus(result)
+        }
       })
       .catch(reason => {
-        if (active) setError(reason instanceof Error ? reason.message : String(reason))
+        if (active) {
+          setError(reason instanceof Error ? reason.message : String(reason))
+        }
       })
 
     void requestGateway<MarketingAccountsSummary>('marketing.accounts.list')
       .then(result => {
-        if (active) setAccounts(result)
+        if (active) {
+          setAccounts(result)
+          setMarketingAccounts(result.accounts)
+        }
       })
       .catch(reason => {
-        if (active) setError(reason instanceof Error ? reason.message : String(reason))
+        if (active) {
+          setError(reason instanceof Error ? reason.message : String(reason))
+        }
       })
 
     return () => {
@@ -67,30 +89,59 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
               <p className="mt-1 text-sm text-(--ui-text-secondary)">{PRODUCT_TAGLINE}</p>
             </div>
           </div>
-          <Button onClick={onNewChat}>开始新对话</Button>
+          <Button onClick={() => startForAccount(selectedAccountId || accounts?.accounts[0]?.id || 'prospect_default')}>
+            开始新对话
+          </Button>
         </header>
 
         <section className="grid gap-4 md:grid-cols-3">
-          <WorkbenchSignal label="智能体" value={status ? '原生运行' : '正在连接'} detail="会话、长任务、记忆和技能由同一个内核运行" />
           <WorkbenchSignal
-            label="经营对象"
-            value={accounts ? `${accounts.total} 个账号` : '正在读取'}
-            detail={
-              accounts?.accounts[0]
-                ? `${accounts.accounts[0].platform || '平台'} · ${accounts.accounts[0].label || accounts.accounts[0].username || accounts.accounts[0].id}`
-                : '未登录也可以先从自然对话建立目标受众和账号方向'
-            }
+            detail="会话、长任务、记忆和技能由同一个内核运行"
+            label="智能体"
+            value={status ? '原生运行' : '正在连接'}
           />
-          <WorkbenchSignal label="产品界面" value="原生桌面" detail="工作台、对话和后台任务共享同一会话与运行时" />
+          <article className="min-h-40 rounded-2xl border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-6">
+            <p className="text-xs text-(--ui-text-tertiary)">经营对象</p>
+            <strong className="mt-5 block text-xl font-semibold tracking-[-0.03em]">
+              {accounts ? `${accounts.total} 个账号` : '正在读取'}
+            </strong>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {accounts?.accounts.map(account => (
+                <button
+                  className={`rounded-full border px-3 py-1.5 text-left text-xs transition-colors ${
+                    selectedAccountId === account.id
+                      ? 'border-(--ui-accent) bg-(--ui-accent)/10 text-foreground'
+                      : 'border-(--ui-stroke-tertiary) text-(--ui-text-secondary) hover:text-foreground'
+                  }`}
+                  key={account.id}
+                  onClick={() => startForAccount(account.id)}
+                  type="button"
+                >
+                  {account.platform || '平台'} · {account.label || account.username || account.id}
+                </button>
+              ))}
+              {accounts?.total === 0 ? (
+                <button
+                  className="rounded-full border border-(--ui-stroke-tertiary) px-3 py-1.5 text-xs text-(--ui-text-secondary) hover:text-foreground"
+                  onClick={() => startForAccount('prospect_default')}
+                  type="button"
+                >
+                  先聊方向，不登录账号
+                </button>
+              ) : null}
+            </div>
+          </article>
+          <WorkbenchSignal detail="工作台、对话和后台任务共享同一会话与运行时" label="产品界面" value="原生桌面" />
         </section>
 
         <section className="rounded-2xl border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-7">
           <p className="text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-(--ui-text-tertiary)">Today</p>
           <h2 className="mt-3 text-xl font-semibold">告诉 Agent 你想经营什么</h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-(--ui-text-secondary)">
-            不知道账号定位也可以直接开始。Marketing OS 会先了解你的能力、兴趣、可投入时间和目标受众，再形成第一轮可验证方向。
+            不知道账号定位也可以直接开始。Marketing OS
+            会先了解你的能力、兴趣、可投入时间和目标受众，再形成第一轮可验证方向。
           </p>
-          <Button className="mt-6" onClick={onNewChat} variant="outline">
+          <Button className="mt-6" onClick={() => startForAccount('prospect_default')} variant="outline">
             从自然对话开始
           </Button>
           {error ? <p className="mt-4 text-xs text-red-400">原生 Gateway 尚未就绪：{error}</p> : null}
