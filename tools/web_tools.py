@@ -42,7 +42,9 @@ import logging
 import os
 import re
 import asyncio
+from html.parser import HTMLParser
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
+from urllib.parse import urljoin
 import httpx  # noqa: F401 — kept at module top so tests can patch tools.web_tools.httpx
 # After the web-provider plugin migration (PR #25182), the Firecrawl SDK
 # proxy, client construction, and response-shape normalizers all live in
@@ -892,6 +894,197 @@ def web_search_tool(query: str, limit: int = 5) -> str:
         return tool_error(error_msg)
 
 
+class _NativeHTMLTextParser(HTMLParser):
+    """Small dependency-free HTML reader used by the local extract fallback."""
+
+    _IGNORED = {"script", "style", "noscript", "template", "svg", "canvas"}
+    _BLOCKS = {
+        "article", "aside", "blockquote", "br", "div", "footer", "h1", "h2", "h3",
+        "h4", "h5", "h6", "header", "li", "main", "nav", "ol", "p", "pre",
+        "section", "table", "td", "th", "tr", "ul",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._ignore_depth = 0
+        self._in_title = False
+        self._parts: list[str] = []
+        self._title_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if self._ignore_depth:
+            self._ignore_depth += 1
+            return
+        if tag in self._IGNORED:
+            self._ignore_depth = 1
+            return
+        if tag == "title":
+            self._in_title = True
+        if tag in self._BLOCKS:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._ignore_depth:
+            self._ignore_depth -= 1
+            return
+        tag = tag.lower()
+        if tag == "title":
+            self._in_title = False
+        if tag in self._BLOCKS:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._ignore_depth:
+            return
+        value = re.sub(r"\s+", " ", data).strip()
+        if not value:
+            return
+        if self._in_title:
+            self._title_parts.append(value)
+        self._parts.append(value)
+
+    @property
+    def title(self) -> str:
+        return " ".join(self._title_parts).strip()[:500]
+
+    @property
+    def text(self) -> str:
+        lines = [
+            re.sub(r"\s+", " ", line).strip()
+            for line in "".join(self._parts).splitlines()
+        ]
+        return "\n\n".join(line for line in lines if line)
+
+
+async def _native_extract_urls(urls: List[str]) -> List[Dict[str, Any]]:
+    """Read public HTML/text with SSRF, redirect, policy and size guards."""
+
+    from tools.interrupt import is_interrupted
+    from tools.website_policy import check_website_access
+
+    results: List[Dict[str, Any]] = []
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) MarketingOS/1.0"
+        ),
+        "Accept": "text/html,text/plain,application/json;q=0.8,*/*;q=0.5",
+    }
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=False, trust_env=True
+    ) as client:
+        for original_url in urls:
+            if is_interrupted():
+                results.append(
+                    {"url": original_url, "title": "", "content": "", "error": "Interrupted"}
+                )
+                continue
+            current_url = original_url
+            appended = False
+            try:
+                for redirect_count in range(6):
+                    if not await async_is_safe_url(current_url):
+                        raise ValueError(
+                            "Blocked: URL targets a private or internal network address"
+                        )
+                    blocked = check_website_access(current_url)
+                    if blocked:
+                        results.append(
+                            {
+                                "url": current_url,
+                                "title": "",
+                                "content": "",
+                                "error": blocked["message"],
+                                "blocked_by_policy": {
+                                    "host": blocked["host"],
+                                    "rule": blocked["rule"],
+                                    "source": blocked["source"],
+                                },
+                            }
+                        )
+                        appended = True
+                        break
+                    async with client.stream("GET", current_url, headers=headers) as response:
+                        if response.status_code in {301, 302, 303, 307, 308}:
+                            location = response.headers.get("location")
+                            if not location:
+                                raise ValueError(
+                                    "redirect response did not include a location"
+                                )
+                            if redirect_count >= 5:
+                                raise ValueError("too many redirects")
+                            current_url = urljoin(current_url, location)
+                            continue
+                        response.raise_for_status()
+                        content_type = response.headers.get("content-type", "").lower()
+                        declared_length = response.headers.get("content-length")
+                        if declared_length and int(declared_length) > 2_000_000:
+                            raise ValueError(
+                                "page exceeds the 2 MB native extraction limit"
+                            )
+                        raw = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            raw.extend(chunk)
+                            if len(raw) > 2_000_000:
+                                raise ValueError(
+                                    "page exceeds the 2 MB native extraction limit"
+                                )
+                        encoding = response.encoding or "utf-8"
+                        decoded = bytes(raw).decode(encoding, errors="replace")
+                        if (
+                            "text/html" in content_type
+                            or "application/xhtml+xml" in content_type
+                        ):
+                            parser = _NativeHTMLTextParser()
+                            parser.feed(decoded)
+                            content = parser.text
+                            title = parser.title
+                        elif (
+                            content_type.startswith("text/")
+                            or "application/json" in content_type
+                            or not content_type
+                        ):
+                            content = decoded.strip()
+                            title = ""
+                        else:
+                            raise ValueError(
+                                "native extractor does not support content type "
+                                f"{content_type or 'unknown'}"
+                            )
+                        if not content:
+                            raise ValueError("page did not contain readable text")
+                        results.append(
+                            {
+                                "url": current_url,
+                                "title": title,
+                                "content": content,
+                                "raw_content": content,
+                                "metadata": {
+                                    "collector": "native_http",
+                                    "content_type": content_type,
+                                    "bytes": len(raw),
+                                },
+                            }
+                        )
+                        appended = True
+                        break
+                if not appended:
+                    raise ValueError("too many redirects")
+            except Exception as exc:
+                if not appended:
+                    results.append(
+                        {
+                            "url": current_url,
+                            "title": "",
+                            "content": "",
+                            "error": f"Native extraction failed: {exc}",
+                        }
+                    )
+    return results
+
+
 async def web_extract_tool(
     urls: List[str],
     format: str = None,
@@ -993,55 +1186,52 @@ async def web_extract_tool(
             )
 
             provider = _wsp_get_provider(backend) if backend else None
-            if provider is None or not provider.supports_extract():
-                # When the configured name IS registered but doesn't support
-                # extract (search-only providers like brave-free / ddgs /
-                # searxng), surface that as a typed "search-only" error
-                # rather than silently switching backends. When the name
-                # isn't registered at all (typo / uninstalled plugin), fall
-                # through to the active-provider walk.
-                if provider is not None and not provider.supports_extract():
-                    return json.dumps(
-                        {
-                            "success": False,
-                            "error": (
-                                f"{provider.display_name} is a search-only "
-                                "backend and cannot extract URL content. "
-                                "Set web.extract_backend to firecrawl, "
-                                "tavily, exa, or parallel."
-                            ),
-                        },
-                        ensure_ascii=False,
-                    )
-                provider = get_active_extract_provider()
-                if provider is None:
-                    return json.dumps(
-                        {
-                            "success": False,
-                            "error": (
-                                "No web extract provider configured. "
-                                "Set web.extract_backend to firecrawl, "
-                                "tavily, exa, or parallel."
-                            ),
-                        },
-                        ensure_ascii=False,
-                    )
-
-            logger.info(
-                "Web extract via %s: %d URL(s)", provider.name, len(safe_urls)
-            )
-
-            # Async-or-sync dispatch: parallel + firecrawl have async
-            # extract(); exa + tavily are sync.
-            import inspect
-            if inspect.iscoroutinefunction(provider.extract):
-                results = await provider.extract(safe_urls, format=format)
-            else:
-                # Run sync extract() in a thread so we don't block the
-                # event loop on network I/O.
-                results = await asyncio.to_thread(
-                    provider.extract, safe_urls, format=format
+            try:
+                provider_ready = bool(
+                    provider
+                    and provider.supports_extract()
+                    and provider.is_available()
                 )
+            except Exception:
+                provider_ready = False
+            if not provider_ready:
+                # An explicitly configured provider may be installed but have
+                # no credential. Keep precise provider errors for web_search,
+                # but URL extraction can still use the safe native reader.
+                candidate = get_active_extract_provider()
+                try:
+                    provider = (
+                        candidate
+                        if candidate
+                        and candidate.supports_extract()
+                        and candidate.is_available()
+                        else None
+                    )
+                except Exception:
+                    provider = None
+            if provider is None:
+                # URL extraction is a baseline local capability. A C-end user
+                # should not need a Firecrawl/Exa account merely to read a
+                # public HTML page. Search remains provider-backed; extraction
+                # falls back to a bounded, policy-aware native reader.
+                logger.info("Web extract via native HTTP fallback: %d URL(s)", len(safe_urls))
+                results = await _native_extract_urls(safe_urls)
+            else:
+                logger.info(
+                    "Web extract via %s: %d URL(s)", provider.name, len(safe_urls)
+                )
+
+                # Async-or-sync dispatch: parallel + firecrawl have async
+                # extract(); exa + tavily are sync.
+                import inspect
+                if inspect.iscoroutinefunction(provider.extract):
+                    results = await provider.extract(safe_urls, format=format)
+                else:
+                    # Run sync extract() in a thread so we don't block the
+                    # event loop on network I/O.
+                    results = await asyncio.to_thread(
+                        provider.extract, safe_urls, format=format
+                    )
 
         # Merge any SSRF-blocked results back in
         if ssrf_blocked:
@@ -1205,6 +1395,12 @@ def check_web_api_key() -> bool:
         _is_backend_available(backend)
         for backend in ("exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs", "xai")
     )
+
+
+def check_web_extract_available() -> bool:
+    """Extraction always has the bounded native HTTP fallback."""
+
+    return True
 
 
 def check_auxiliary_model() -> bool:
@@ -1383,7 +1579,7 @@ registry.register(
     schema=WEB_EXTRACT_SCHEMA,
     handler=lambda args, **kw: web_extract_tool(
         args.get("urls", [])[:5] if isinstance(args.get("urls"), list) else [], "markdown"),
-    check_fn=check_web_api_key,
+    check_fn=check_web_extract_available,
     requires_env=_web_requires_env(),
     is_async=True,
     emoji="📄",
