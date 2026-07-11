@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from hermes_state import SessionDB
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -101,20 +104,54 @@ class AccountRegistry:
 
     def disconnect(self, account_id: str, *, user_id: str = "default") -> dict[str, Any]:
         current = self._require(account_id, user_id=user_id)
-        return self.db.upsert_marketing_account(
+        account = self.db.upsert_marketing_account(
             account_id=account_id,
             user_id=user_id,
             platform=current["platform"],
             status="disconnected",
             auth_state="unauthenticated",
         )
+        self._reconcile_browser_owner(account, purge_profile=False)
+        return account
 
     def delete(self, account_id: str, *, user_id: str = "default") -> bool:
-        self._require(account_id, user_id=user_id)
-        return self.db.delete_marketing_account(account_id, user_id=user_id)
+        current = self._require(account_id, user_id=user_id)
+        deleted = self.db.delete_marketing_account(account_id, user_id=user_id)
+        if deleted:
+            self._reconcile_browser_owner(current, purge_profile=True)
+        return deleted
 
     def list(self, *, user_id: str = "default") -> list[dict[str, Any]]:
         return self.db.list_marketing_accounts(user_id=user_id)
+
+    def browser_context_lifecycle(
+        self, account_id: str, *, user_id: str = "default"
+    ) -> dict[str, Any]:
+        """Return the account-owner decision consumed by the browser owner."""
+
+        account = self.db.get_marketing_account(
+            account_id,
+            user_id=user_id,
+            include_deleted=True,
+        )
+        if account is None:
+            return {
+                "account_id": account_id,
+                "user_id": user_id,
+                "status": "missing",
+                "may_run": False,
+                "purge_profile": True,
+            }
+        status = str(account.get("status") or "unknown")
+        return {
+            "account_id": str(account["id"]),
+            "user_id": str(account["user_id"]),
+            "platform": str(account["platform"]),
+            "profile_key": str(account["profile_key"]),
+            "status": status,
+            "may_run": status in {"pending", "active", "stale"},
+            "purge_profile": status == "deleted",
+        }
 
     def bind_session(
         self,
@@ -200,3 +237,31 @@ class AccountRegistry:
         if account is None:
             raise ValueError(f"unknown Marketing OS account: {account_id}")
         return account
+
+    @staticmethod
+    def _reconcile_browser_owner(
+        account: dict[str, Any], *, purge_profile: bool
+    ) -> None:
+        """Tell the native MCP owner to release this account's browser context."""
+
+        try:
+            from agent.product import is_product_runtime
+
+            if not is_product_runtime():
+                return
+            from tools.mcp_tool import reconcile_marketing_account_browser
+
+            reconcile_marketing_account_browser(
+                user_id=str(account["user_id"]),
+                account_id=str(account["id"]),
+                platform=str(account["platform"]),
+                profile_key=str(account["profile_key"]),
+                purge_profile=purge_profile,
+            )
+        except Exception:
+            # Account truth is authoritative and must remain disconnected/deleted
+            # even when best-effort process or filesystem cleanup needs retrying.
+            logger.exception(
+                "BrowserContext reconciliation failed for account '%s'",
+                account.get("id"),
+            )

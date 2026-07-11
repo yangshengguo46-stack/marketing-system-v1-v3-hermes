@@ -24,7 +24,7 @@
 | Hermes 产品本体 | 完整源码已成为主仓库根 | code + automated | 上游吸收 CI、正式签名发布 |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
 | Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、打包浏览器策略 |
-| Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；旧 JSON 一次性迁移 | automated | 切换 UI、真人多账号与 profile 清理 |
+| Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放上下文，删除时清理 profile | dev-runtime | 切换 UI、真人多账号登录/退出 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
 | Content plan/assets | 三 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
 | Preflight | InfluenceOS + 不可变记录 + draft gate | automated | 真实账号历史校准、发布前版本链 |
@@ -68,6 +68,8 @@
 - `mcp/marketing-browser` 直接调用 Playwright MCP `createConnection(config, contextGetter)`；schema discovery 不启动浏览器，实际工具调用才按账号租约创建上下文。
 - Hermes 原生 MCP client 已支持 `session_scope=marketing_account`：账号连接池、RPC 串行、熔断与关闭均在原生 MCP owner 内；不存在外部 Router。
 - 开发机真实 Hermes 工具分发已完成 `AccountRegistry → scoped MCP → navigate → snapshot`，52 个 Playwright 工具可见，证据等级为 `dev-runtime`。
+- AccountRegistry 在断开/删除时直接通知原生 MCP owner，MCP 也持续复核权限：无论上下文是否活跃都能完成释放；删除只清理该账号的 profile/output，同平台其他账号不受影响。
+- 已发现并修复 MCP stdio 关闭时未等待 persistent context 落盘的问题；开发机完成“写入持久 Cookie → 关闭 MCP → 重启同账号 → Cookie 恢复”验证。
 
 尚未完成：
 
@@ -77,8 +79,7 @@
 下一纵切（当前环境核验后确定）：
 
 1. 用平台 Skill 实现知乎第一条真人流程：headed 登录检测、认证状态回写、装载已审核变体、填写编辑器、一次性确认、作品页反查。
-2. 实现账号 disconnect/delete 对 BrowserContext 进程与 profile 的原生清理，重启后恢复同一账号租约。
-3. 同步开始第一阶段前端：只显示账号、内容审核、发布确认、执行状态和 unknown 恢复；前端不承载业务或执行真相。
+2. 同步开始第一阶段前端：只显示账号、内容审核、发布确认、执行状态和 unknown 恢复；前端不承载业务或执行真相。
 
 浏览器二进制口径：开发机先使用后端检测到的系统 Chrome/Edge 验证链路；产品安装包必须在
 “单独受控 Chromium”与“首次明确授权后下载”之间完成体积、离线和签名验证。禁止为了省掉
@@ -138,6 +139,7 @@
 ## 当前回归基线
 
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
+- 当前营销域、内容生产与账号 MCP 生命周期组合回归：Python 230 passed；Node 12 passed，包含真实浏览器重启恢复。
 - LOOP-01 发布账本、审批、回执门与恢复路径单文件回归：16 passed（后续组合回归必须继续包含）。
 - Desktop runtime staging：2 passed。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。

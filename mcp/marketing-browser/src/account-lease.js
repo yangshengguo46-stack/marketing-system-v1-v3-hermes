@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -13,7 +14,8 @@ function assertSafeIdentifier(value, label) {
 function accountDirectory(root, lease) {
   const base = path.resolve(root)
   const target = path.resolve(base, lease.platform, lease.account_id)
-  if (!target.startsWith(`${base}${path.sep}`)) {
+  const prefix = base.endsWith(path.sep) ? base : `${base}${path.sep}`
+  if (!target.startsWith(prefix)) {
     throw new Error('account profile escaped the configured browser root')
   }
   return target
@@ -64,4 +66,15 @@ export function outputDirectory(
     ? path.resolve(root)
     : path.join(os.homedir(), '.hermes', 'browser-output')
   return accountDirectory(base, normalized)
+}
+
+export async function purgeAccountDirectories(
+  lease,
+  profileRoot = process.env.HERMES_BROWSER_PROFILE_ROOT,
+  outputRoot = process.env.HERMES_BROWSER_OUTPUT_ROOT,
+) {
+  await Promise.all([
+    fs.rm(profileDirectory(lease, profileRoot), { recursive: true, force: true }),
+    fs.rm(outputDirectory(lease, outputRoot), { recursive: true, force: true }),
+  ])
 }

@@ -5,6 +5,7 @@ import json
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import AccountContextRepository
 from hermes_state import SessionDB
+import pytest
 
 
 def test_session_db_owns_secret_free_marketing_accounts(tmp_path):
@@ -31,6 +32,15 @@ def test_session_db_owns_secret_free_marketing_accounts(tmp_path):
         assert db.delete_marketing_account("acct_ab3145") is True
         assert db.list_marketing_accounts() == []
         assert db.get_marketing_account("acct_ab3145", include_deleted=True)["status"] == "deleted"
+    finally:
+        db.close()
+
+
+def test_account_owner_rejects_profile_path_segments(tmp_path):
+    db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        with pytest.raises(ValueError, match="invalid account_id"):
+            db.upsert_marketing_account(account_id="..", platform="zhihu")
     finally:
         db.close()
 

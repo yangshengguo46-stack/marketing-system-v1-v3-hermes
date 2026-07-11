@@ -3,10 +3,18 @@
 import { createConnection } from '@playwright/mcp'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { chromium } from 'playwright'
-import { outputDirectory, parseAccountLease, profileDirectory } from './account-lease.js'
+import {
+  outputDirectory,
+  parseAccountLease,
+  profileDirectory,
+  purgeAccountDirectories,
+} from './account-lease.js'
 import { resolveBrowserExecutable } from './browser-runtime.js'
 
-if (process.argv.includes('--schema-only')) {
+if (process.argv.includes('--purge-profile')) {
+  const lease = parseAccountLease()
+  await purgeAccountDirectories(lease)
+} else if (process.argv.includes('--schema-only')) {
   const { runSchemaServer } = await import('./schema-server.js')
   await runSchemaServer()
 } else {
@@ -35,9 +43,14 @@ if (process.argv.includes('--schema-only')) {
     closing = true
     await context.close().catch(() => {})
   }
+  const shutdownAndExit = () => void closeRuntime().finally(() => process.exit(0))
   server.onclose = closeRuntime
-  process.once('SIGINT', () => void closeRuntime().finally(() => process.exit(0)))
-  process.once('SIGTERM', () => void closeRuntime().finally(() => process.exit(0)))
+  // The MCP SDK's stdio server transport does not close itself when the
+  // parent ends stdin. Flush the persistent BrowserContext before the
+  // client reaches its SIGTERM fallback, otherwise login cookies can vanish.
+  process.stdin.once('end', shutdownAndExit)
+  process.once('SIGINT', shutdownAndExit)
+  process.once('SIGTERM', shutdownAndExit)
 
   await server.connect(new StdioServerTransport())
 }

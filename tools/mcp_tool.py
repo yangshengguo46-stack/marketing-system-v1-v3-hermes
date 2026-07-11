@@ -2541,6 +2541,8 @@ class MCPServerTask:
 _servers: Dict[str, MCPServerTask] = {}
 _scoped_servers: Dict[tuple[str, str, str], MCPServerTask] = {}
 _scoped_connect_locks: Dict[tuple[str, str, str], asyncio.Lock] = {}
+_scoped_watch_tasks: Dict[tuple[str, str, str], asyncio.Task] = {}
+_SCOPED_ACCOUNT_WATCH_INTERVAL = 5.0
 _server_connecting: set[str] = set()
 _server_connect_errors: Dict[str, str] = {}
 
@@ -3333,7 +3335,188 @@ async def _get_scoped_server(server_name: str, config: dict, lease: dict) -> MCP
         await scoped.start(_scoped_server_config(config, lease))
         with _lock:
             _scoped_servers[key] = scoped
+        watcher = asyncio.create_task(
+            _watch_scoped_account(key, scoped, config, lease)
+        )
+        _scoped_watch_tasks[key] = watcher
+        watcher.add_done_callback(
+            lambda completed, account_key=key: _discard_scoped_watcher(
+                account_key, completed
+            )
+        )
         return scoped
+
+
+def _discard_scoped_watcher(
+    key: tuple[str, str, str], completed: asyncio.Task
+) -> None:
+    if _scoped_watch_tasks.get(key) is completed:
+        _scoped_watch_tasks.pop(key, None)
+
+
+def _read_scoped_account_lifecycle(lease: dict) -> dict:
+    from agent.account_registry import AccountRegistry
+
+    registry = AccountRegistry()
+    try:
+        return registry.browser_context_lifecycle(
+            str(lease["account_id"]),
+            user_id=str(lease["user_id"]),
+        )
+    finally:
+        registry.close()
+
+
+async def _purge_scoped_account_data(config: dict, lease: dict) -> None:
+    scoped = _scoped_server_config(config, lease)
+    args = list(scoped.get("args") or [])
+    if not args:
+        raise ValueError("account-scoped MCP purge requires scoped_args")
+    args.append("--purge-profile")
+    env = _build_safe_env(scoped.get("env"))
+    command, env = _resolve_stdio_command(str(scoped.get("command") or ""), env)
+    if not command:
+        raise ValueError("account-scoped MCP purge requires command")
+    process = await asyncio.create_subprocess_exec(
+        command,
+        *args,
+        env=env,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        return_code = await asyncio.wait_for(process.wait(), timeout=30)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        raise RuntimeError("browser profile purge timed out")
+    if return_code != 0:
+        raise RuntimeError(f"browser profile purge failed with exit code {return_code}")
+
+
+async def _watch_scoped_account(
+    key: tuple[str, str, str],
+    server: MCPServerTask,
+    config: dict,
+    lease: dict,
+) -> None:
+    """Stop a BrowserContext when its AccountRegistry authority is revoked."""
+
+    try:
+        while True:
+            await asyncio.sleep(_SCOPED_ACCOUNT_WATCH_INTERVAL)
+            try:
+                lifecycle = await asyncio.to_thread(
+                    _read_scoped_account_lifecycle, lease
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not verify account-scoped MCP authority for '%s': %s",
+                    key[2],
+                    exc,
+                )
+                continue
+            if lifecycle.get("may_run"):
+                continue
+            await server.shutdown()
+            with _lock:
+                if _scoped_servers.get(key) is server:
+                    _scoped_servers.pop(key, None)
+                    _scoped_connect_locks.pop(key, None)
+            if lifecycle.get("purge_profile"):
+                await _purge_scoped_account_data(config, lease)
+            return
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "Failed to reconcile account-scoped MCP '%s' for account '%s'",
+            key[0],
+            key[2],
+        )
+
+
+async def _release_marketing_account_browser(
+    *,
+    user_id: str,
+    account_id: str,
+    lease: dict,
+    purge_profile: bool,
+) -> None:
+    keys = [
+        key
+        for key in list(_scoped_servers)
+        if key[1] == user_id and key[2] == account_id
+    ]
+    current = asyncio.current_task()
+    for key in keys:
+        watcher = _scoped_watch_tasks.pop(key, None)
+        if watcher is not None and watcher is not current:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+        with _lock:
+            server = _scoped_servers.pop(key, None)
+            _scoped_connect_locks.pop(key, None)
+            discovery = _servers.get(key[0])
+        if server is not None:
+            await server.shutdown()
+        if purge_profile:
+            config = dict(getattr(discovery, "_config", {}) or {})
+            if not config:
+                from agent.product import bundled_browser_mcp_config
+
+                config = dict(bundled_browser_mcp_config() or {})
+            if config:
+                await _purge_scoped_account_data(config, lease)
+                purge_profile = False
+
+    if purge_profile:
+        from agent.product import bundled_browser_mcp_config
+
+        config = bundled_browser_mcp_config()
+        if config:
+            await _purge_scoped_account_data(config, lease)
+
+
+def reconcile_marketing_account_browser(
+    *,
+    user_id: str,
+    account_id: str,
+    platform: str,
+    profile_key: str,
+    purge_profile: bool,
+) -> bool:
+    """Release/purge one account in the native MCP BrowserContext owner."""
+
+    lease = {
+        "session_id": "account-lifecycle",
+        "user_id": user_id,
+        "account_id": account_id,
+        "platform": platform,
+        "profile_key": profile_key,
+        "auth_state": "unauthenticated",
+    }
+    operation = lambda: _release_marketing_account_browser(
+        user_id=user_id,
+        account_id=account_id,
+        lease=lease,
+        purge_profile=purge_profile,
+    )
+    with _lock:
+        loop = _mcp_loop
+    if loop is not None and loop.is_running():
+        try:
+            if asyncio.get_running_loop() is loop:
+                asyncio.create_task(operation())
+                return True
+        except RuntimeError:
+            pass
+        _run_on_mcp_loop(operation, timeout=45)
+        return True
+    if purge_profile:
+        asyncio.run(operation())
+    return True
 
 
 def _make_tool_handler(
@@ -4833,13 +5016,18 @@ def shutdown_mcp_servers():
     """
     with _lock:
         servers_snapshot = list(_servers.values()) + list(_scoped_servers.values())
+        watch_tasks_snapshot = list(_scoped_watch_tasks.values())
 
     # Fast path: nothing to shut down.
-    if not servers_snapshot:
+    if not servers_snapshot and not watch_tasks_snapshot:
         _stop_mcp_loop()
         return
 
     async def _shutdown():
+        for task in watch_tasks_snapshot:
+            task.cancel()
+        if watch_tasks_snapshot:
+            await asyncio.gather(*watch_tasks_snapshot, return_exceptions=True)
         results = await asyncio.gather(
             *(server.shutdown() for server in servers_snapshot),
             return_exceptions=True,
@@ -4853,6 +5041,7 @@ def shutdown_mcp_servers():
             _servers.clear()
             _scoped_servers.clear()
             _scoped_connect_locks.clear()
+            _scoped_watch_tasks.clear()
 
     with _lock:
         loop = _mcp_loop
@@ -4996,7 +5185,7 @@ def _stop_mcp_loop(*, only_if_idle: bool = False) -> bool:
     """Stop the background event loop and join its thread."""
     global _mcp_loop, _mcp_thread
     with _lock:
-        if only_if_idle and (_servers or _server_connecting):
+        if only_if_idle and (_servers or _scoped_servers or _server_connecting):
             logger.debug("Leaving MCP event loop running; active servers are registered or connecting")
             return False
         loop = _mcp_loop

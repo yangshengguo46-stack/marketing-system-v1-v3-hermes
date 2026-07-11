@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
+import shutil
 
 import pytest
 
@@ -87,5 +90,94 @@ async def test_scoped_pool_reuses_one_owner_per_account_and_isolates_accounts(mo
     assert json.loads(first.config["env"]["HERMES_MARKETING_ACCOUNT_LEASE"])["account_id"] == "acct-1"
     assert json.loads(second.config["env"]["HERMES_MARKETING_ACCOUNT_LEASE"])["account_id"] == "acct-2"
 
+    watchers = list(mcp_tool._scoped_watch_tasks.values())
+    for watcher in watchers:
+        watcher.cancel()
+    await asyncio.gather(*watchers, return_exceptions=True)
     mcp_tool._scoped_servers.clear()
     mcp_tool._scoped_connect_locks.clear()
+    mcp_tool._scoped_watch_tasks.clear()
+
+
+@pytest.mark.asyncio
+async def test_scoped_account_watcher_closes_and_purges_deleted_account(monkeypatch):
+    stopped = asyncio.Event()
+    purged = []
+
+    class FakeServer:
+        async def shutdown(self):
+            stopped.set()
+
+    async def fake_purge(config, lease):
+        purged.append((config, lease))
+
+    monkeypatch.setattr(mcp_tool, "_SCOPED_ACCOUNT_WATCH_INTERVAL", 0.001)
+    monkeypatch.setattr(
+        mcp_tool,
+        "_read_scoped_account_lifecycle",
+        lambda lease: {"may_run": False, "purge_profile": True},
+    )
+    monkeypatch.setattr(mcp_tool, "_purge_scoped_account_data", fake_purge)
+    key = ("marketing-browser", "default", "acct-deleted")
+    server = FakeServer()
+    lease = {
+        "user_id": "default",
+        "account_id": "acct-deleted",
+        "platform": "zhihu",
+        "profile_key": "zhihu:acct-deleted",
+    }
+    mcp_tool._scoped_servers[key] = server
+    mcp_tool._scoped_connect_locks[key] = asyncio.Lock()
+
+    await asyncio.wait_for(
+        mcp_tool._watch_scoped_account(key, server, {"scoped_args": ["server.js"]}, lease),
+        timeout=1,
+    )
+
+    assert stopped.is_set()
+    assert purged == [({"scoped_args": ["server.js"]}, lease)]
+    assert key not in mcp_tool._scoped_servers
+    assert key not in mcp_tool._scoped_connect_locks
+
+
+@pytest.mark.asyncio
+async def test_python_mcp_owner_invokes_native_browser_profile_purge(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the bundled browser MCP")
+    entry = (
+        Path(__file__).resolve().parents[2]
+        / "mcp"
+        / "marketing-browser"
+        / "src"
+        / "server.js"
+    )
+    profile_root = tmp_path / "profiles"
+    output_root = tmp_path / "output"
+    profile = profile_root / "zhihu" / "acct-delete"
+    output = output_root / "zhihu" / "acct-delete"
+    profile.mkdir(parents=True)
+    output.mkdir(parents=True)
+    lease = {
+        "session_id": "session-1",
+        "user_id": "default",
+        "account_id": "acct-delete",
+        "platform": "zhihu",
+        "profile_key": "zhihu:acct-delete",
+        "auth_state": "authenticated",
+    }
+
+    await mcp_tool._purge_scoped_account_data(
+        {
+            "command": node,
+            "scoped_args": [str(entry)],
+            "env": {
+                "HERMES_BROWSER_PROFILE_ROOT": str(profile_root),
+                "HERMES_BROWSER_OUTPUT_ROOT": str(output_root),
+            },
+        },
+        lease,
+    )
+
+    assert not profile.exists()
+    assert not output.exists()

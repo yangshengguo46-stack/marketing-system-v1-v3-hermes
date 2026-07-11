@@ -1924,7 +1924,10 @@ class SessionDB:
     @staticmethod
     def _normalize_marketing_account_id(value: str, *, field: str) -> str:
         normalized = str(value or "").strip()
-        if not re.fullmatch(r"[A-Za-z0-9_.:@-]{1,160}", normalized):
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_.:@-]{1,160}", normalized)
+            or normalized in {".", ".."}
+        ):
             raise ValueError(f"invalid {field}")
         return normalized
 

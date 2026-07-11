@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { outputDirectory, parseAccountLease, profileDirectory } from '../src/account-lease.js'
+import {
+  outputDirectory,
+  parseAccountLease,
+  profileDirectory,
+  purgeAccountDirectories,
+} from '../src/account-lease.js'
 
 const lease = {
   session_id: 'session-1',
@@ -46,4 +53,25 @@ test('keeps Playwright artifacts outside the source workspace', () => {
     outputDirectory(lease, '/browser-output'),
     path.join('/browser-output', 'douyin', 'acct_ab3145'),
   )
+})
+
+test('purges only the deleted account profile and output', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'marketing-browser-purge-'))
+  const profileRoot = path.join(root, 'profiles')
+  const outputRoot = path.join(root, 'output')
+  const profile = profileDirectory(lease, profileRoot)
+  const output = outputDirectory(lease, outputRoot)
+  const sibling = path.join(profileRoot, 'douyin', 'acct_sibling')
+  await Promise.all([
+    fs.mkdir(profile, { recursive: true }),
+    fs.mkdir(output, { recursive: true }),
+    fs.mkdir(sibling, { recursive: true }),
+  ])
+
+  await purgeAccountDirectories(lease, profileRoot, outputRoot)
+
+  await assert.rejects(fs.stat(profile))
+  await assert.rejects(fs.stat(output))
+  assert.equal((await fs.stat(sibling)).isDirectory(), true)
+  await fs.rm(root, { recursive: true, force: true })
 })
