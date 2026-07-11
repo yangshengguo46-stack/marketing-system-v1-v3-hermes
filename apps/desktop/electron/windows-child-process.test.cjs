@@ -30,9 +30,7 @@ test('desktop background child processes opt into hidden Windows consoles', () =
 
   requireHiddenChildOptions(source, "execFileSync(\n          'reg'")
   requireHiddenChildOptions(source, /execFileSync\(\s*pyExe/)
-  requireHiddenChildOptions(source, /spawn\(\s*resolveGitBinary\(\)/)
   requireHiddenChildOptions(source, "execFileSync('taskkill'")
-  requireHiddenChildOptions(source, /spawn\(\s*command,\s*args/)
   requireHiddenChildOptions(source, "spawn('curl'")
   requireHiddenChildOptions(source, /spawn\(\s*backend\.command,\s*backend\.args/)
   requireHiddenChildOptions(source, /hermesProcess = spawn\(\s*backend\.command,\s*backend\.args/)
@@ -72,10 +70,7 @@ test('getNoConsoleVenvPython prefers base pythonw over the uv re-exec shim', () 
 test('intentional or interactive desktop child processes stay documented', () => {
   const source = readElectronFile('main.cjs')
 
-  assert.match(source, /windowsHide: false/)
-  assert.match(source, /handOffWindowsBootstrapRecovery/)
-  assert.match(source, /'--repair', '--branch'/)
-  assert.match(source, /'--update', '--branch'/)
+  assert.doesNotMatch(source, /handOffWindowsBootstrapRecovery/)
   assert.match(source, /nodePty\.spawn\(command, args/)
   assert.match(source, /spawn\('cmd\.exe', \['\/c', 'start'/)
 })

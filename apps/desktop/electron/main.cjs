@@ -43,19 +43,12 @@ const { serializeJsonBody, setJsonRequestHeaders } = require('./oauth-net-reques
 const { fetchMarketplaceThemes, searchMarketplaceThemes } = require('./vscode-marketplace.cjs')
 const { buildDesktopBackendEnv, normalizeHermesHomeRoot } = require('./backend-env.cjs')
 const { migrateLegacyProviderEnvironment } = require('./legacy-provider-migration.cjs')
+const { resolveBundledProductRuntime } = require('./bundled-product-runtime.cjs')
+const { productUpdateStatus, rejectRawCoreUpdate } = require('./product-update-policy.cjs')
 const { readWslWindowsClipboardImage } = require('./wsl-clipboard-image.cjs')
 const { nativeOverlayWidth: computeNativeOverlayWidth } = require('./titlebar-overlay-width.cjs')
 const { readDirForIpc } = require('./fs-read-dir.cjs')
 const { readLiveUpdateMarker } = require('./update-marker.cjs')
-const {
-  resolveUnpackedRelease,
-  decideRelaunchOutcome,
-  sandboxPreflight,
-  sandboxFallbackFromEnv,
-  collectRelaunchArgs,
-  collectRelaunchEnv,
-  buildRelaunchScript
-} = require('./update-relaunch.cjs')
 const { gitRootForIpc } = require('./git-root.cjs')
 const { addWorktree, listBranches, listWorktrees, removeWorktree, switchBranch } = require('./git-worktree-ops.cjs')
 const {
@@ -74,9 +67,6 @@ const {
   reviewUnstage
 } = require('./git-review-ops.cjs')
 const { scanGitRepos } = require('./git-repo-scan.cjs')
-const { OFFICIAL_REPO_HTTPS_URL, isOfficialSshRemote } = require('./update-remote.cjs')
-const { resolveBehindCount, shouldCountCommits } = require('./update-count.cjs')
-const { runRebuildWithRetry } = require('./update-rebuild.cjs')
 const {
   buildPosixCleanupScript,
   buildWindowsCleanupScript,
@@ -298,20 +288,6 @@ function resolveHermesHome() {
 
 const HERMES_HOME = resolveHermesHome()
 
-function hermesManagedNodePathEntries() {
-  // NOTE: keep this ordering in sync with iter_hermes_node_dirs() in
-  // hermes_constants.py — this Node main process cannot import the Python
-  // module, so the platform-ordering rule is mirrored here.
-  const root = path.join(HERMES_HOME, 'node')
-  const bin = path.join(root, 'bin')
-  const entries = IS_WINDOWS ? [root, bin] : [bin, root]
-  return entries.filter(directoryExists)
-}
-
-function pathWithHermesManagedNode(...entries) {
-  return [...hermesManagedNodePathEntries(), ...entries, process.env.PATH].filter(Boolean).join(path.delimiter)
-}
-
 // ACTIVE_HERMES_ROOT — the canonical mutable Hermes install. Same path
 // install.ps1 / install.sh use, so a desktop-only user and a CLI-only user end
 // up with identical layouts and can share one install.
@@ -333,7 +309,6 @@ const BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.hermes-bootstr
 const BOOTSTRAP_MARKER_SCHEMA_VERSION = 1
 
 const DESKTOP_CONNECTION_CONFIG_PATH = path.join(app.getPath('userData'), 'connection.json')
-const DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'updates.json')
 const DESKTOP_WINDOW_STATE_PATH = path.join(app.getPath('userData'), 'window-state.json')
 // active-profile.json records which Hermes profile the desktop launches its
 // local backend as. When set, startHermes() passes `hermes --profile <name>
@@ -345,10 +320,6 @@ const DESKTOP_PROFILE_CONFIG_PATH = path.join(app.getPath('userData'), 'active-p
 // Mirrors hermes_cli.profiles._PROFILE_ID_RE so we never hand the backend a
 // value its profile resolver would reject and exit on.
 const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
-// Branch we track for self-update. The GUI work has merged to main, so this
-// tracks main. User can also override at runtime via
-// hermesDesktop.updates.setBranch().
-const DEFAULT_UPDATE_BRANCH = 'main'
 // desktop.log lives under HERMES_HOME/logs/ so it sits next to agent.log,
 // errors.log, gateway.log produced by hermes_logging.setup_logging — one log
 // directory per user, regardless of which UI surface produced the line.
@@ -669,14 +640,12 @@ app.setName('marketing-os-desktop')
 if (IS_WINDOWS) {
   app.setAppUserModelId('com.marketing-os.desktop')
 }
-// Seed the native About panel with the live Hermes version. This is refreshed
-// on every open via the explicit "About" menu handler (refreshAboutPanel), so
-// an in-place `hermes update` mid-session is reflected without an app restart;
-// the seed here just covers the first open and any non-menu invocation path.
+// The desktop reports the Marketing OS release version. Upstream Hermes
+// revisions are implementation details absorbed by the product release.
 app.setAboutPanelOptions({
   applicationName: APP_NAME,
-  applicationVersion: resolveHermesVersion(),
-  copyright: 'Copyright © 2026 Nous Research'
+  applicationVersion: app.getVersion(),
+  copyright: 'Copyright © 2026 Marketing OS'
 })
 
 // Custom scheme for streaming local media (video/audio) into the renderer.
@@ -1217,15 +1186,6 @@ function directoryExists(filePath) {
 // marker's own age ceiling; covers a stuck-but-alive updater).
 const UPDATE_WAIT_TIMEOUT_MS = 20 * 60 * 1000
 const UPDATE_WAIT_POLL_MS = 1000
-// How long the desktop lingers on the "updating, don't reopen" overlay after
-// spawning the detached updater, before it quits to release the venv shim. The
-// old 600ms was long enough to register the child process but far too short for
-// the user to READ the overlay — the window just vanished, looked like a crash,
-// and the user relaunched mid-update (the #50238 restart-loop trigger). A
-// couple of seconds lets the message land and bridges the gap until the
-// updater's own progress window appears. (#50419)
-const UPDATE_HANDOFF_DWELL_MS = 2500
-
 // Block until no live update is in progress (or we hit the wait timeout).
 // Emits a boot-progress phase so the renderer shows "Update in progress…"
 // rather than a frozen splash. Returns true if it parked at all.
@@ -1688,29 +1648,12 @@ function recentHermesLog() {
   return hermesLog.slice(-20).join('\n')
 }
 
-// ─── Self-update (git-pull against the running backend's hermes root) ──────
-
-function readDesktopUpdateConfig() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(DESKTOP_UPDATE_CONFIG_PATH, 'utf8'))
-    const branch = typeof parsed?.branch === 'string' ? parsed.branch.trim() : ''
-    return { branch: branch || DEFAULT_UPDATE_BRANCH }
-  } catch {
-    return { branch: DEFAULT_UPDATE_BRANCH }
-  }
-}
-
 // Atomic file write: temp + rename (atomic on all platforms). Prevents
 // partial writes on crash/power loss that corrupt JSON config files.
 function writeFileAtomic(targetPath, data, encoding) {
   const tmp = targetPath + '.tmp'
   fs.writeFileSync(tmp, data, encoding)
   fs.renameSync(tmp, targetPath)
-}
-
-function writeDesktopUpdateConfig(config) {
-  fs.mkdirSync(path.dirname(DESKTOP_UPDATE_CONFIG_PATH), { recursive: true })
-  writeFileAtomic(DESKTOP_UPDATE_CONFIG_PATH, JSON.stringify(config, null, 2))
 }
 
 // ─── Main-window geometry persistence (window-state.json) ──────────────────
@@ -1756,204 +1699,8 @@ function resolveUpdateRoot() {
   return candidates.find(c => directoryExists(path.join(c, '.git'))) || candidates[0] || ACTIVE_HERMES_ROOT
 }
 
-function runGit(args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      resolveGitBinary(),
-      IS_WINDOWS ? ['-c', 'windows.appendAtomically=false', ...args] : args,
-      hiddenWindowsChildOptions({
-        cwd: options.cwd,
-        env: { ...process.env, ...(options.env || {}), GIT_TERMINAL_PROMPT: '0' },
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-    )
-
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', chunk => {
-      const text = chunk.toString()
-      stdout += text
-      options.onLine?.('stdout', text)
-    })
-    child.stderr.on('data', chunk => {
-      const text = chunk.toString()
-      stderr += text
-      options.onLine?.('stderr', text)
-    })
-    child.once('error', reject)
-    child.once('exit', code => resolve({ code, stdout, stderr }))
-  })
-}
-
-const firstLine = text => (text || '').split('\n').find(Boolean) || ''
-
-async function getOriginUrl(updateRoot) {
-  const origin = await runGit(['remote', 'get-url', 'origin'], { cwd: updateRoot })
-  return origin.code === 0 ? origin.stdout.trim() : ''
-}
-
-function emitUpdateProgress(payload) {
-  const merged = { stage: 'idle', message: '', percent: null, error: null, ...payload, at: Date.now() }
-  rememberLog(`[updates] ${merged.stage}: ${merged.message || merged.error || ''}`)
-  for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send('hermes:updates:progress', merged)
-  }
-}
-
-// Self-heal the tracked update branch: if origin no longer publishes it (e.g.
-// bb/gui was merged into main and deleted), fall back to main and persist so
-// every later check/apply follows main — no manual flip, even for already-
-// installed clients. Read-only ls-remote probe; only flips on a definitive
-// "ref absent" (exit 2), never on a transient network error, so a flaky
-// connection can't strand a user on the wrong branch.
-async function resolveHealedBranch(updateRoot, branch) {
-  if (!branch || branch === 'main') {
-    return branch || 'main'
-  }
-
-  const originUrl = await getOriginUrl(updateRoot)
-  const remote = isOfficialSshRemote(originUrl) ? OFFICIAL_REPO_HTTPS_URL : 'origin'
-  const probe = await runGit(['ls-remote', '--exit-code', '--heads', remote, branch], { cwd: updateRoot })
-  if (probe.code !== 2) {
-    return branch
-  }
-
-  rememberLog(`[updates] origin/${branch} is gone (merged?); falling back to main`)
-  const config = readDesktopUpdateConfig()
-  if (config.branch !== 'main') {
-    writeDesktopUpdateConfig({ ...config, branch: 'main' })
-  }
-  return 'main'
-}
-
-async function checkUpdates() {
-  const updateRoot = resolveUpdateRoot()
-  let { branch } = readDesktopUpdateConfig()
-  const gitDir = path.join(updateRoot, '.git')
-  if (!directoryExists(gitDir)) {
-    return {
-      supported: false,
-      reason: 'not-a-git-checkout',
-      message: `${updateRoot} isn't a git checkout — desktop self-update only runs against a source install.`,
-      hermesRoot: updateRoot,
-      branch
-    }
-  }
-
-  branch = await resolveHealedBranch(updateRoot, branch)
-  const originUrl = await getOriginUrl(updateRoot)
-  if (isOfficialSshRemote(originUrl)) {
-    const git = args => runGit(args, { cwd: updateRoot }).then(r => r.stdout.trim())
-    const [currentSha, target, dirtyStr, currentBranch] = await Promise.all([
-      git(['rev-parse', 'HEAD']),
-      runGit(['ls-remote', OFFICIAL_REPO_HTTPS_URL, `refs/heads/${branch}`], { cwd: updateRoot }),
-      git(['status', '--porcelain']),
-      git(['rev-parse', '--abbrev-ref', 'HEAD'])
-    ])
-    const targetSha = firstLine(target.stdout).split(/\s+/)[0] || ''
-    if (target.code !== 0 || !targetSha) {
-      return {
-        supported: true,
-        branch,
-        error: 'fetch-failed',
-        message: firstLine(target.stderr) || 'git ls-remote failed.',
-        hermesRoot: updateRoot,
-        fetchedAt: Date.now()
-      }
-    }
-    return {
-      supported: true,
-      branch,
-      currentBranch,
-      behind: currentSha && currentSha === targetSha ? 0 : 1,
-      currentSha,
-      targetSha,
-      commits: [],
-      dirty: dirtyStr.length > 0,
-      hermesRoot: updateRoot,
-      fetchedAt: Date.now()
-    }
-  }
-
-  const fetched = await runGit(['fetch', '--quiet', 'origin', branch], { cwd: updateRoot })
-  if (fetched.code !== 0) {
-    return {
-      supported: true,
-      branch,
-      error: 'fetch-failed',
-      message: firstLine(fetched.stderr) || 'git fetch failed.',
-      hermesRoot: updateRoot,
-      fetchedAt: Date.now()
-    }
-  }
-
-  const git = args => runGit(args, { cwd: updateRoot }).then(r => r.stdout.trim())
-  const [currentSha, targetSha, dirtyStr, currentBranch, shallowStr, mergeBaseStr] = await Promise.all([
-    git(['rev-parse', 'HEAD']),
-    git(['rev-parse', `origin/${branch}`]),
-    git(['status', '--porcelain']),
-    git(['rev-parse', '--abbrev-ref', 'HEAD']),
-    git(['rev-parse', '--is-shallow-repository']),
-    // merge-base exits non-zero with empty stdout when HEAD shares no common
-    // ancestor with the freshly fetched tip — exactly the shallow-clone case.
-    git(['merge-base', 'HEAD', `origin/${branch}`])
-  ])
-
-  const isShallow = shallowStr === 'true'
-  const hasMergeBase = Boolean(mergeBaseStr)
-  // Only enumerate the commit count when it is meaningful. On a shallow checkout
-  // with no merge-base, `rev-list --count` walks the entire remote ancestry
-  // (thousands of commits, see #51922) and resolveBehindCount discards the
-  // result anyway in favour of a SHA compare — so skip the expensive query.
-  const countStr = shouldCountCommits({ isShallow, hasMergeBase })
-    ? await git(['rev-list', `HEAD..origin/${branch}`, '--count'])
-    : ''
-
-  const behind = resolveBehindCount({
-    countStr,
-    currentSha,
-    targetSha,
-    isShallow,
-    hasMergeBase
-  })
-  const commits = behind > 0 ? await readCommitLog(updateRoot, branch) : []
-
-  return {
-    supported: true,
-    branch,
-    currentBranch,
-    behind,
-    currentSha,
-    targetSha,
-    commits,
-    dirty: dirtyStr.length > 0,
-    hermesRoot: updateRoot,
-    fetchedAt: Date.now()
-  }
-}
-
-async function readCommitLog(cwd, branch) {
-  const SEP = '\x1f'
-  const REC = '\x1e'
-  const { stdout } = await runGit(
-    ['log', `HEAD..origin/${branch}`, `--pretty=format:%H${SEP}%s${SEP}%an${SEP}%at${REC}`, '-n', '40'],
-    { cwd }
-  )
-
-  return stdout
-    .split(REC)
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(line => {
-      const [sha, summary, author, at] = line.split(SEP)
-      return { sha, summary, author, at: Number.parseInt(at, 10) * 1000 }
-    })
-}
-
-let updateInFlight = false
-
-// Set to true when the desktop is about to quit so a detached swap/install/
-// uninstall script can take over. On macOS, app.quit() closes windows but
+// Set to true when the desktop is about to quit so a detached uninstall script
+// can take over. On macOS, app.quit() closes windows but
 // window-all-closed deliberately keeps the process alive (standard Electron
 // macOS convention). Without this flag the process never exits — the detached
 // hand-off script spins its PID-wait for the full timeout, and the user sees a
@@ -1962,47 +1709,8 @@ let updateInFlight = false
 // actually dies and the hand-off script can proceed immediately.
 let isQuittingForHandoff = false
 
-// Resolve the staged updater binary. The Tauri installer copies itself to
-// HERMES_HOME/hermes-setup.exe on a successful install (see
-// apps/bootstrap-installer paths::copy_self_to_hermes_home). That binary owns
-// ALL repo mutation — running `hermes update` + rebuilding the desktop — so
-// the desktop never touches its own bits while running. Returns null when the
-// updater isn't staged (e.g. a dev/source run that never went through the
-// installer); callers degrade gracefully.
-function resolveUpdaterBinary() {
-  const name = IS_WINDOWS ? 'hermes-setup.exe' : 'hermes-setup'
-  const candidate = path.join(HERMES_HOME, name)
-  return fileExists(candidate) ? candidate : null
-}
-
-function repairMacUpdaterHelper(updater) {
-  if (!IS_MAC || !updater) return
-
-  try {
-    execFileSync('/usr/bin/xattr', ['-cr', updater], { stdio: 'ignore' })
-  } catch (err) {
-    rememberLog(`[updates] macOS updater helper quarantine repair skipped: ${err.message}`)
-  }
-
-  try {
-    execFileSync('/usr/bin/codesign', ['--verify', updater], { stdio: 'ignore' })
-    return
-  } catch {
-    // Unsigned or invalid helper. Apply a local ad-hoc signature so Gatekeeper
-    // does not block the staged updater before it can run.
-  }
-
-  try {
-    execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', updater], { stdio: 'ignore' })
-    rememberLog('[updates] repaired macOS updater helper signature')
-  } catch (err) {
-    rememberLog(`[updates] macOS updater helper signature repair skipped: ${err.message}`)
-  }
-}
-
-// Path to the venv shim whose lock decides whether `hermes update` can write
-// fresh entry points. On Windows this is the file the running backend
-// `hermes.exe` holds open; on POSIX it's never mandatory-locked.
+// Path to the venv shim whose lock decides whether uninstall can remove the
+// runtime on Windows. POSIX does not use mandatory executable locks.
 function venvHermesShimPath(updateRoot) {
   return IS_WINDOWS
     ? path.join(updateRoot, 'venv', 'Scripts', 'hermes.exe')
@@ -2069,10 +1777,6 @@ function forceKillProcessTree(pid) {
 // SIGTERM + app.quit() teardown already works (the macOS path is flawless), and
 // aggressively SIGKILL-ing the backend here would be an untested behavior change
 // for no benefit. So we no-op off Windows and leave that path exactly as it was.
-async function releaseBackendLockForUpdate(updateRoot) {
-  return releaseBackendLock(updateRoot, 'updates')
-}
-
 // Shared backend teardown + venv-shim unlock wait. Used by BOTH the self-update
 // hand-off and the desktop uninstaller — they have the identical Windows
 // problem: the desktop's backend (and the grandchildren IT spawned — a hermes
@@ -2115,483 +1819,6 @@ async function releaseBackendLock(updateRoot, tag) {
   }
   rememberLog(`[${tag}] venv shim still locked after 15s; proceeding anyway (force)`)
   return { unlocked: false }
-}
-
-// applyUpdates — hand off to the installer's --update flow, then exit.
-//
-// The desktop is a pure consumer: it does NOT git pull / pip install / rebuild
-// itself (the old open-coded git dance lived here and drifted from
-// `hermes update`). Instead we spawn the staged Hermes-Setup binary with
-// --update and quit, so it can run `hermes update` (which refuses while we
-// hold the venv shim) and rebuild the desktop with our exe already gone.
-//
-// Detection (checkUpdates / commit changelog / "N behind") stays in the UI;
-// only this apply action changed.
-async function applyUpdates(opts = {}) {
-  if (updateInFlight) {
-    throw new Error('An update is already in progress.')
-  }
-  updateInFlight = true
-
-  try {
-    const updater = resolveUpdaterBinary()
-    if (!updater && !IS_WINDOWS) {
-      // macOS/Linux drag-install: no staged Tauri hermes-setup. Unlike Windows
-      // (where a venv-shim file lock forces the quit→hand-off→rebuild dance),
-      // there's no mandatory file locking here, so the desktop can drive the
-      // whole update itself: `hermes update` (backend) + `hermes desktop
-      // --build-only` (OS-aware GUI rebuild), then swap the running .app bundle
-      // with the freshly built one and relaunch.
-      return await applyUpdatesPosixInApp(opts)
-    }
-    if (!updater) {
-      // No staged updater binary — this is a CLI-installed user (they ran
-      // `hermes desktop`, never the Tauri installer that self-copies
-      // hermes-setup.exe into HERMES_HOME). They DO have a working `hermes`
-      // on PATH / in the venv, so the correct path is the one-liner in their
-      // native medium. We show the EXACT command, branch-pinned to the
-      // checkout they're on — bare `hermes update` defaults to main and would
-      // silently switch a bb/gui (or any non-main) install off-branch. Mirror
-      // the GUI button's contract: append --branch <current> for non-main
-      // checkouts, keep it bare for main so the card stays clean.
-      const updateRoot = resolveUpdateRoot()
-      let command = 'hermes update'
-      try {
-        const head = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: updateRoot })
-        const current = (head.stdout || '').trim()
-        if (head.code === 0 && current && current !== 'HEAD') {
-          const branch = await resolveHealedBranch(updateRoot, current)
-          if (branch !== 'main') command = `hermes update --branch ${branch}`
-        }
-      } catch {
-        // Best-effort: fall back to bare `hermes update` if branch detection fails.
-      }
-      rememberLog(`[updates] no staged updater; surfacing manual \`${command}\` for CLI install at ${updateRoot}`)
-      emitUpdateProgress({ stage: 'manual', message: command, percent: null })
-      return { ok: true, manual: true, command, hermesRoot: updateRoot }
-    }
-
-    emitUpdateProgress({
-      stage: 'restart',
-      message:
-        'Updating Hermes — this window will close and the updater will open. Don’t reopen Hermes yourself; it restarts automatically when the update finishes.',
-      percent: 100
-    })
-    repairMacUpdaterHelper(updater)
-
-    const updateRoot = resolveUpdateRoot()
-    const { branch: configuredBranch } = readDesktopUpdateConfig()
-    const branch = await resolveHealedBranch(updateRoot, configuredBranch || DEFAULT_UPDATE_BRANCH)
-    const updaterArgs = ['--update', '--branch', branch]
-    const targetApp = IS_MAC ? runningAppBundle() : null
-    if (targetApp) {
-      updaterArgs.push('--target-app', targetApp)
-    }
-    const venvBin = path.join(updateRoot, 'venv', IS_WINDOWS ? 'Scripts' : 'bin')
-
-    // Stop our own backend(s) and wait for the venv shim to unlock BEFORE we
-    // spawn the updater. Without this the updater races a still-locked
-    // hermes.exe (held by the backend child / its grandchildren) and the update
-    // bricks. See releaseBackendLockForUpdate for the full failure analysis.
-    await releaseBackendLockForUpdate(updateRoot)
-
-    // Detached so the updater outlives this process — it needs us GONE before
-    // `hermes update` will run (the venv shim is locked while we live).
-    const child = spawn(updater, updaterArgs, {
-      cwd: HERMES_HOME,
-      env: {
-        ...process.env,
-        HERMES_HOME,
-        PATH: pathWithHermesManagedNode(venvBin)
-      },
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false
-    })
-    child.unref()
-
-    rememberLog(`[updates] launched updater: ${updater} ${updaterArgs.join(' ')}; exiting desktop to release venv shim`)
-
-    // Linger on the "updating — don't reopen" overlay long enough for the user
-    // to actually read it (and to bridge the gap until the updater's own window
-    // appears), THEN quit to release the venv shim. The updater rebuilds and
-    // relaunches us when it's done. (#50419 — a 600ms quit looked like a crash
-    // and lured users into the #50238 relaunch loop.)
-    isQuittingForHandoff = true
-    setTimeout(() => {
-      app.quit()
-    }, UPDATE_HANDOFF_DWELL_MS)
-
-    return { ok: true, handedOff: true, updater }
-  } finally {
-    updateInFlight = false
-  }
-}
-
-async function handOffWindowsBootstrapRecovery(reason) {
-  if (!IS_WINDOWS || !IS_PACKAGED) return false
-
-  const updater = resolveUpdaterBinary()
-  if (!updater) return false
-
-  const updateRoot = resolveUpdateRoot()
-  const { branch: configuredBranch } = readDesktopUpdateConfig()
-  const branch = directoryExists(path.join(updateRoot, '.git'))
-    ? await resolveHealedBranch(updateRoot, configuredBranch || DEFAULT_UPDATE_BRANCH)
-    : configuredBranch || DEFAULT_UPDATE_BRANCH
-  const venvBin = path.join(updateRoot, 'venv', IS_WINDOWS ? 'Scripts' : 'bin')
-  const venvHermes = path.join(venvBin, IS_WINDOWS ? 'hermes.exe' : 'hermes')
-  const venvPython = path.join(venvBin, IS_WINDOWS ? 'python.exe' : 'python')
-  // Choose the gentle in-place --update when ANY real-install signal is present,
-  // not just the `hermes.exe` console-script shim. That shim is generated at the
-  // END of venv setup and is absent in exactly the interrupted/quarantined states
-  // this recovery exists to heal — gating on it alone forced the destructive
-  // --repair (full venv recreate) and drove reinstall loops. The venv interpreter
-  // and the bootstrap-complete marker are present earlier and are better signals.
-  const haveRealInstall =
-    fileExists(venvPython) ||
-    fileExists(venvHermes) ||
-    fileExists(path.join(updateRoot, '.hermes-bootstrap-complete'))
-  const updaterArgs = haveRealInstall ? ['--update', '--branch', branch] : ['--repair', '--branch', branch]
-
-  await releaseBackendLockForUpdate(updateRoot)
-
-  const child = spawn(updater, updaterArgs, {
-    cwd: HERMES_HOME,
-    env: {
-      ...process.env,
-      HERMES_HOME,
-      PATH: pathWithHermesManagedNode(venvBin)
-    },
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: false
-  })
-  child.unref()
-
-  rememberLog(
-    `[bootstrap] handed off ${reason} recovery to updater: ${updater} ${updaterArgs.join(' ')}; exiting desktop to release app.asar`
-  )
-  // Same dwell as the in-app update hand-off (#50419): give the updater's
-  // window time to appear before we vanish, so the recovery doesn't look like
-  // a crash and provoke a mid-recovery relaunch.
-  isQuittingForHandoff = true
-  setTimeout(() => {
-    app.quit()
-  }, UPDATE_HANDOFF_DWELL_MS)
-
-  return true
-}
-
-// Resolve the hermes CLI to drive an in-app update: prefer the venv shim in
-// the install we're updating, fall back to `hermes` on PATH.
-function resolveHermesCliBinary(updateRoot) {
-  const venvHermes = path.join(updateRoot, 'venv', 'bin', 'hermes')
-  if (fileExists(venvHermes)) return venvHermes
-  return findOnPath('hermes') || null
-}
-
-// Spawn a command and stream each output line to the update progress channel.
-function runStreamedUpdate(command, args, { cwd, env, stage } = {}) {
-  return new Promise(resolve => {
-    let child
-    try {
-      child = spawn(
-        command,
-        args,
-        hiddenWindowsChildOptions({
-          cwd,
-          env: { ...process.env, ...(env || {}) },
-          stdio: ['ignore', 'pipe', 'pipe']
-        })
-      )
-    } catch (err) {
-      resolve({ code: 1, error: err.message })
-      return
-    }
-    const emitLines = chunk => {
-      for (const line of chunk.toString().split('\n')) {
-        const trimmed = line.trim()
-        if (trimmed) emitUpdateProgress({ stage, message: trimmed, percent: null })
-      }
-    }
-    child.stdout.on('data', emitLines)
-    child.stderr.on('data', emitLines)
-    child.once('error', err => resolve({ code: 1, error: err.message }))
-    child.once('exit', code => resolve({ code }))
-  })
-}
-
-// The running app's .app bundle (packaged macOS): execPath is
-// <App>.app/Contents/MacOS/<exe>; climb three levels to the bundle root.
-function runningAppBundle() {
-  if (!IS_MAC) return null
-  let dir = path.dirname(app.getPath('exe')) // .../Contents/MacOS
-  for (let i = 0; i < 2; i++) dir = path.dirname(dir) // -> .../X.app
-  return dir.endsWith('.app') ? dir : null
-}
-
-function shellQuote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`
-}
-
-// macOS/Linux in-app update: backend (`hermes update`) + OS-aware GUI rebuild
-// (`hermes desktop --build-only`), then atomically swap the running .app bundle
-// with the freshly built one and relaunch. Degrades to "backend updated,
-// restart to load the new GUI" if the swap can't be performed.
-async function applyUpdatesPosixInApp() {
-  const updateRoot = resolveUpdateRoot()
-  const hermes = resolveHermesCliBinary(updateRoot)
-  if (!hermes) {
-    emitUpdateProgress({ stage: 'manual', message: 'hermes update', percent: null })
-    return { ok: true, manual: true, command: 'hermes update', hermesRoot: updateRoot }
-  }
-
-  // Put the Hermes-managed Node and the venv on PATH so `hermes desktop`'s
-  // npm build can find them on a machine with no system Node. Windows portable
-  // Node lives directly under %LOCALAPPDATA%\hermes\node, not node\bin.
-  const env = {
-    HERMES_HOME,
-    PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
-  }
-
-  // `hermes update` reaps stale `hermes dashboard` backends (a code update
-  // leaves the running process serving old Python against the freshly-updated
-  // JS bundle). But OUR backend is one of those processes, and killing it
-  // mid-update produces the boot→kill→crash loop in #37532 — the desktop
-  // already restarts its own backend via the rebuild+relaunch below, so the
-  // reap must spare it. Hand the live backend's PID to the update process;
-  // _kill_stale_dashboard_processes reads HERMES_DESKTOP_CHILD_PID and excludes
-  // it while still reaping any genuinely-orphaned dashboards. (#37532)
-  // Exclude every desktop-managed backend (primary + all pool profiles) from
-  // the update reaper. _kill_stale_dashboard_processes accepts a comma-separated
-  // list (a single int still parses for back-compat).
-  const desktopChildPids = []
-  if (hermesProcess && Number.isInteger(hermesProcess.pid)) {
-    desktopChildPids.push(hermesProcess.pid)
-  }
-  for (const entry of backendPool.values()) {
-    if (entry.process && Number.isInteger(entry.process.pid)) {
-      desktopChildPids.push(entry.process.pid)
-    }
-  }
-  if (desktopChildPids.length) {
-    env.HERMES_DESKTOP_CHILD_PID = desktopChildPids.join(',')
-  }
-
-  // Branch-pin so a non-main checkout doesn't get switched to main (and self-heal
-  // to main when the pinned branch no longer exists on origin).
-  let branchArgs = []
-  try {
-    const head = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: updateRoot })
-    const current = (head.stdout || '').trim()
-    if (head.code === 0 && current && current !== 'HEAD') {
-      branchArgs = ['--branch', await resolveHealedBranch(updateRoot, current)]
-    }
-  } catch {
-    // best effort
-  }
-
-  emitUpdateProgress({ stage: 'update', message: 'Updating Hermes (git + dependencies)…', percent: 10 })
-  const updated = await runStreamedUpdate(hermes, ['update', '--yes', ...branchArgs], {
-    cwd: updateRoot,
-    env,
-    stage: 'update'
-  })
-  if (updated.code !== 0) {
-    emitUpdateProgress({ stage: 'error', message: 'hermes update failed.', error: updated.error || 'update-failed' })
-    return { ok: false, error: 'hermes update failed' }
-  }
-
-  emitUpdateProgress({ stage: 'rebuild', message: 'Rebuilding the desktop app…', percent: 60 })
-  // Retry-once: a first rebuild can fail on a still-settling tree or a
-  // self-healed (network-blocked) Electron download; a second run builds clean
-  // off the healed dist so we reach the swap+relaunch below instead of bailing.
-  const rebuilt = await runRebuildWithRetry(attempt => {
-    if (attempt > 0) {
-      emitUpdateProgress({ stage: 'rebuild', message: 'Retrying the desktop rebuild…', percent: 60 })
-    }
-    return runStreamedUpdate(hermes, ['desktop', '--build-only'], { cwd: updateRoot, env, stage: 'rebuild' })
-  })
-  if (rebuilt.code !== 0) {
-    emitUpdateProgress({
-      stage: 'error',
-      message: 'Backend updated, but the desktop rebuild failed. Restart Hermes to retry.',
-      error: rebuilt.error || 'rebuild-failed'
-    })
-    return { ok: false, backendUpdated: true, error: 'desktop rebuild failed' }
-  }
-
-  // Linux in-app update terminal state (#45205). `hermes desktop --build-only`
-  // rebuilds the unpacked app in place under apps/desktop/release/<plat>-unpacked.
-  // We can only HONESTLY relaunch into the new GUI when the *running* binary IS
-  // that rebuilt one — i.e. execPath lives under release/<plat>-unpacked. The
-  // outcome is decided by three signals (see update-relaunch.cjs):
-  //
-  //   underUnpacked + sandboxOk  → 'relaunch': detached watcher re-execs us in
-  //       place (mirrors the macOS handoff). Without it the update succeeds but
-  //       the app never restarts and the overlay hangs on "applying" forever.
-  //   !underUnpacked             → 'guiSkew': the running shell is an AppImage/
-  //       .deb/.rpm/dev/unresolved binary we did NOT replace. Claiming "loads
-  //       next launch" is a lie (GUI/backend skew, #37541) — surface an
-  //       explicit closeable terminal state telling the user the GUI package
-  //       was NOT changed and must be updated/reinstalled.
-  //   underUnpacked + !sandboxOk → 'manual': we'd be relaunching the rebuilt
-  //       binary, but a fresh rebuild can leave chrome-sandbox without
-  //       root:root + setuid (mode 4755) and Electron then refuses to launch
-  //       ("quit and never came back"). DO NOT quit into a dead app — keep the
-  //       working window and surface the closeable manual-restart state.
-  if (!IS_MAC) {
-    const unpackedDir = resolveUnpackedRelease(process.execPath, updateRoot, process.platform)
-    const underUnpacked = unpackedDir !== null
-
-    const preflight = underUnpacked
-      ? sandboxPreflight(unpackedDir, p => fs.statSync(p))
-      : { ok: false, reason: 'not-under-unpacked', path: null }
-    const sandboxFallback = sandboxFallbackFromEnv(process.env, process.argv.slice(1))
-    const sandboxOk = preflight.ok || sandboxFallback
-    if (underUnpacked && !preflight.ok) {
-      rememberLog(
-        `[updates] sandbox preflight: not launchable (${preflight.reason}) at ${preflight.path}; ` +
-          `fallback=${sandboxFallback ? 'env/--no-sandbox' : 'none'}`
-      )
-    }
-
-    const outcome = decideRelaunchOutcome({ underUnpacked, sandboxOk })
-
-    if (outcome === 'relaunch') {
-      emitUpdateProgress({ stage: 'restart', message: 'Restarting Hermes…', percent: 100 })
-      // Preserve launch context across the re-exec: replay the original args
-      // (filtered of Electron internals) and the env/cwd that define which
-      // backend/profile/root this instance talks to. Without this the
-      // relaunched instance comes up with default context instead of the user's.
-      const relaunchArgs = collectRelaunchArgs(process.argv.slice(1))
-      const relaunchEnv = collectRelaunchEnv(process.env)
-      const relaunchScript = buildRelaunchScript({
-        pid: process.pid,
-        execPath: process.execPath,
-        args: relaunchArgs,
-        env: relaunchEnv,
-        cwd: process.cwd()
-      })
-      const scriptPath = path.join(app.getPath('temp'), `hermes-desktop-update-${Date.now()}.sh`)
-      try {
-        fs.writeFileSync(scriptPath, relaunchScript, { mode: 0o755 })
-        const child = spawn('/bin/bash', [scriptPath], { detached: true, stdio: 'ignore' })
-        child.unref()
-        rememberLog(
-          `[updates] launched linux relaunch: ${scriptPath} -> ${process.execPath} ` +
-            `(args=${relaunchArgs.length}, env=${Object.keys(relaunchEnv).length})`
-        )
-        isQuittingForHandoff = true
-        setTimeout(() => app.quit(), UPDATE_HANDOFF_DWELL_MS)
-        return { ok: true, handedOff: true }
-      } catch (err) {
-        rememberLog(`[updates] linux relaunch failed: ${err.message}; falling back to manual restart`)
-        return {
-          ok: true,
-          backendUpdated: true,
-          guiUpdated: false,
-          manualRestart: true,
-          message: 'Backend updated. Quit and reopen Hermes to load the new version.'
-        }
-      }
-    }
-
-    if (outcome === 'guiSkew') {
-      emitUpdateProgress({
-        stage: 'guiSkew',
-        message:
-          'Backend updated, but the desktop app package was not changed. ' +
-          'Update or reinstall the Hermes desktop app to match.',
-        percent: 100
-      })
-      rememberLog(
-        `[updates] gui/backend skew: execPath ${process.execPath} not under release/*-unpacked; ` +
-          'backend updated, GUI package unchanged (AppImage/.deb/.rpm/dev/unresolved)'
-      )
-      return { ok: true, backendUpdated: true, guiUpdated: false, guiSkew: true }
-    }
-
-    // outcome === 'manual': we're the rebuilt binary, but its sandbox helper is
-    // not launchable and no fallback applies. Keep this working window alive.
-    rememberLog(
-      `[updates] sandbox not launchable (${preflight.reason}); skipping auto-relaunch, ` +
-        'returning manual-restart so the user keeps a working window'
-    )
-    return {
-      ok: true,
-      backendUpdated: true,
-      guiUpdated: false,
-      manualRestart: true,
-      sandboxBlocked: true,
-      message:
-        'Backend updated. The rebuilt app can’t relaunch automatically ' +
-        '(sandbox helper needs root). Quit and reopen Hermes to finish.'
-    }
-  }
-
-  const rebuiltApp = [
-    path.join(updateRoot, 'apps', 'desktop', 'release', 'mac-arm64', 'Hermes.app'),
-    path.join(updateRoot, 'apps', 'desktop', 'release', 'mac', 'Hermes.app')
-  ].find(directoryExists)
-  const targetApp = runningAppBundle()
-
-  // No bundle to swap (dev run, Linux AppImage, or unresolved paths): the
-  // backend is updated; the next launch picks up the rebuilt GUI.
-  if (!rebuiltApp || !targetApp) {
-    emitUpdateProgress({
-      stage: 'done',
-      message: 'Backend updated. Restart Hermes to load the new version.',
-      percent: 100
-    })
-    return { ok: true, backendUpdated: true, rebuiltApp: rebuiltApp || null }
-  }
-
-  emitUpdateProgress({ stage: 'restart', message: 'Installing the updated app and restarting…', percent: 95 })
-
-  // Detached swapper: wait for THIS process to exit (so the bundle is free),
-  // ditto the rebuilt app over the running one, clear quarantine, relaunch.
-  const swapScript = `#!/bin/bash
-set -u
-APP_PID=${process.pid}
-SRC=${shellQuote(rebuiltApp)}
-DST=${shellQuote(targetApp)}
-for _ in $(seq 1 240); do
-  kill -0 "$APP_PID" 2>/dev/null || break
-  sleep 0.5
-done
-if [ "$SRC" != "$DST" ]; then
-  if /usr/bin/ditto "$SRC" "$DST.hermes-update-new"; then
-    rm -rf "$DST.hermes-update-old" 2>/dev/null || true
-    mv "$DST" "$DST.hermes-update-old" 2>/dev/null || rm -rf "$DST"
-    mv "$DST.hermes-update-new" "$DST"
-    rm -rf "$DST.hermes-update-old" 2>/dev/null || true
-  fi
-fi
-/usr/bin/xattr -dr com.apple.quarantine "$DST" 2>/dev/null || true
-/usr/bin/open "$DST"
-`
-  const scriptPath = path.join(app.getPath('temp'), `hermes-desktop-update-${Date.now()}.sh`)
-  try {
-    fs.writeFileSync(scriptPath, swapScript, { mode: 0o755 })
-  } catch (err) {
-    emitUpdateProgress({
-      stage: 'done',
-      message: 'Backend + app updated. Restart Hermes to load the new version.',
-      percent: 100
-    })
-    rememberLog(`[updates] could not write swap script: ${err.message}; rebuilt app at ${rebuiltApp}`)
-    return { ok: true, backendUpdated: true, rebuiltApp }
-  }
-
-  const child = spawn('/bin/bash', [scriptPath], { detached: true, stdio: 'ignore' })
-  child.unref()
-  rememberLog(`[updates] launched mac swap+relaunch: ${scriptPath} (${rebuiltApp} -> ${targetApp})`)
-
-  isQuittingForHandoff = true
-  setTimeout(() => app.quit(), 600)
-  return { ok: true, handedOff: true, rebuiltApp, targetApp }
 }
 
 function readJson(filePath) {
@@ -2861,6 +2088,31 @@ function createActiveBackend(dashboardArgs) {
   })
 }
 
+function createBundledProductBackend(dashboardArgs) {
+  if (!IS_PACKAGED || !process.resourcesPath) return null
+  const runtime = resolveBundledProductRuntime(process.resourcesPath)
+  if (!runtime) return null
+  return applyWindowsNoConsoleSpawnHints({
+    kind: 'python',
+    label: `Marketing OS embedded runtime ${runtime.manifest.productTree.slice(0, 12)}`,
+    command: toNoConsolePython(runtime.pythonExecutable),
+    args: ['-m', 'hermes_cli.main', ...dashboardArgs],
+    env: {
+      ...buildDesktopBackendEnv({
+        hermesHome: HERMES_HOME,
+        pythonPathEntries: [runtime.agentRoot, runtime.sitePackages],
+        venvRoot: null
+      }),
+      PYTHONNOUSERSITE: '1',
+      PYTHONUTF8: '1'
+    },
+    root: runtime.agentRoot,
+    bootstrap: false,
+    bundled: true,
+    shell: false
+  })
+}
+
 function resolveHermesBackend(dashboardArgs) {
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
@@ -2879,17 +2131,23 @@ function resolveHermesBackend(dashboardArgs) {
     if (backend) return backend
   }
 
-  // 3. Bootstrap-complete ACTIVE_HERMES_ROOT -- the canonical install at
+  // 3. Packaged Marketing OS runtime -- release builds carry the exact
+  //    product tree, Python distribution and dependencies they were tested
+  //    with. Prefer it over a global/previous Hermes install so first launch
+  //    is offline and no machine-level tool can replace the product fork.
+  const bundled = createBundledProductBackend(dashboardArgs)
+  if (bundled) return bundled
+
+  // 4. Bootstrap-complete ACTIVE_HERMES_ROOT -- compatibility for older thin
   //    %LOCALAPPDATA%\hermes\hermes-agent (Windows) or ~/.hermes/hermes-agent.
   //    The bootstrap marker means install.ps1 stages finished and the user
-  //    completed initial configuration; we trust the install and go straight
-  //    to spawning hermes. Updates flow through the in-app update path
-  //    (applyUpdates -> git pull) or `hermes update` from the CLI.
+  //    completed initial configuration; this temporary compatibility path is
+  //    retained only for installations created before the embedded runtime.
   if (isBootstrapComplete()) {
     return createActiveBackend(dashboardArgs)
   }
 
-  // 4. Existing `hermes` on PATH -- installed via install.ps1 / install.sh from
+  // 5. Existing `hermes` on PATH -- installed via install.ps1 / install.sh from
   //    a previous tool-only setup, or pip-installed system-wide. Use it but
   //    do NOT write a bootstrap marker; the user did this themselves and we
   //    don't want to take ownership of an install we didn't perform.
@@ -2951,7 +2209,7 @@ function resolveHermesBackend(dashboardArgs) {
     }
   }
 
-  // 5. Last-ditch: pip-installed hermes_cli module via system Python.
+  // 6. Last-ditch: pip-installed hermes_cli module via system Python.
   //    Same rationale as #4 -- the user installed this; we use it but don't
   //    take ownership.
   const python = findSystemPython()
@@ -2978,7 +2236,7 @@ function resolveHermesBackend(dashboardArgs) {
     rememberLog(`Ignoring system Python ${python}: hermes_cli is not importable; falling through to bootstrap.`)
   }
 
-  // 6. Nothing usable yet -- signal the bootstrap runner that we need to
+  // 7. Nothing usable yet -- signal the bootstrap runner that we need to
   //    clone+install. Phase 1D's bootstrap-runner consumes this sentinel
   //    and drives install.ps1 stages with a progress UI. Until 1D lands,
   //    callers see the sentinel and surface it as a user-facing error
@@ -3021,16 +2279,6 @@ async function ensureRuntime(backend) {
   // to a renderer-side install overlay.
   if (backend.kind === 'bootstrap-needed') {
     rememberLog('[bootstrap] no Hermes install found; starting first-launch bootstrap')
-
-    if (await handOffWindowsBootstrapRecovery('bootstrap-needed')) {
-      const handoffError = new Error(
-        'Hermes recovery was handed off to Hermes Setup. The desktop will restart when recovery completes.'
-      )
-      handoffError.isBootstrapFailure = true
-      handoffError.bootstrapHandedOff = true
-      bootstrapFailure = handoffError
-      throw handoffError
-    }
 
     // Eagerly flip the bootstrap UI state to 'active' so the renderer
     // shows the install overlay BEFORE the runner finishes fetching the
@@ -7095,63 +6343,30 @@ ipcMain.handle('hermes:terminal:resize', (_event, id, size = {}) => {
 })
 ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession(String(id || '')))
 
-ipcMain.handle('hermes:updates:check', async () =>
-  checkUpdates().catch(error => ({
-    supported: true,
-    branch: readDesktopUpdateConfig().branch,
-    error: 'check-failed',
-    message: error?.message || String(error),
-    fetchedAt: Date.now()
-  }))
-)
+ipcMain.handle('hermes:updates:check', async () => productUpdateStatus(app.getVersion()))
 
-ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
-  applyUpdates(payload || {}).catch(error => ({
-    ok: false,
-    error: 'apply-failed',
-    message: error?.message || String(error)
-  }))
-)
+ipcMain.handle('hermes:updates:apply', async () => rejectRawCoreUpdate(app.getVersion()))
 
-ipcMain.handle('hermes:updates:branch:get', async () => readDesktopUpdateConfig())
+ipcMain.handle('hermes:updates:branch:get', async () => ({ branch: 'marketing-os-product-release' }))
 
-ipcMain.handle('hermes:updates:branch:set', async (_event, name) => {
-  const branch = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
-  writeDesktopUpdateConfig({ branch })
-  return { branch }
-})
+ipcMain.handle('hermes:updates:branch:set', async () => ({
+  branch: 'marketing-os-product-release',
+  locked: true
+}))
 
-// Resolve the canonical Hermes version (the one `release.py` bumps in
-// hermes_cli/__init__.py + pyproject.toml) so the desktop About panel shows the
-// real Hermes version instead of the Electron app's own package.json version,
-// which historically drifted (stuck at 0.0.2). Falls back to app.getVersion()
-// when the source tree can't be read (e.g. a packaged build without the repo).
+// Product versions are published by Marketing OS. Upstream Hermes versions
+// remain implementation provenance and never become the user-facing update
+// channel or About-panel version.
 function resolveHermesVersion() {
-  try {
-    const root = resolveUpdateRoot()
-    const initPath = path.join(root, 'hermes_cli', '__init__.py')
-    if (fileExists(initPath)) {
-      const raw = fs.readFileSync(initPath, 'utf8')
-      const match = raw.match(/__version__\s*=\s*["']([^"']+)["']/)
-      if (match) {
-        return match[1]
-      }
-    }
-  } catch {
-    // Fall through to the Electron app version below.
-  }
   return app.getVersion()
 }
 
-// Re-resolve the live Hermes version and push it into the native About panel
-// just before showing it, so an in-place `hermes update` is reflected without
-// an app restart. macOS only — `showAboutPanel()` is a no-op elsewhere, and the
-// other platforms don't use this menu item.
+// Push the Marketing OS release version into the native About panel.
 function showAboutPanelFresh() {
   app.setAboutPanelOptions({
     applicationName: APP_NAME,
     applicationVersion: resolveHermesVersion(),
-    copyright: 'Copyright © 2026 Nous Research'
+    copyright: 'Copyright © 2026 Marketing OS'
   })
   app.showAboutPanel()
 }
