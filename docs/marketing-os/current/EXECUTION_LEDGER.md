@@ -16,7 +16,7 @@
 |---|---|---|---|
 | Hermes 产品本体 | 完整源码已成为主仓库根 | code + automated | 上游吸收 CI、正式签名发布 |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
-| Session/account scope | 原生 SessionDB 持久绑定 | automated | 独立 scope helper 继续归位、真人多账号恢复 |
+| Session/account scope | 原生 SessionDB 持久绑定；Camofox 按 account_id 派生独立身份 | automated | Playwright MCP profile 对齐、真人多账号恢复 |
 | Account lifecycle | 经营目标、受众假设首段已迁入 | automated | 定位、对标、真实受众、实验策略版本 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
 | Content plan/assets | 三 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
@@ -52,6 +52,7 @@
 - 发布成功自动固化 ReceiptRef、结算 preflight、更新 ContentAsset/plan，并创建 1h/6h/24h/3d/7d checkpoint。
 - `agent/marketing/publish_capture.py` 接入 Hermes 原生 post-tool 路径；只有未来的受信 `marketing_effect_publish` 工具结果能自动结算回执，没有模型可调用的“手填成功”工具。
 - `marketing_prepare_publish` 与 `marketing_read_publish_state` 已进入原生 tool registry，负责预写 action 与重启恢复，不负责假装发布。
+- Hermes 原生 Camofox 持久身份已从“整个本机 profile 共用”改为“绑定账号时按 `account_id` 隔离”；切换账号会轮换浏览器 identity，不再复用同一 cookie 世界。
 
 尚未完成：
 

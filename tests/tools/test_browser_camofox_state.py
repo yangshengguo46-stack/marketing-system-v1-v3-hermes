@@ -50,6 +50,24 @@ class TestCamofoxIdentity:
             assert identity["user_id"].startswith("hermes_")
             assert identity["session_key"].startswith("task_")
 
+    def test_marketing_accounts_get_distinct_persistent_identities(self, tmp_path):
+        state = _load_module()
+        with patch.object(state, "get_hermes_home", return_value=tmp_path):
+            first = state.get_camofox_identity("same-task", account_id="acct-1")
+            second = state.get_camofox_identity("same-task", account_id="acct-2")
+            replay = state.get_camofox_identity("same-task", account_id="acct-1")
+
+        assert first == replay
+        assert first["user_id"] != second["user_id"]
+        assert first["session_key"] != second["session_key"]
+
+    def test_dispatch_scope_binding_is_resettable(self):
+        state = _load_module()
+        token = state.bind_camofox_marketing_account("acct-1")
+        assert state.current_camofox_marketing_account() == "acct-1"
+        state.reset_camofox_marketing_account(token)
+        assert state.current_camofox_marketing_account() == ""
+
 
 class TestCamofoxConfigDefaults:
     def test_default_config_includes_camofox_controls(self):

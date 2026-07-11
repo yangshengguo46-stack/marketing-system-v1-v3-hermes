@@ -37,7 +37,10 @@ from urllib.parse import SplitResult, urlsplit, urlunsplit
 import requests
 
 from hermes_cli.config import cfg_get, load_config
-from tools.browser_camofox_state import get_camofox_identity
+from tools.browser_camofox_state import (
+    current_camofox_marketing_account,
+    get_camofox_identity,
+)
 from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
@@ -124,7 +127,11 @@ def _managed_persistence_enabled() -> bool:
     return bool(_get_camofox_config().get("managed_persistence"))
 
 
-def _camofox_identity_override(task_id: Optional[str], camofox_cfg: Dict[str, Any]) -> Optional[Dict[str, str]]:
+def _camofox_identity_override(
+    task_id: Optional[str],
+    camofox_cfg: Dict[str, Any],
+    account_id: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
     """Return an externally configured Camofox identity, if one is set.
 
     Integrations that own the visible Camofox browser can set a shared user ID
@@ -135,12 +142,39 @@ def _camofox_identity_override(task_id: Optional[str], camofox_cfg: Dict[str, An
     if not user_id:
         return None
 
+    account_scope = str(account_id or "").strip()
+    account_digest = ""
+    if account_scope:
+        account_digest = uuid.uuid5(
+            uuid.NAMESPACE_URL, f"camofox-account:{account_scope}"
+        ).hex[:10]
+        user_id = f"{user_id}_{account_digest}"
+
     session_key = (
         os.getenv("CAMOFOX_SESSION_KEY", "").strip()
         or str(camofox_cfg.get("session_key") or "").strip()
         or f"task_{(task_id or 'default')[:16]}"
     )
+    if account_digest:
+        session_key = f"{session_key}_{account_digest}"
     return {"user_id": user_id, "session_key": session_key}
+
+
+def _marketing_account_id_for_task(task_id: Optional[str]) -> str:
+    """Resolve the durable account bound to this native browser invocation."""
+
+    bound = current_camofox_marketing_account()
+    if bound:
+        return bound
+    if not task_id:
+        return ""
+    try:
+        from agent.marketing.session_scope import read_tool_session_scope
+
+        scope = read_tool_session_scope(task_id=task_id)
+    except Exception:
+        return ""
+    return str((scope or {}).get("account_id") or "").strip()
 
 
 def _env_flag(name: str) -> Optional[bool]:
@@ -301,11 +335,21 @@ def _get_session(task_id: Optional[str]) -> Dict[str, Any]:
     """
     task_id = task_id or "default"
     with _sessions_lock:
-        if task_id in _sessions:
+        camofox_cfg = _get_camofox_config()
+        account_id = _marketing_account_id_for_task(task_id)
+        scope_key = account_id or "unbound"
+        if task_id in _sessions and _sessions[task_id].get("scope_key") == scope_key:
             return _adopt_existing_tab(_sessions[task_id])
 
-        camofox_cfg = _get_camofox_config()
-        identity_override = _camofox_identity_override(task_id, camofox_cfg)
+        if task_id in _sessions:
+            logger.info(
+                "Camofox account scope changed for task %s; rotating browser identity",
+                task_id,
+            )
+
+        identity_override = _camofox_identity_override(
+            task_id, camofox_cfg, account_id=account_id
+        )
         if identity_override:
             session = {
                 "user_id": identity_override["user_id"],
@@ -313,15 +357,19 @@ def _get_session(task_id: Optional[str]) -> Dict[str, Any]:
                 "session_key": identity_override["session_key"],
                 "managed": True,
                 "adopt_existing_tab": _adopt_existing_tab_enabled(camofox_cfg),
+                "scope_key": scope_key,
+                "account_id": account_id,
             }
         elif bool(camofox_cfg.get("managed_persistence")):
-            identity = get_camofox_identity(task_id)
+            identity = get_camofox_identity(task_id, account_id=account_id)
             session = {
                 "user_id": identity["user_id"],
                 "tab_id": None,
                 "session_key": identity["session_key"],
                 "managed": True,
                 "adopt_existing_tab": _adopt_existing_tab_enabled(camofox_cfg),
+                "scope_key": scope_key,
+                "account_id": account_id,
             }
         else:
             session = {
@@ -330,6 +378,8 @@ def _get_session(task_id: Optional[str]) -> Dict[str, Any]:
                 "session_key": f"task_{task_id[:16]}",
                 "managed": False,
                 "adopt_existing_tab": False,
+                "scope_key": scope_key,
+                "account_id": account_id,
             }
         _sessions[task_id] = session
         return _adopt_existing_tab(session)
@@ -804,6 +854,4 @@ def camofox_console(clear: bool = False, task_id: Optional[str] = None) -> str:
         "note": "Console log capture is not available with the Camofox backend. "
                 "Use browser_snapshot or browser_vision to inspect page state.",
     })
-
-
 

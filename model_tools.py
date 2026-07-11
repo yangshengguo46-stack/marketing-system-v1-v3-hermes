@@ -1119,6 +1119,7 @@ def handle_function_call(
         # unaffected by wall-clock adjustments during the call.
         _dispatch_start = time.monotonic()
         _approval_tokens = None
+        _browser_account_token = None
         try:
             from tools.approval import (
                 reset_current_observability_context,
@@ -1130,6 +1131,20 @@ def handle_function_call(
             )
         except Exception:
             reset_current_observability_context = None
+        if function_name.startswith("browser_"):
+            try:
+                from agent.marketing.session_scope import read_tool_session_scope
+                from tools.browser_camofox_state import bind_camofox_marketing_account
+
+                _browser_scope = read_tool_session_scope(
+                    task_id=task_id or "",
+                    session_id=session_id or "",
+                )
+                _browser_account_token = bind_camofox_marketing_account(
+                    (_browser_scope or {}).get("account_id")
+                )
+            except Exception:
+                _browser_account_token = None
         try:
             if function_name == "execute_code":
                 # Prefer the caller-provided list so subagents can't overwrite
@@ -1164,6 +1179,13 @@ def handle_function_call(
                 api_request_id=api_request_id or "",
             )
         finally:
+            if _browser_account_token is not None:
+                try:
+                    from tools.browser_camofox_state import reset_camofox_marketing_account
+
+                    reset_camofox_marketing_account(_browser_account_token)
+                except Exception:
+                    pass
             if _approval_tokens is not None and reset_current_observability_context is not None:
                 try:
                     reset_current_observability_context(_approval_tokens)

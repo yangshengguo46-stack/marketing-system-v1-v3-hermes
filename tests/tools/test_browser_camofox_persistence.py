@@ -132,6 +132,50 @@ class TestManagedPersistenceMode:
             assert s1["user_id"] == s2["user_id"]
             assert s1["session_key"] != s2["session_key"]
 
+    def test_bound_marketing_account_rotates_persistent_identity(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
+
+        with _enable_persistence(), patch(
+            "tools.browser_camofox._marketing_account_id_for_task",
+            side_effect=["acct-1", "acct-2", "acct-1"],
+        ):
+            first = _get_session("same-task")
+            second = _get_session("same-task")
+            replay = _get_session("same-task")
+
+        assert first["account_id"] == "acct-1"
+        assert second["account_id"] == "acct-2"
+        assert first["user_id"] != second["user_id"]
+        assert replay["user_id"] == first["user_id"]
+
+    def test_native_tool_dispatch_binds_account_context(self, tmp_path, monkeypatch):
+        from model_tools import handle_function_call
+        from tools.browser_camofox_state import current_camofox_marketing_account
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
+        with patch(
+            "agent.marketing.session_scope.read_tool_session_scope",
+            return_value={"user_id": "default", "account_id": "acct-bound"},
+        ), patch(
+            "tools.browser_camofox.camofox_navigate",
+            side_effect=lambda *_args, **_kwargs: json.dumps(
+                {"account_id": current_camofox_marketing_account()}
+            ),
+        ):
+            result = json.loads(
+                handle_function_call(
+                    "browser_navigate",
+                    {"url": "https://example.com"},
+                    task_id="turn-task",
+                    session_id="durable-session",
+                )
+            )
+
+        assert result["account_id"] == "acct-bound"
+        assert current_camofox_marketing_account() == ""
+
     def test_different_profiles_get_different_user_ids(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
 
