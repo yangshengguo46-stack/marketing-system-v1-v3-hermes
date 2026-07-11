@@ -61,6 +61,14 @@
 - Playwright/MCP 的真实发布动作与作品列表反查 Provider 尚未接入；当前不能宣称能自动发布。
 - 仍需一条开发机真人图文发布和重启恢复证据，证据等级目前停在 `automated`。
 
+下一纵切（当前环境核验后确定）：
+
+1. 当前开发机没有启用 Playwright MCP/Camofox；用户现有登录态位于 Electron `persist:marketing-os-platform-{platform}-{accountId}` 分区。
+2. 在当前 `apps/desktop/electron` 恢复并重写账号分区宿主，只恢复 session 隔离、登录检测和受控页面执行，不恢复旧 Electron App、FastAPI 或 capability host。
+3. 建立 Hermes Gateway → Desktop → Electron platform session 的原生 action bridge；Cookie 永不离开 Electron。
+4. 先实现知乎图文 Provider：装载已审核平台变体、填入编辑器、一次性确认后发布、作品页/创作中心反查。
+5. 同步开始第一阶段前端：内容审核、发布确认、执行状态、unknown 恢复；视觉化工作台在真人链通过后继续。
+
 完成口径：
 
 - 一个 Hermes session 中：资产 → 审批 → action → verified receipt → Agent 续答。
