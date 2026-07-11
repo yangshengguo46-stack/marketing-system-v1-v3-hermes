@@ -235,6 +235,49 @@ CREATE TABLE IF NOT EXISTS marketing_knowledge_packs (
 );
 CREATE INDEX IF NOT EXISTS idx_marketing_knowledge_pack_active
     ON marketing_knowledge_packs(knowledge_type,platform,region,status,verified_at);
+
+CREATE TABLE IF NOT EXISTS marketing_sounds (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL,
+    platform_sound_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    artist TEXT NOT NULL DEFAULT '',
+    duration_ms INTEGER,
+    canonical_url TEXT NOT NULL DEFAULT '',
+    rights_status TEXT NOT NULL DEFAULT 'unknown',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    UNIQUE(platform,platform_sound_id)
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_sounds_platform_seen
+    ON marketing_sounds(platform,last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS marketing_short_video_observations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    source_item_id TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    evidence_id TEXT NOT NULL REFERENCES evidence_records(id),
+    sound_id TEXT REFERENCES marketing_sounds(id),
+    observed_at TEXT NOT NULL,
+    published_at TEXT,
+    rank INTEGER,
+    view_count INTEGER,
+    like_count INTEGER,
+    comment_count INTEGER,
+    share_count INTEGER,
+    use_count INTEGER,
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id,account_id,platform,source_item_id,observed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_short_video_observation_scope
+    ON marketing_short_video_observations(user_id,account_id,platform,observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_short_video_observation_sound
+    ON marketing_short_video_observations(sound_id,platform,observed_at DESC);
 """
 
 LEGACY_MARKETING_TABLES = (
@@ -248,4 +291,6 @@ LEGACY_MARKETING_TABLES = (
     "marketing_learning_candidates",
     "marketing_publish_actions",
     "marketing_metric_checkpoints",
+    "marketing_sounds",
+    "marketing_short_video_observations",
 )

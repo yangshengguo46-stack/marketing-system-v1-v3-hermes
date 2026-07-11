@@ -65,8 +65,8 @@ SHARED_CAPABILITIES = {
         "maturity": "partial",
     },
     "audio": {
-        "purpose": "为视频生成或组织配音、音乐和音效。",
-        "native_tools": ["text_to_speech"],
+        "purpose": "把 BGM、原声、配音和音效作为传播变量组织；先读真实平台声音趋势，再决定声音角色和混音。",
+        "native_tools": ["marketing_read_sound_trends", "text_to_speech"],
         "maturity": "partial",
     },
     "editing_render": {
@@ -105,7 +105,7 @@ LANE_CONFIG = {
             "editing_render",
         ],
         "skills": ["humanizer", "baoyu-infographic", "manim-video", "p5js", "ascii-video"],
-        "deliverables": ["voiceover_script", "shot_list", "material_manifest", "timeline", "final_video"],
+        "deliverables": ["voiceover_script", "shot_list", "material_manifest", "sound_plan", "timeline", "final_video"],
     },
     "premium_human_video": {
         "label": "真人/数字人高质量视频",
@@ -121,7 +121,7 @@ LANE_CONFIG = {
             "editing_render",
         ],
         "skills": ["humanizer", "baoyu-infographic", "manim-video", "p5js"],
-        "deliverables": ["film_brief", "screenplay", "storyboard", "animatic", "rights_pack", "final_video"],
+        "deliverables": ["film_brief", "screenplay", "storyboard", "animatic", "sound_plan", "rights_pack", "final_video"],
     },
 }
 
@@ -211,6 +211,7 @@ class ContentProductionPolicy:
                 "draft_parent_content",
                 "adapt_platform_variants",
                 "source_or_generate_media",
+                "select_and_verify_sound",
                 "preflight_review",
                 "save_content_asset",
             ],

@@ -23,6 +23,7 @@
 |---|---|---|---|
 | Hermes 产品本体 | 完整源码已成为主仓库根 | code + automated | 上游吸收 CI、正式签名发布 |
 | State/data owner | 经营项目、受众、证据、内容、预演、回执和学习表已进入 Hermes `state.db`；旧 `agent_core.db` 一次迁移后只读保留 | dev-runtime | 删除兼容路径、中央匿名知识服务尚未实现 |
+| Short-video sound intelligence | Playwright MCP 原生短视频/BGM 结构化采集；Sound/Observation/Evidence 入 `state.db`；预演、草稿快照和发布回执携带声音身份 | automated | 各平台真人页面 selector 验收、跨日声音速度、匹配样本因果归因 |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
 | Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放上下文，删除时清理 profile | dev-runtime | 切换 UI、真人多账号登录/退出 |
@@ -76,6 +77,9 @@
 - 真实旧库已备份并完成一次迁移：1 个经营项目、1 个受众假设、4 个内容资产、1 个生产计划、1 个证据记录；五类数据源/目标逐表哈希一致。
 - 数据飞轮分为用户私有学习和授权后的匿名结构贡献；中央知识只提供版本化先验，不覆盖本地回执。
 - `KnowledgeFlywheelRepository` 已建立授权贡献 outbox：只有 accepted learning candidate 能生成贡献，必须有 consent_ref，禁止账号/用户 ID、原文、URL、消息、Cookie/Token 等字段，且幂等、状态受控。
+- Playwright MCP 新增 `browser_extract_short_video_signals`，不再把话题标签当作 BGM；真实浏览器结果自动固化作品观察、平台 sound_id 和 EvidenceRecord。
+- `ShortVideoSignalRepository` 已能按账号/平台/时间窗计算声音候选，评分覆盖真实观看、跨作品重复、报告使用量、新鲜度、目标匹配和版权状态。
+- 视频预演公式升级为 `content-production-preflight-v0.2`，`sound_fit` 成为独立维度；没有声音证据会警告但不会伪造阻断，视频草稿将 `sound_plan` 固化进不可变特征快照，发布回执携带 sound_id。
 
 尚未完成：
 
@@ -151,7 +155,7 @@
 ## 当前回归基线
 
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
-- 当前营销域、内容生产、数据飞轮与账号 MCP 生命周期组合回归：Python 276 passed；Node 12 passed，包含旧库迁移、匿名贡献治理与真实浏览器重启恢复。
+- 当前营销域、内容生产、短视频声音、数据飞轮与账号 MCP 生命周期组合回归：Python 280 passed；Node 12 passed，包含旧库迁移、匿名贡献治理、BGM post-tool 证据链与真实浏览器重启恢复。
 - LOOP-01 发布账本、审批、回执门与恢复路径单文件回归：16 passed（后续组合回归必须继续包含）。
 - Desktop runtime staging：2 passed。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。

@@ -14,6 +14,7 @@ from agent.marketing.domains.article_drafts import ArticleDraftValidator
 from agent.marketing.domains.content_policy import CONTENT_KINDS, VALID_PLATFORMS
 from agent.marketing.domains.evidence import EvidenceRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
+from agent.marketing.domains.short_video_signals import ShortVideoSignalRepository
 from agent.marketing.intelligence.content_feature_snapshot import (
     build_content_feature_snapshot,
 )
@@ -286,6 +287,16 @@ class ContentAssetRepository(MarketingDomainRepository):
                 raise ValueError("draft platform is outside its production plan")
             payload["_production_plan_id"] = plan_id_value
             plan_payload = json.loads(plan_row["plan_json"])
+            sound_plan = payload.get("sound_plan")
+            if production_kind in {"faceless_video", "premium_human_video"}:
+                sound_plan = _validated_sound_plan(
+                    sound_plan,
+                    repository=ShortVideoSignalRepository(self.paths),
+                    user_id=user_id,
+                    account_id=account_id,
+                    platform=platform,
+                )
+                payload["sound_plan"] = sound_plan
             platform_variants = payload.get("platform_variants")
             if not isinstance(platform_variants, dict):
                 platform_variants = {}
@@ -304,6 +315,7 @@ class ContentAssetRepository(MarketingDomainRepository):
                     "platform_variant_keys": sorted(platform_variants.keys()),
                 },
                 material_context=payload.get("material_manifest") or {},
+                sound_context=sound_plan if isinstance(sound_plan, dict) else None,
                 risks=(payload.get("validation") or {}).get("issues") or [],
             )
             encoded = _bounded_json(payload, "content", 500_000)
@@ -521,6 +533,49 @@ class ContentAssetRepository(MarketingDomainRepository):
                         row["account_id"],
                     ),
                 )
+
+def _validated_sound_plan(
+    value: Any,
+    *,
+    repository: ShortVideoSignalRepository,
+    user_id: str,
+    account_id: str,
+    platform: str,
+) -> dict[str, Any]:
+    if value is None:
+        return {
+            "status": "needs_selection",
+            "mode": "undecided",
+            "reason": "BGM is a first-class distribution variable for short video",
+        }
+    if not isinstance(value, dict):
+        raise ValueError("sound_plan must be an object")
+    mode = str(value.get("mode") or "").strip()
+    if mode not in {"trend_sound", "original_voice_only", "custom_licensed", "original_music"}:
+        raise ValueError("unsupported sound_plan mode")
+    result = {
+        "status": "selected",
+        "mode": mode,
+        "mix_role": str(value.get("mix_role") or "support").strip()[:80],
+        "opening_cue_ms": max(0, int(value.get("opening_cue_ms") or 0)),
+    }
+    if mode == "trend_sound":
+        sound = repository.require_sound(
+            user_id=user_id,
+            account_id=account_id,
+            platform=platform,
+            sound_id=str(value.get("sound_id") or ""),
+        )
+        result.update(
+            {
+                "sound_id": sound["id"],
+                "title": sound["title"],
+                "artist": sound["artist"],
+                "rights_status": sound["rights_status"],
+            }
+        )
+    return result
+
 
 def _record(row: sqlite3.Row) -> dict[str, Any]:
     value = dict(row)

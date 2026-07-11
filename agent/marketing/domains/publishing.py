@@ -116,6 +116,9 @@ class PublishingRepository(MarketingDomainRepository):
                 "content_sha256": hashlib.sha256(
                     str(asset["content_json"]).encode("utf-8")
                 ).hexdigest(),
+                "sound_plan": content.get("sound_plan")
+                if isinstance(content.get("sound_plan"), dict)
+                else None,
             }
             now = _now()
             db.execute(
@@ -221,6 +224,8 @@ class PublishingRepository(MarketingDomainRepository):
                     raise ValueError("published outcome requires a verification source")
 
         row = dict(row)
+        request_payload = _object(row["request_json"], "publish request")
+        sound_plan = request_payload.get("sound_plan") if isinstance(request_payload.get("sound_plan"), dict) else {}
         summary = {
             "outcome": outcome_value,
             "provider": row["provider"],
@@ -229,6 +234,8 @@ class PublishingRepository(MarketingDomainRepository):
             "verification_source": verification or None,
             "failure_code": str(failure_code or result.get("failure_code") or "")[:120] or None,
             "observed_at": str(result.get("observed_at") or _now()),
+            "sound_id": sound_plan.get("sound_id"),
+            "sound_mode": sound_plan.get("mode"),
         }
         source_id = post_id or published_url or action_id
         # ReceiptRef is created first through its single owner.  If the process

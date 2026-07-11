@@ -6,6 +6,10 @@ import json
 from typing import Any
 
 from agent.marketing.domains.evidence import EvidenceRepository
+from agent.marketing.domains.short_video_signals import (
+    ShortVideoSignalRepository,
+    decode_browser_signal_result,
+)
 from agent.marketing.session_scope import read_tool_session_scope
 
 
@@ -25,6 +29,21 @@ def enrich_tool_result_with_evidence(
     excerpt cannot enter the verified store through the marketing toolset.
     """
 
+    if tool_name == "browser_extract_short_video_signals":
+        scope = read_tool_session_scope(task_id=task_id, session_id=session_id)
+        payload = decode_browser_signal_result(result)
+        if not scope or payload is None:
+            return result
+        capture = ShortVideoSignalRepository().capture_browser_result(
+            user_id=str(scope["user_id"]),
+            account_id=str(scope["account_id"]),
+            payload=payload,
+            session_id=str(session_id or task_id),
+            tool_call_id=str(tool_call_id or ""),
+        )
+        return str(result) + "\n\nMarketing OS verified capture:\n" + json.dumps(
+            capture, ensure_ascii=False, indent=2
+        )
     if tool_name != "web_extract" or not isinstance(result, str):
         return result
     scope = read_tool_session_scope(task_id=task_id, session_id=session_id)

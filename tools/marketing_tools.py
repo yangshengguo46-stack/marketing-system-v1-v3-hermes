@@ -11,6 +11,7 @@ from agent.marketing.domains import (
     ContentProductionPolicy,
     EvidenceRepository,
     PublishingRepository,
+    ShortVideoSignalRepository,
 )
 from agent.marketing.session_scope import enforce_tool_account_scope
 from agent.marketing.providers import get_publish_provider, has_publish_providers
@@ -161,6 +162,25 @@ READ_EVIDENCE_PACK_SCHEMA = {
     },
 }
 
+READ_SOUND_TRENDS_SCHEMA = {
+    "name": "marketing_read_sound_trends",
+    "description": (
+        "Read verified BGM/sound momentum from real short-video browser observations for the "
+        "account bound to this conversation. Use it before drafting or editing short video; "
+        "hashtag popularity is not a substitute for a platform sound identity."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "platform": {"type": "string", "enum": ["douyin", "bilibili", "xiaohongshu", "kuaishou", "wechat_channels", "tiktok", "youtube"]},
+            "objective": {"type": "string"},
+            "window_hours": {"type": "integer", "minimum": 1, "maximum": 720, "default": 72},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+        },
+        "required": ["platform"],
+    },
+}
+
 CREATE_CONTENT_DRAFT_SCHEMA = {
     "name": "marketing_draft_content_create",
     "description": (
@@ -186,7 +206,14 @@ CREATE_CONTENT_DRAFT_SCHEMA = {
             },
             "topic": {"type": "string"},
             "hook": {"type": "string"},
-            "content": {"type": "object"},
+            "content": {
+                "type": "object",
+                "description": (
+                    "Draft payload. Video drafts should include sound_plan with mode, mix_role and "
+                    "opening_cue_ms; trend_sound additionally requires a verified sound_id returned "
+                    "by marketing_read_sound_trends."
+                ),
+            },
             "evidence_refs": {"type": "array", "items": {"type": "string"}},
             "memory_refs": {"type": "array", "items": {"type": "string"}},
         },
@@ -426,6 +453,25 @@ def _plan_content_production(args: dict, **kwargs) -> str:
         account_id=account_id,
         plan=result,
     )
+    sound_context: dict = {}
+    if result["kind"] in {"faceless_video", "premium_human_video"}:
+        sound_context = {
+            "platforms": [
+                ShortVideoSignalRepository().rank_sounds(
+                    user_id=user_id,
+                    account_id=account_id,
+                    platform=platform,
+                    objective=result["objective"],
+                    limit=10,
+                )
+                for platform in result.get("target_platforms") or []
+            ]
+        }
+        sound_context["candidates"] = [
+            candidate
+            for platform_result in sound_context["platforms"]
+            for candidate in platform_result.get("candidates") or []
+        ]
     preflight = create_content_production_preflight(
         OperatingLoopRepository(),
         {
@@ -435,6 +481,7 @@ def _plan_content_production(args: dict, **kwargs) -> str:
             "plan_id": checkpoint["plan_id"],
             "plan": checkpoint,
             "evidence_refs": evidence_refs,
+            "sound_context": sound_context,
         },
     )
     return json.dumps(
@@ -480,6 +527,24 @@ def _read_evidence_pack(args: dict, **kwargs) -> str:
         user_id=user_id,
         account_id=account_id,
         status=str(args.get("status") or "verified"),
+        limit=int(args.get("limit") or 20),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _read_sound_trends(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = ShortVideoSignalRepository().rank_sounds(
+        user_id=user_id,
+        account_id=account_id,
+        platform=str(args.get("platform") or ""),
+        objective=str(args.get("objective") or ""),
+        window_hours=int(args.get("window_hours") or 72),
         limit=int(args.get("limit") or 20),
     )
     return json.dumps(result, ensure_ascii=False)
@@ -781,6 +846,15 @@ registry.register(
     handler=_read_evidence_pack,
     description="Read source-integrity evidence captured by native Hermes collectors.",
     emoji="🔎",
+)
+
+registry.register(
+    name="marketing_read_sound_trends",
+    toolset="marketing",
+    schema=READ_SOUND_TRENDS_SCHEMA,
+    handler=_read_sound_trends,
+    description="Read evidence-backed short-video sound momentum for the current account.",
+    emoji="🎵",
 )
 
 registry.register(

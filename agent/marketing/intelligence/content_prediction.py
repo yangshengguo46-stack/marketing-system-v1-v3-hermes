@@ -18,7 +18,7 @@ from typing import Any
 
 PREDICTION_V2_VERSION = "prepublish-prediction-v2.0"
 
-DIMENSIONS = ("attention", "retention", "trust", "action", "account_fit", "risk")
+DIMENSIONS = ("attention", "retention", "trust", "action", "account_fit", "sound", "risk")
 
 
 def _bounded(value: float, *, low: float = 0.0, high: float = 1.0) -> float:
@@ -79,6 +79,7 @@ def build_prediction_dimensions(
     trust = _scale_score(scores, "viewpoint", "density", fallback=0.42)
     action = _scale_score(scores, "cta", "viewpoint", fallback=0.38)
     fit = _scale_score(scores, "topic", "viewpoint", fallback=0.45)
+    sound = _scale_score(scores, "sound_fit", "bgm_fit", "sound", fallback=0.0)
     risk_raw = _scale_score(scores, "title_bait_risk", "controversy_overload_risk", fallback=0.25)
     evidence_factor = 1.0 if evidence_ready else 0.45
 
@@ -138,6 +139,14 @@ def build_prediction_dimensions(
                 "score_hint": _bounded(fit * evidence_factor),
                 "drivers": ["audience_context", "account_positioning", "platform_gene"],
             },
+            "sound": {
+                "label": "声音是否帮助停留、情绪进入和平台传播",
+                "expected_metric": "sound_lift_hypothesis",
+                "range": _range(sound, spread=0.45, cap=1.0),
+                "score_hint": _bounded(sound),
+                "drivers": ["platform_sound_id", "sound_momentum", "opening_cue", "mix_role", "rights_status"],
+                "causal_warning": "单条作品只能形成相关性；因果增益需要同账号匹配内容或 A/B 变体校准。",
+            },
             "risk": {
                 "label": "是否存在标题党、硬广、版权、负反馈或伤账号风险",
                 "expected_metric": "negative_feedback_rate",
@@ -150,7 +159,8 @@ def build_prediction_dimensions(
         "confidence": confidence,
         "confidence_score": confidence_score,
         "basis": list(dict.fromkeys([*basis, f"platforms={platform_note}", "prediction_dimensions_v2"])),
-        "missing_dimensions": [] if evidence_ready else ["trust", "account_fit"],
+        "missing_dimensions": (["trust", "account_fit"] if not evidence_ready else [])
+        + (["sound"] if kind in {"faceless_video", "premium_human_video"} and sound <= 0 else []),
         "note": "v2 dimensions align pre-publish predictions with post-publish metric labels; legacy expected_* fields remain for retro compatibility.",
     }
 

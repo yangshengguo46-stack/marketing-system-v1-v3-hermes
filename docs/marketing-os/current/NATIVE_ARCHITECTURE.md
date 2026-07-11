@@ -79,6 +79,12 @@ Hermes `state.db` 是会话、账号、受众、内容、预演、回执、指�
 - 中央知识以带版本、平台、地区、时间窗、样本量和置信度的知识包返回 Agent，只提供先验；本地 Receipt 永远拥有更高事实权重。
 - 本地贡献 outbox 的 owner 是 `agent/marketing/domains/knowledge_flywheel.py`；它只接收治理通过的 learning candidate 和显式 consent_ref，不拥有网络上传或中央聚合。
 
+### 短视频声音信号
+
+`mcp/marketing-browser` 原生增加 `browser_extract_short_video_signals`，从真实账号浏览器页面提取作品指标和平台声音身份。工具结果经 Hermes post-tool seam 固化为 EvidenceRecord、Sound 和 ShortVideoObservation，Electron 不采集、不解析也不保存这些数据。
+
+`ShortVideoSignalRepository` 以平台声音 ID 去重，使用真实观察计算覆盖、重复出现、使用规模、新鲜度、目标内容匹配和版权安全。它向预演提供声音先验，向草稿提供受证据约束的 `sound_plan`；发布回执继续携带 `sound_id`，后续只能通过匹配样本或 A/B 变体提高因果归因。
+
 ## 三核数据合同
 
 ### PreflightRecord
@@ -129,7 +135,7 @@ User goal
 公式是 Agent 的内部判断内核，不拥有自己的工作流：
 
 ```text
-Preflight_t = f(Content_t, Account_t, Memory_t, ReceiptHistory_t, Platform_t)
+Preflight_t = f(Content_t, Account_t, Memory_t, ReceiptHistory_t, Platform_t, Sound_t)
 Retro_t = compare(Preflight_t, Receipt_t)
 Candidate_t = interpret(Retro_t, repeated evidence, user feedback)
 ```

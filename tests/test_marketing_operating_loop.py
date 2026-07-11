@@ -145,7 +145,7 @@ def test_prediction_and_retro_use_the_same_observable_dimensions():
     )
 
     assert set(prediction["dimensions"]) == {
-        "attention", "retention", "trust", "action", "account_fit", "risk"
+        "attention", "retention", "trust", "action", "account_fit", "sound", "risk"
     }
     assert len(retro_to_dict(retro)["accuracies"]) == 2
 

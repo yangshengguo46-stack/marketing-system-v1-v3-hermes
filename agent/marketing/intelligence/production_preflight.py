@@ -20,7 +20,7 @@ from .influence_score import build_influence_score
 from .preflight_decision import build_preflight_decision
 
 
-CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.1"
+CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.2"
 
 
 def _text(value: Any) -> str:
@@ -123,6 +123,8 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
     url_evidence = _url_evidence_count(evidence)
     has_audience = _has_audience_context(params)
     memory_score = _memory_signal(params)
+    sound_context = params.get("sound_context") if isinstance(params.get("sound_context"), dict) else {}
+    sound_candidates = sound_context.get("candidates") if isinstance(sound_context.get("candidates"), list) else []
 
     audience_fit = 0.78 if has_audience else 0.34
     evidence_strength = _clamp(0.28 + min(0.45, 0.15 * url_evidence))
@@ -142,14 +144,30 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         "cost_safety": _clamp(cost_safety),
         "memory_support": memory_score,
     }
-    overall = _clamp(
-        scores["audience_fit"] * 0.24
-        + scores["evidence_strength"] * 0.22
-        + scores["platform_fit"] * 0.18
-        + scores["production_feasibility"] * 0.18
-        + scores["cost_safety"] * 0.10
-        + scores["memory_support"] * 0.08
-    )
+    if kind in {"faceless_video", "premium_human_video"}:
+        top_sound_score = max(
+            [float(item.get("selection_score") or 0) for item in sound_candidates if isinstance(item, dict)],
+            default=0.0,
+        )
+        scores["sound_fit"] = _clamp(top_sound_score)
+        overall = _clamp(
+            scores["audience_fit"] * 0.22
+            + scores["evidence_strength"] * 0.19
+            + scores["platform_fit"] * 0.15
+            + scores["production_feasibility"] * 0.15
+            + scores["cost_safety"] * 0.09
+            + scores["memory_support"] * 0.07
+            + scores["sound_fit"] * 0.13
+        )
+    else:
+        overall = _clamp(
+            scores["audience_fit"] * 0.24
+            + scores["evidence_strength"] * 0.22
+            + scores["platform_fit"] * 0.18
+            + scores["production_feasibility"] * 0.18
+            + scores["cost_safety"] * 0.10
+            + scores["memory_support"] * 0.08
+        )
     scores["overall"] = overall
 
     blockers: list[str] = []
@@ -160,6 +178,8 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         blockers.append("url_evidence_missing")
     if kind == "faceless_video" and "stock_material" in (plan.get("capabilities") or {}):
         warnings.append("material_license_check_required")
+    if kind in {"faceless_video", "premium_human_video"} and not sound_candidates:
+        warnings.append("bgm_trend_evidence_missing")
     if kind == "premium_human_video":
         blockers.append("video_previsualization_agent_required")
         if plan.get("status") == "blocked_on_provider_calibration":
@@ -230,6 +250,12 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
             "url_evidence_count": url_evidence,
             "has_audience_context": has_audience,
             "memory_support": memory_score,
+            "sound_candidate_count": len(sound_candidates),
+            "sound_candidate_ids": [
+                str(item.get("sound_id"))
+                for item in sound_candidates[:10]
+                if isinstance(item, dict) and item.get("sound_id")
+            ],
         },
         "separation": {
             "general_preflight_owns": [
@@ -238,6 +264,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
                 "platform_fit",
                 "production_feasibility",
                 "cost_safety",
+                "sound_fit_for_short_video",
                 "content_lane_go_no_go",
             ],
             "high_end_video_previsualization_agent_owns": [

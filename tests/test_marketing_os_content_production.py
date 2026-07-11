@@ -187,7 +187,7 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     assert planned["account_scope"]["account_id"] == "acct-1"
     assert planned["checkpoint_status"] == "planned"
     assert planned["preflight"]["id"].startswith("preflight_")
-    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.1"
+    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.2"
     assert planned["preflight"]["decision"]["version"] == "preflight-decision-v0.1"
     assert planned["preflight"]["influence_score"]["version"] == "influenceos-score-v0.1"
     assert planned["recommended_next_action"].startswith("使用已固化")
@@ -225,6 +225,7 @@ def test_content_write_schema_cannot_override_account_scope():
     assert "account_id" not in article_properties
     assert "account_id" not in plan_properties
     assert "marketing_read_evidence_pack" in by_name
+    assert "marketing_read_sound_trends" in by_name
     assert "marketing_read_content_assets" in by_name
 
 

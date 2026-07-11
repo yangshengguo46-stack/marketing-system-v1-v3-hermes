@@ -10,6 +10,9 @@ import {
   purgeAccountDirectories,
 } from './account-lease.js'
 import { resolveBrowserExecutable } from './browser-runtime.js'
+import { installShortVideoSignalTool } from './short-video-signals.js'
+
+installShortVideoSignalTool()
 
 if (process.argv.includes('--purge-profile')) {
   const lease = parseAccountLease()

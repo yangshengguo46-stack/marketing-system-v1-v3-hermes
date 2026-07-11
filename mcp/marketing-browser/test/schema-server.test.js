@@ -5,7 +5,8 @@ import { playwrightToolSchemas } from '../src/schema-server.js'
 test('discovers the pinned Playwright MCP surface without opening a browser', () => {
   const schemas = playwrightToolSchemas()
   const names = new Set(schemas.map(schema => schema.name))
-  assert.equal(schemas.length, 52)
+  assert.equal(schemas.length, 53)
+  assert.ok(schemas.some(schema => schema.name === 'browser_extract_short_video_signals'))
   assert.equal(names.has('browser_snapshot'), true)
   assert.equal(names.has('browser_navigate'), true)
   assert.equal(names.has('browser_take_screenshot'), true)
