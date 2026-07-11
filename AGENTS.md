@@ -1,5 +1,14 @@
 # Hermes Agent - Development Guide
 
+## Marketing OS 执行铁律（覆盖下文的一般扩展偏好）
+
+任何计划、台账、实现和审查开始前必须逐条确认：
+
+1. **默认先改原生 owner；禁止因为怕碰上游，就在外围再加适配层。只有上游确实无法承担、且证据充分时，才允许新增边界。**
+2. **Electron 只负责显示和交互，不参与其它任何东西。** Electron 不拥有账号、Cookie、profile、浏览器、任务、记忆、业务状态、自动化或执行。
+
+为了方便同步、减少改动、快速打通或保留已写代码，都不能覆盖这两条。违反时先删除错误实现，再继续任务。
+
 Instructions for AI coding assistants and developers working on the hermes-agent codebase.
 
 **Never give up on the right solution.**
