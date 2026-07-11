@@ -1,0 +1,200 @@
+"""Hermes-native social account lifecycle and BrowserContext leases."""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Optional
+
+from hermes_state import SessionDB
+
+
+@dataclass(frozen=True)
+class BrowserContextLease:
+    """Secret-free authority for one session to use one account context."""
+
+    session_id: str
+    user_id: str
+    account_id: str
+    platform: str
+    profile_key: str
+    auth_state: str
+    issued_at: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class AccountRegistry:
+    """The sole Hermes owner of connected social account identity and lifecycle."""
+
+    LEGACY_IMPORT_MARKER = "marketing_accounts_json_import_v1"
+
+    def __init__(self, session_db: SessionDB | None = None):
+        self.db = session_db or SessionDB()
+        self._owns_db = session_db is None
+
+    def close(self) -> None:
+        if self._owns_db:
+            self.db.close()
+
+    def register_pending(
+        self,
+        *,
+        platform: str,
+        user_id: str = "default",
+        label: str | None = None,
+        permissions: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        account_id = f"acct_{uuid.uuid4().hex[:16]}"
+        return self.db.upsert_marketing_account(
+            account_id=account_id,
+            user_id=user_id,
+            platform=platform,
+            label=label,
+            status="pending",
+            auth_state="unauthenticated",
+            permissions=permissions or {},
+        )
+
+    def mark_authenticated(
+        self,
+        account_id: str,
+        *,
+        user_id: str = "default",
+        platform_user_id: str | None = None,
+        username: str | None = None,
+        stats: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        current = self._require(account_id, user_id=user_id)
+        now = time.time()
+        return self.db.upsert_marketing_account(
+            account_id=account_id,
+            user_id=user_id,
+            platform=current["platform"],
+            platform_user_id=platform_user_id,
+            username=username,
+            label=current.get("label"),
+            status="active",
+            auth_state="authenticated",
+            permissions=current.get("permissions"),
+            stats=stats,
+            metadata=current.get("metadata"),
+            connected_at=current.get("connected_at") or now,
+            last_verified_at=now,
+        )
+
+    def mark_verification_required(
+        self, account_id: str, *, user_id: str = "default"
+    ) -> dict[str, Any]:
+        current = self._require(account_id, user_id=user_id)
+        return self.db.upsert_marketing_account(
+            account_id=account_id,
+            user_id=user_id,
+            platform=current["platform"],
+            status="stale",
+            auth_state="verification_required",
+        )
+
+    def disconnect(self, account_id: str, *, user_id: str = "default") -> dict[str, Any]:
+        current = self._require(account_id, user_id=user_id)
+        return self.db.upsert_marketing_account(
+            account_id=account_id,
+            user_id=user_id,
+            platform=current["platform"],
+            status="disconnected",
+            auth_state="unauthenticated",
+        )
+
+    def delete(self, account_id: str, *, user_id: str = "default") -> bool:
+        self._require(account_id, user_id=user_id)
+        return self.db.delete_marketing_account(account_id, user_id=user_id)
+
+    def list(self, *, user_id: str = "default") -> list[dict[str, Any]]:
+        return self.db.list_marketing_accounts(user_id=user_id)
+
+    def bind_session(
+        self,
+        session_id: str,
+        account_id: str,
+        *,
+        user_id: str = "default",
+        require_pristine: bool = True,
+    ) -> bool:
+        self._require(account_id, user_id=user_id)
+        return self.db.update_session_marketing_scope(
+            session_id,
+            marketing_user_id=user_id,
+            marketing_account_id=account_id,
+            require_pristine=require_pristine,
+        )
+
+    def unbind_session(self, session_id: str, *, require_pristine: bool = True) -> bool:
+        return self.db.update_session_marketing_scope(
+            session_id,
+            marketing_user_id=None,
+            marketing_account_id=None,
+            require_pristine=require_pristine,
+        )
+
+    def lease_for_session(
+        self, session_id: str, *, require_authenticated: bool = True
+    ) -> BrowserContextLease:
+        session = self.db.get_session(session_id)
+        if not session or not session.get("marketing_account_id"):
+            raise ValueError("conversation is not bound to a Marketing OS account")
+        user_id = str(session.get("marketing_user_id") or "default")
+        account = self._require(str(session["marketing_account_id"]), user_id=user_id)
+        if require_authenticated and account.get("auth_state") != "authenticated":
+            raise ValueError("bound account requires login or verification")
+        return BrowserContextLease(
+            session_id=session_id,
+            user_id=user_id,
+            account_id=str(account["id"]),
+            platform=str(account["platform"]),
+            profile_key=str(account["profile_key"]),
+            auth_state=str(account["auth_state"]),
+            issued_at=time.time(),
+        )
+
+    def import_legacy_accounts(self, accounts_path: Path) -> int:
+        """One-time secret-free import from the deleted shell's accounts.json."""
+
+        if self.db.get_meta(self.LEGACY_IMPORT_MARKER) == "complete":
+            return 0
+        imported = 0
+        try:
+            payload = json.loads(accounts_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {"accounts": []}
+        rows = payload.get("accounts") if isinstance(payload, dict) else []
+        for item in rows or []:
+            if not isinstance(item, dict) or not item.get("id") or not item.get("platform"):
+                continue
+            legacy_status = str(item.get("status") or "active").lower()
+            status = legacy_status if legacy_status in {
+                "pending", "active", "stale", "disconnected", "deleted"
+            } else "active"
+            self.db.upsert_marketing_account(
+                account_id=str(item["id"]),
+                platform=str(item["platform"]),
+                platform_user_id=str(item.get("platform_user_id") or "") or None,
+                username=str(item.get("username") or "") or None,
+                label=str(item.get("label") or "") or None,
+                status=status,
+                auth_state="authenticated" if status == "active" else "unknown",
+                stats=item.get("stats") if isinstance(item.get("stats"), dict) else None,
+                metadata={"migrated_from": "accounts.json"},
+            )
+            imported += 1
+        self.db.set_meta(self.LEGACY_IMPORT_MARKER, "complete")
+        return imported
+
+    def _require(self, account_id: str, *, user_id: str) -> dict[str, Any]:
+        account = self.db.get_marketing_account(account_id, user_id=user_id)
+        if account is None:
+            raise ValueError(f"unknown Marketing OS account: {account_id}")
+        return account

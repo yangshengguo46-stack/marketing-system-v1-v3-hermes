@@ -134,6 +134,23 @@ Candidate_t = interpret(Retro_t, repeated evidence, user feedback)
 - 同一父内容生成平台变体，但共享同一事实、受众目标和经营假设。
 - 平台知识必须带来源、地区、版本、生效/失效时间。
 
+## 账号浏览器是原生 MCP
+
+Marketing OS 不再为每个平台堆一套 Electron IPC、Provider 和脚本补丁。浏览器执行统一由
+Hermes 原生 AccountRegistry 和 BrowserContext owner 拥有；Microsoft Playwright MCP 通过
+`createConnection(config, contextGetter)` 直接取得当前 Hermes 账号上下文。
+
+- Hermes AccountRegistry 负责账号注册、绑定、切换、授权、退出、删除和 profile 生命周期。
+- BrowserContext owner 负责 Cookie/profile、登录页面和受控浏览器上下文；MCP 只执行工具。
+- 平台 Skill 只描述平台语义和操作流程，不重复实现浏览器、会话或账号存储。
+- Electron 只显示和交互，不拥有账号、Cookie、profile、浏览器执行或自动化业务真相。
+- 上游 Playwright MCP 的成熟工具原封不动保留；不建立 MCP 代理、子进程路由或 Electron browser-host。
+- 同一账号 profile 同时只允许一个执行 owner；切换账号不复制 Cookie，也不共享 profile。
+
+原生账号生命周期落在 `agent/account_registry.py` 与 `hermes_state.SessionDB.marketing_accounts`。
+AccountRegistry 签发的 BrowserContext lease 只包含 session、user、account、platform、profile_key
+和 auth_state，不包含任何认证秘密；认证无效的账号不能获得执行租约。
+
 ## 视频边界
 
 - 图文、不露脸视频、高阶视频共享账号、证据、素材、音频、版权、回执和复盘合同。
@@ -146,7 +163,8 @@ Candidate_t = interpret(Retro_t, repeated evidence, user feedback)
 - 外层 FastAPI Agent。
 - `HermesAgentService` 或 HTTP 回调同机 Agent。
 - 第二 Session/Task/Memory owner。
-- 为营销再造 Provider、MCP、Skill、Plugin、Secret 管理器。
+- 在 Hermes/Playwright 已有能力更优秀时另造重复 Provider、MCP、Skill、Plugin 或 Secret 管理器。
+- 为账号隔离牺牲 Playwright MCP 的成熟工具，或在 MCP 外堆一条平台脚本补丁链。
 - Electron UI 直接修改业务真相。
 - `publishing.json` 与 SQL 双写。
 - Electron profile 与 Playwright profile 永久并存为两个身份世界。

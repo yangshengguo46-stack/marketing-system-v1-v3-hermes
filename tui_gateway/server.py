@@ -12909,6 +12909,69 @@ def _(rid, _params: dict) -> dict:
     return _ok(rid, AccountContextRepository().list_accounts())
 
 
+@method("marketing.accounts.register")
+def _(rid, params: dict) -> dict:
+    """Create a pending account in Hermes before the BrowserContext login flow."""
+    from agent.account_registry import AccountRegistry
+
+    params = params if isinstance(params, dict) else {}
+    db = _get_db()
+    if db is None:
+        return _db_unavailable_error(rid, code=5017)
+    try:
+        account = AccountRegistry(db).register_pending(
+            platform=str(params.get("platform") or ""),
+            user_id=str(params.get("user_id") or "default"),
+            label=str(params.get("label") or "").strip() or None,
+            permissions=(
+                params.get("permissions")
+                if isinstance(params.get("permissions"), dict)
+                else None
+            ),
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"account": account})
+
+
+@method("marketing.account.disconnect")
+def _(rid, params: dict) -> dict:
+    """Stop an account from being leased without deleting its history."""
+    from agent.account_registry import AccountRegistry
+
+    params = params if isinstance(params, dict) else {}
+    db = _get_db()
+    if db is None:
+        return _db_unavailable_error(rid, code=5017)
+    try:
+        account = AccountRegistry(db).disconnect(
+            str(params.get("account_id") or ""),
+            user_id=str(params.get("user_id") or "default"),
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"account": account})
+
+
+@method("marketing.account.delete")
+def _(rid, params: dict) -> dict:
+    """Soft-delete account truth after the product surface confirms intent."""
+    from agent.account_registry import AccountRegistry
+
+    params = params if isinstance(params, dict) else {}
+    db = _get_db()
+    if db is None:
+        return _db_unavailable_error(rid, code=5017)
+    try:
+        deleted = AccountRegistry(db).delete(
+            str(params.get("account_id") or ""),
+            user_id=str(params.get("user_id") or "default"),
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"deleted": deleted})
+
+
 @method("marketing.account.context")
 def _(rid, params: dict) -> dict:
     """Read the native operating context for one user-scoped account."""

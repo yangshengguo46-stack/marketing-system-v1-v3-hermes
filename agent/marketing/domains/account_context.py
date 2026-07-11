@@ -16,7 +16,10 @@ from typing import Any
 from agent.marketing.data_paths import MarketingDataPaths
 
 
-_ACCOUNT_FIELDS = ("id", "platform", "username", "label", "status", "stats")
+_ACCOUNT_FIELDS = (
+    "id", "platform", "platform_user_id", "username", "label", "status",
+    "auth_state", "permissions", "stats", "connected_at", "last_verified_at", "updated_at",
+)
 _NEXT_ACTION_BY_STAGE = {
     "not_started": "draft_audience_hypothesis",
     "goal_defined": "draft_audience_hypothesis",
@@ -30,15 +33,35 @@ _NEXT_ACTION_BY_STAGE = {
 class AccountContextRepository:
     """Produce a bounded, secret-free account context from canonical storage."""
 
-    def __init__(self, paths: MarketingDataPaths | None = None):
+    def __init__(self, paths: MarketingDataPaths | None = None, session_db: Any = None):
+        self._native_accounts = paths is None or session_db is not None
+        self._session_db = session_db
         self.paths = paths or MarketingDataPaths.from_env()
 
     def list_accounts(self) -> dict[str, Any]:
+        if self._native_accounts:
+            accounts = self._list_native_accounts()
+            return {"accounts": accounts, "total": len(accounts), "source": "hermes_state"}
         raw = _read_json(self.paths.config_dir / "accounts.json", {"accounts": []})
         rows = raw.get("accounts") if isinstance(raw, dict) else []
         accounts = [_sanitize_account(item) for item in rows if isinstance(item, dict)]
         accounts = [item for item in accounts if item.get("id")]
         return {"accounts": accounts, "total": len(accounts), "source": "marketing_store"}
+
+    def _list_native_accounts(self) -> list[dict[str, Any]]:
+        from agent.account_registry import AccountRegistry
+        from hermes_state import SessionDB
+
+        db = self._session_db or SessionDB()
+        owns_db = self._session_db is None
+        registry = AccountRegistry(db)
+        try:
+            registry.import_legacy_accounts(self.paths.config_dir / "accounts.json")
+            rows = registry.list()
+            return [_sanitize_account(item) for item in rows]
+        finally:
+            if owns_db:
+                db.close()
 
     def read(self, *, user_id: str, account_id: str) -> dict[str, Any]:
         user_id = str(user_id or "default").strip() or "default"

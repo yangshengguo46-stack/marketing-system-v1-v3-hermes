@@ -121,7 +121,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # ---------------------------------------------------------------------------
 # WAL-compatibility fallback
@@ -708,6 +708,26 @@ CREATE TABLE IF NOT EXISTS state_meta (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS marketing_accounts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'default',
+    platform TEXT NOT NULL,
+    platform_user_id TEXT,
+    username TEXT,
+    label TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    auth_state TEXT NOT NULL DEFAULT 'unknown',
+    profile_key TEXT NOT NULL UNIQUE,
+    permissions_json TEXT,
+    stats_json TEXT,
+    metadata_json TEXT,
+    created_at REAL NOT NULL,
+    connected_at REAL,
+    last_verified_at REAL,
+    updated_at REAL NOT NULL,
+    deleted_at REAL
+);
+
 CREATE TABLE IF NOT EXISTS compression_locks (
     session_id TEXT PRIMARY KEY,
     holder TEXT NOT NULL,
@@ -721,6 +741,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
+CREATE INDEX IF NOT EXISTS idx_marketing_accounts_user_platform
+    ON marketing_accounts(user_id, platform, status, updated_at DESC);
 """
 
 # Indexes that reference columns added in later schema versions must be
@@ -1892,6 +1914,180 @@ class SessionDB:
             if require_pristine:
                 sql += " AND COALESCE(api_call_count, 0) = 0"
             return conn.execute(sql, params).rowcount > 0
+
+        return bool(self._execute_write(_do))
+
+    # =========================================================================
+    # Native Marketing OS account registry
+    # =========================================================================
+
+    @staticmethod
+    def _normalize_marketing_account_id(value: str, *, field: str) -> str:
+        normalized = str(value or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.:@-]{1,160}", normalized):
+            raise ValueError(f"invalid {field}")
+        return normalized
+
+    @staticmethod
+    def _normalize_marketing_platform(value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9_-]{1,48}", normalized):
+            raise ValueError("invalid marketing platform")
+        return normalized
+
+    @staticmethod
+    def _decode_marketing_account(row: sqlite3.Row) -> Dict[str, Any]:
+        result = dict(row)
+        for column, target in (
+            ("permissions_json", "permissions"),
+            ("stats_json", "stats"),
+            ("metadata_json", "metadata"),
+        ):
+            raw = result.pop(column, None)
+            try:
+                result[target] = json.loads(raw) if raw else {}
+            except (TypeError, json.JSONDecodeError):
+                result[target] = {}
+        return result
+
+    def upsert_marketing_account(
+        self,
+        *,
+        account_id: str,
+        platform: str,
+        user_id: str = "default",
+        platform_user_id: Optional[str] = None,
+        username: Optional[str] = None,
+        label: Optional[str] = None,
+        status: str = "pending",
+        auth_state: str = "unknown",
+        permissions: Optional[Dict[str, Any]] = None,
+        stats: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        connected_at: Optional[float] = None,
+        last_verified_at: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a secret-free social account record.
+
+        Cookies, passwords, QR payloads, verification codes and access tokens
+        are intentionally absent. Browser authentication belongs to the native
+        BrowserContext owner, referenced only by the stable ``profile_key``.
+        """
+
+        account_id = self._normalize_marketing_account_id(account_id, field="account_id")
+        user_id = self._normalize_marketing_account_id(user_id or "default", field="user_id")
+        platform = self._normalize_marketing_platform(platform)
+        status = str(status or "pending").strip().lower()
+        auth_state = str(auth_state or "unknown").strip().lower()
+        if status not in {"pending", "active", "stale", "disconnected", "deleted"}:
+            raise ValueError("invalid marketing account status")
+        if auth_state not in {
+            "unknown", "unauthenticated", "authenticated", "verification_required", "expired"
+        }:
+            raise ValueError("invalid marketing account auth_state")
+        now = time.time()
+        profile_key = f"{platform}:{account_id}"
+
+        def _sanitize_json(value: Any) -> Any:
+            if isinstance(value, str):
+                return sanitize_context(value)
+            if isinstance(value, dict):
+                return {
+                    str(key)[:160]: _sanitize_json(item)
+                    for key, item in value.items()
+                }
+            if isinstance(value, (list, tuple)):
+                return [_sanitize_json(item) for item in value]
+            if value is None or isinstance(value, (bool, int, float)):
+                return value
+            return sanitize_context(str(value))
+
+        def _json(value: Optional[Dict[str, Any]]) -> Optional[str]:
+            if value is None:
+                return None
+            return json.dumps(_sanitize_json(value), ensure_ascii=False, separators=(",", ":"))
+
+        def _do(conn):
+            conn.execute(
+                """
+                INSERT INTO marketing_accounts (
+                    id,user_id,platform,platform_user_id,username,label,status,auth_state,
+                    profile_key,permissions_json,stats_json,metadata_json,created_at,
+                    connected_at,last_verified_at,updated_at,deleted_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+                ON CONFLICT(id) DO UPDATE SET
+                    user_id=excluded.user_id,
+                    platform=excluded.platform,
+                    platform_user_id=COALESCE(excluded.platform_user_id, marketing_accounts.platform_user_id),
+                    username=COALESCE(excluded.username, marketing_accounts.username),
+                    label=COALESCE(excluded.label, marketing_accounts.label),
+                    status=excluded.status,
+                    auth_state=excluded.auth_state,
+                    permissions_json=COALESCE(excluded.permissions_json, marketing_accounts.permissions_json),
+                    stats_json=COALESCE(excluded.stats_json, marketing_accounts.stats_json),
+                    metadata_json=COALESCE(excluded.metadata_json, marketing_accounts.metadata_json),
+                    connected_at=COALESCE(excluded.connected_at, marketing_accounts.connected_at),
+                    last_verified_at=COALESCE(excluded.last_verified_at, marketing_accounts.last_verified_at),
+                    updated_at=excluded.updated_at,
+                    deleted_at=NULL
+                """,
+                (
+                    account_id, user_id, platform, platform_user_id, username, label,
+                    status, auth_state, profile_key, _json(permissions), _json(stats),
+                    _json(metadata), now, connected_at, last_verified_at, now,
+                ),
+            )
+
+        self._execute_write(_do)
+        account = self.get_marketing_account(account_id, user_id=user_id, include_deleted=True)
+        if account is None:  # pragma: no cover - defensive against external DB mutation
+            raise RuntimeError("marketing account write did not persist")
+        return account
+
+    def list_marketing_accounts(
+        self, *, user_id: str = "default", include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
+        user_id = self._normalize_marketing_account_id(user_id or "default", field="user_id")
+        sql = "SELECT * FROM marketing_accounts WHERE user_id = ?"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL AND status != 'deleted'"
+        sql += " ORDER BY updated_at DESC, id"
+        with self._lock:
+            rows = self._conn.execute(sql, (user_id,)).fetchall()
+        return [self._decode_marketing_account(row) for row in rows]
+
+    def get_marketing_account(
+        self,
+        account_id: str,
+        *,
+        user_id: str = "default",
+        include_deleted: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        account_id = self._normalize_marketing_account_id(account_id, field="account_id")
+        user_id = self._normalize_marketing_account_id(user_id or "default", field="user_id")
+        sql = "SELECT * FROM marketing_accounts WHERE id = ? AND user_id = ?"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL AND status != 'deleted'"
+        with self._lock:
+            row = self._conn.execute(sql, (account_id, user_id)).fetchone()
+        return self._decode_marketing_account(row) if row else None
+
+    def delete_marketing_account(
+        self, account_id: str, *, user_id: str = "default"
+    ) -> bool:
+        """Soft-delete account truth; BrowserContext cleanup is a separate owner action."""
+
+        account_id = self._normalize_marketing_account_id(account_id, field="account_id")
+        user_id = self._normalize_marketing_account_id(user_id or "default", field="user_id")
+        now = time.time()
+
+        def _do(conn):
+            return conn.execute(
+                """UPDATE marketing_accounts
+                SET status='deleted', auth_state='unauthenticated', deleted_at=?, updated_at=?
+                WHERE id=? AND user_id=? AND deleted_at IS NULL""",
+                (now, now, account_id, user_id),
+            ).rowcount > 0
 
         return bool(self._execute_write(_do))
 

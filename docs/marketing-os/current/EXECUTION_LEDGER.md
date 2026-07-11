@@ -4,6 +4,12 @@
 > 分支：`codex/marketing-os-product-source`
 > 本文件是唯一任务入口。研究资料、ADR 和 Git 历史不得直接发任务。
 
+## 不得遗忘的执行禁令
+
+默认先改原生 owner。禁止因为怕碰上游、方便同步或短期省事，就在外围增加适配层、桥接
+层、外挂 Provider、重复 MCP 或壳。每个新增边界必须先提供“现有原生 owner 无法承担”的
+源码证据；否则任务不得开始。该禁令优先于局部实现计划。
+
 ## 证据等级
 
 `designed → code → automated → dev-runtime → packaged → human-loop`
@@ -16,8 +22,8 @@
 |---|---|---|---|
 | Hermes 产品本体 | 完整源码已成为主仓库根 | code + automated | 上游吸收 CI、正式签名发布 |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
-| Session/account scope | 原生 SessionDB 持久绑定；Camofox 按 account_id 派生独立身份 | automated | Playwright MCP profile 对齐、真人多账号恢复 |
-| Account lifecycle | 经营目标、受众假设首段已迁入 | automated | 定位、对标、真实受众、实验策略版本 |
+| Session/account scope | SessionDB 会话绑定与 AccountRegistry 已统一；`accounts.json` 仅一次性迁移 | automated | BrowserContext owner、Playwright contextGetter、真人多账号 |
+| Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；旧 JSON 一次性迁移 | automated | 切换 UI、真人多账号与 profile 清理 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
 | Content plan/assets | 三 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
 | Preflight | InfluenceOS + 不可变记录 + draft gate | automated | 真实账号历史校准、发布前版本链 |
@@ -52,9 +58,12 @@
 - 发布成功自动固化 ReceiptRef、结算 preflight、更新 ContentAsset/plan，并创建 1h/6h/24h/3d/7d checkpoint。
 - `agent/marketing/publish_capture.py` 接入 Hermes 原生 post-tool 路径；只有未来的受信 `marketing_effect_publish` 工具结果能自动结算回执，没有模型可调用的“手填成功”工具。
 - `marketing_prepare_publish` 与 `marketing_read_publish_state` 已进入原生 tool registry，负责预写 action 与重启恢复，不负责假装发布。
-- Hermes 原生 Camofox 持久身份已从“整个本机 profile 共用”改为“绑定账号时按 `account_id` 隔离”；切换账号会轮换浏览器 identity，不再复用同一 cookie 世界。
+- Hermes 原生 Camofox 的 account_id 隔离作为兼容能力保留；Playwright MCP 已确定为桌面产品主线，但尚未接入 BrowserContext owner，不能宣称运行完成。
 - `marketing_effect_publish` 已复用 Hermes 原生 MCP elicitation 一次性确认；拒绝、静默或超时不会启动 Provider，也不能永久放行最终发布。
 - 发布 Provider 进入 `agent/marketing/providers/` 原生注册器；只有真实 Provider 已注册时 effect/query 工具才会出现在 Agent 工具集中，避免空按钮和占位能力。
+- Hermes `state.db` 已新增原生账号注册表；`agent/account_registry.py` 是账号生命周期 owner，Gateway 只调用该 owner，Electron 不保存或修改账号真相。
+- 旧 `accounts.json` 仅执行一次无敏感字段迁移；Cookie、token、验证码和 QR 内容禁止进入 SessionDB。
+- AccountRegistry 已能为绑定会话签发 secret-free BrowserContext lease；认证失效、断开或删除账号不能获得执行租约。
 
 尚未完成：
 
@@ -63,11 +72,10 @@
 
 下一纵切（当前环境核验后确定）：
 
-1. 当前开发机没有启用 Playwright MCP/Camofox；用户现有登录态位于 Electron `persist:marketing-os-platform-{platform}-{accountId}` 分区。
-2. 在当前 `apps/desktop/electron` 恢复并重写账号分区宿主，只恢复 session 隔离、登录检测和受控页面执行，不恢复旧 Electron App、FastAPI 或 capability host。
-3. 建立 Hermes Gateway → Desktop → Electron platform session 的原生 action bridge；Cookie 永不离开 Electron。
-4. 先实现知乎图文 Provider：装载已审核平台变体、填入编辑器、一次性确认后发布、作品页/创作中心反查。
-5. 同步开始第一阶段前端：内容审核、发布确认、执行状态、unknown 恢复；视觉化工作台在真人链通过后继续。
+1. 在 Hermes 内建立唯一 BrowserContext owner，按 AccountRegistry 租约提供账号上下文；Electron 不拥有 Cookie、profile 或执行。
+2. 直接使用 Microsoft Playwright MCP 的 `createConnection(config, contextGetter)`，不建 MCP 代理、账号子进程池或 Electron browser-host。
+3. 用平台 Skill 实现知乎第一条流程：登录检测、装载已审核变体、填写编辑器、一次性确认、作品页反查。
+4. 同步开始第一阶段前端：内容审核、发布确认、执行状态、unknown 恢复；前端不承载浏览器执行真相。
 
 完成口径：
 

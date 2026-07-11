@@ -43,6 +43,7 @@ PRODUCT_CORE_UPDATE_MESSAGE = (
 )
 
 PRODUCT_ARCHITECTURE_PRINCIPLES = (
+    "Modify the native capability owner first; never add an outer adapter merely to avoid changing upstream source.",
     "One Hermes-native runtime owns conversation, tasks, memory, skills and marketing workflows.",
     "Account operations, audience modeling, evidence, content and learning are native Agent capabilities, never external attachments.",
     "Both Hermes core code and Marketing OS enhancements may be decomposed or rewritten.",
