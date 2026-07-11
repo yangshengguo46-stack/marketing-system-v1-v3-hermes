@@ -12,6 +12,10 @@ from agent.marketing.domains import (
     EvidenceRepository,
 )
 from agent.marketing.session_scope import enforce_tool_account_scope
+from agent.marketing.intelligence import (
+    OperatingLoopRepository,
+    create_content_production_preflight,
+)
 from tools.registry import registry
 
 
@@ -94,8 +98,9 @@ PLAN_CONTENT_PRODUCTION_SCHEMA = {
     "description": (
         "Build a Hermes-native production work order for a soft article, faceless material video, "
         "or premium human/digital-human video. It reads the current conversation's account context, "
-        "selects a lane and shared capabilities, and exposes audience/evidence/rights/cost gates. "
-        "The work order is persisted as a checkpoint and returns a plan_id required for drafting."
+        "selects a lane and shared capabilities, then persists an immutable InfluenceOS preflight "
+        "covering audience/evidence/rights/cost gates. The work order is a checkpoint and returns "
+        "the plan_id plus the decision that every drafting action must consume."
     ),
     "parameters": {
         "type": "object",
@@ -343,7 +348,30 @@ def _plan_content_production(args: dict, **kwargs) -> str:
         account_id=account_id,
         plan=result,
     )
-    return json.dumps(checkpoint, ensure_ascii=False)
+    preflight = create_content_production_preflight(
+        OperatingLoopRepository(),
+        {
+            "user_id": user_id,
+            "account_id": account_id,
+            "session_id": str(kwargs.get("session_id") or kwargs.get("task_id") or ""),
+            "plan_id": checkpoint["plan_id"],
+            "plan": checkpoint,
+            "evidence_refs": evidence_refs,
+        },
+    )
+    return json.dumps(
+        {
+            **checkpoint,
+            "preflight": {
+                "id": preflight["preflight_id"],
+                "formula_version": preflight["formula_version"],
+                "scores": preflight["scores"],
+                "decision": preflight["preflight_decision"],
+                "influence_score": preflight["influence_score"],
+            },
+        },
+        ensure_ascii=False,
+    )
 
 
 def _read_content_assets(args: dict, **kwargs) -> str:
@@ -379,6 +407,33 @@ def _read_evidence_pack(args: dict, **kwargs) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def _require_actionable_preflight(
+    *, user_id: str, account_id: str, plan_id: str
+) -> tuple[OperatingLoopRepository, dict]:
+    loop = OperatingLoopRepository()
+    preflight = loop.latest_preflight_for_plan(
+        plan_id=plan_id,
+        user_id=user_id,
+        account_id=account_id,
+    )
+    decision = preflight.get("decision") or {}
+    product_decision = decision.get("preflight_decision") or decision
+    if product_decision.get("go") is not True:
+        next_action = str(product_decision.get("next_action") or "重新运行预演")
+        raise ValueError(f"preflight blocked content production: {next_action}")
+    return loop, preflight
+
+
+def _validate_draft_evidence(
+    *, user_id: str, account_id: str, evidence_refs: list[str]
+) -> None:
+    EvidenceRepository().require_verified(
+        user_id=user_id,
+        account_id=account_id,
+        evidence_ids=evidence_refs,
+    )
+
+
 def _create_content_draft(args: dict, **kwargs) -> str:
     user_id, account_id = enforce_tool_account_scope(
         {},
@@ -386,11 +441,20 @@ def _create_content_draft(args: dict, **kwargs) -> str:
         session_id=kwargs.get("session_id"),
         require_bound=True,
     )
+    plan_id = str(args.get("plan_id") or "")
+    _validate_draft_evidence(
+        user_id=user_id,
+        account_id=account_id,
+        evidence_refs=args.get("evidence_refs") or [],
+    )
+    loop, preflight = _require_actionable_preflight(
+        user_id=user_id, account_id=account_id, plan_id=plan_id
+    )
     result = ContentAssetRepository().create_draft(
         user_id=user_id,
         account_id=account_id,
         title=str(args.get("title") or ""),
-        plan_id=str(args.get("plan_id") or ""),
+        plan_id=plan_id,
         asset_type=str(args.get("type") or "script"),
         platform=str(args.get("platform") or ""),
         production_kind=str(args.get("production_kind") or ""),
@@ -400,7 +464,8 @@ def _create_content_draft(args: dict, **kwargs) -> str:
         evidence_refs=args.get("evidence_refs") or [],
         memory_refs=args.get("memory_refs") or [],
     )
-    return json.dumps(result, ensure_ascii=False)
+    loop.mark_preflight_used(preflight["id"])
+    return json.dumps({**result, "preflight_id": preflight["id"]}, ensure_ascii=False)
 
 
 def _create_article_draft(args: dict, **kwargs) -> str:
@@ -410,11 +475,20 @@ def _create_article_draft(args: dict, **kwargs) -> str:
         session_id=kwargs.get("session_id"),
         require_bound=True,
     )
+    plan_id = str(args.get("plan_id") or "")
+    _validate_draft_evidence(
+        user_id=user_id,
+        account_id=account_id,
+        evidence_refs=args.get("evidence_refs") or [],
+    )
+    loop, preflight = _require_actionable_preflight(
+        user_id=user_id, account_id=account_id, plan_id=plan_id
+    )
     result = ContentAssetRepository().create_article_bundle(
         user_id=user_id,
         account_id=account_id,
         title=str(args.get("title") or ""),
-        plan_id=str(args.get("plan_id") or ""),
+        plan_id=plan_id,
         parent_body_markdown=str(args.get("parent_body_markdown") or ""),
         platform_variants=args.get("platform_variants") or {},
         evidence_refs=args.get("evidence_refs") or [],
@@ -422,7 +496,8 @@ def _create_article_draft(args: dict, **kwargs) -> str:
         hook=str(args.get("hook") or ""),
         revision_of=str(args.get("revision_of") or ""),
     )
-    return json.dumps(result, ensure_ascii=False)
+    loop.mark_preflight_used(preflight["id"])
+    return json.dumps({**result, "preflight_id": preflight["id"]}, ensure_ascii=False)
 
 
 registry.register(

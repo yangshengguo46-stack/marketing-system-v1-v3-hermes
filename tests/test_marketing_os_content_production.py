@@ -186,6 +186,10 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
 
     assert planned["account_scope"]["account_id"] == "acct-1"
     assert planned["checkpoint_status"] == "planned"
+    assert planned["preflight"]["id"].startswith("preflight_")
+    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.1"
+    assert planned["preflight"]["decision"]["version"] == "preflight-decision-v0.1"
+    assert planned["preflight"]["influence_score"]["version"] == "influenceos-score-v0.1"
     assert planned["recommended_next_action"].startswith("使用已固化")
     assert planned["platform_stylebooks"]["wechat_official"]["guidance_status"].startswith(
         "operational_guidance"
@@ -196,6 +200,8 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     assert created["content"]["_production_plan_id"] == planned["plan_id"]
     assert created["content"]["_provenance_evidence_refs"] == [evidence_id]
     assert created["content"]["_evidence_verification_level"] == "source_integrity"
+    assert created["content"]["feature_snapshot"]["retro_contract"]["mutable"] is False
+    assert created["content"]["feature_snapshot"]["evidence"]["ready"] is True
     assert created["content"]["schema"] == "marketing.article_bundle.v1"
     assert created["content"]["review_status"] == "ready_for_human_review"
     assert created["content"]["validation"]["ready"] is True

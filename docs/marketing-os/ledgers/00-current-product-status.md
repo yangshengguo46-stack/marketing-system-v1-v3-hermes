@@ -162,6 +162,14 @@ FastAPI、外层 adapter 和旧 store 反向依赖已经随旧源码删除。当
 
 第一批已把 AccountLifecycle、EvidencePack、ContentAsset 三个 repository 重复的 SQLite connection/transaction 基础设施合并为一个 `MarketingDomainRepository`，随后物理删除顶层 `marketing_os/`：产品身份进入 `agent/product.py`，账号经营、受众、证据、内容资产和平台表达进入 `agent/marketing/`，消息策略进入 `gateway/`，模型工具进入原生 `tools/`。原生 memory guidance 也已加入“用户偏好—账号模型—业务记录—技能候选”分层学习规则，避免营销哲学只停留在外挂工具说明里。下一批将把 session scope 进一步归还 SessionDB、通知窗口统一复用 `/sethome`，再淘汰 `accounts.json + agent_core.db` 兼容读取。Agent loop、Provider、密钥、MCP、Skill、Plugin、记忆存储与渠道路由禁止再造。
 
+### P1-06 三核闭环算法开始回归 Hermes 原生执行链
+
+2026-07-11 已从旧分支恢复 feature snapshot、六维 prediction、content rubric、InfluenceOS Score、PreflightDecision、prediction-vs-actual retro、learning governance 和 memory classification 的纯算法，当前路径统一为 `agent/marketing/intelligence/`。旧 `AgentCoreStore/FastAPI/HermesAdapter/tool manifest` 没有复活。
+
+`marketing_plan_content_production` 现在会在 Hermes 原生工具调用中自动保存 production plan checkpoint、运行总内容预演并写不可变 preflight record；内容草稿入口必须消费可执行 preflight，通过后才创建资产并把记录标记为 `used_for_action`。每个资产同时写入系统生成的 feature snapshot。ReceiptRef 与 LearningCandidate 已恢复为幂等脱敏事实和待治理解释，但真实发布 effect/指标回收尚未接入它们；候选即使 accepted 也不会直接进入 Hermes memory 或永久账号策略。
+
+Git 历史完整筛选见 `docs/marketing-os/architecture/GIT_HISTORY_CAPABILITY_RECOVERY.md`。恢复白名单是算法、合同和安全边界；`HermesAdapter/FastAPI/AgentCoreStore/tool manifest/MCP broker` 等旧套壳 owner 进入禁止恢复清单。
+
 ## 五、v0.1 收口范围
 
 ### 必须交付

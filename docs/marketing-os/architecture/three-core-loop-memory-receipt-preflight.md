@@ -3,6 +3,7 @@
 > 建立日期：2026-07-09
 > 关联台账：`docs/ledgers/04-memory-learning-knowledge.md`、`docs/ledgers/05-content-publishing-feedback.md`、`docs/ledgers/15-influence-preflight-engine.md`
 > 核心判断：Marketing OS 最核心的不是某个页面、某个模型、某个发布接口，而是三大系统组成的自我校准循环：记忆系统、数据回执系统、影响力预演引擎。
+> **当前代码口径（2026-07-11）：本文 2026-07-09 的 `engine/agent_core`、FastAPI、旧 Electron 路径是历史落地证据，不是当前入口。旧外层 engine 已删除；可复用算法正在进入 `agent/marketing/intelligence`，状态进入原生 Agent 经营域，执行由 Hermes tool/session/task 触发。**
 
 ## 一、三者定位
 
@@ -636,3 +637,37 @@ passed
 .venv/bin/python -m pytest -q
 1273 passed, 1 warning
 ```
+
+## 2026-07-11：按 Hermes 原生 owner 恢复三核闭环
+
+本轮从 Git 历史恢复的不是旧 `engine` 壳，而是其中可解释、可测试、与存储无关的知识：
+
+- `content_feature_snapshot`：发布前冻结内容、受众、证据、结构和素材特征。
+- `content_prediction`：attention / retention / trust / action / account_fit / risk 六维预测合同。
+- `content_rubric`：内容评分维度及风险扣分。
+- `influence_score`：InfluenceOS v0 可解释公式。
+- `preflight_decision`：把公式转换为补受众、补证据、修改、停止、可生产等动作门。
+- `content_retro`：预测与真实指标的纯比较。
+- `learning_governance`：只有重复结果才形成权重候选，接受候选也不直接修改永久策略。
+- `memory_classification`：为将来写入 Hermes memory 的候选提供 source/entity/topic 元数据，不建立第二记忆库。
+
+当前原生纵切：
+
+```text
+Hermes marketing_plan_content_production tool
+  -> ContentProductionPolicy
+  -> durable content_production_plan checkpoint
+  -> native InfluenceOS preflight
+  -> immutable marketing_preflight_record
+  -> actionable gate
+  -> draft/article asset creation
+  -> mark preflight used_for_action
+```
+
+同时恢复三类不可混淆的持久对象：
+
+- `marketing_preflight_records`：行动前写入，事后不可改写预测。
+- `marketing_receipt_refs`：幂等、脱敏，只记录现实发生了什么。
+- `marketing_learning_candidates`：只保存解释候选；pending/accepted 都不等于已经进入 Hermes memory 或账号永久策略。
+
+没有恢复的旧结构：`AgentCoreStore`、FastAPI endpoint、HermesAdapter、tool manifest、第二 task/session/memory owner。高阶视频片子预演仍只保留委派边界，待独立视频项目接入，不混进总营销分。

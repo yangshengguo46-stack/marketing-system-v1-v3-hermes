@@ -14,6 +14,9 @@ from agent.marketing.domains.article_drafts import ArticleDraftValidator
 from agent.marketing.domains.content_policy import CONTENT_KINDS, VALID_PLATFORMS
 from agent.marketing.domains.evidence import EvidenceRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
+from agent.marketing.intelligence.content_feature_snapshot import (
+    build_content_feature_snapshot,
+)
 
 
 ASSET_TYPES = {"script", "video", "image", "caption"}
@@ -246,6 +249,8 @@ class ContentAssetRepository(MarketingDomainRepository):
             raise ValueError("content must be a non-empty object")
         if any(str(key).startswith("_") for key in content):
             raise ValueError("content keys beginning with '_' are reserved")
+        if "feature_snapshot" in content:
+            raise ValueError("feature_snapshot is system-generated")
         verified_evidence = EvidenceRepository(self.paths).require_verified(
             user_id=user_id,
             account_id=account_id,
@@ -280,6 +285,27 @@ class ContentAssetRepository(MarketingDomainRepository):
             elif platform not in plan_platforms:
                 raise ValueError("draft platform is outside its production plan")
             payload["_production_plan_id"] = plan_id_value
+            plan_payload = json.loads(plan_row["plan_json"])
+            platform_variants = payload.get("platform_variants")
+            if not isinstance(platform_variants, dict):
+                platform_variants = {}
+            payload["feature_snapshot"] = build_content_feature_snapshot(
+                kind=production_kind,
+                objective=plan_row["objective"],
+                title=title_value,
+                topic=topic,
+                hook=hook,
+                account_id=account_id,
+                platforms=plan_platforms,
+                audience_context=plan_payload.get("account_scope") or {},
+                evidence=verified_evidence,
+                structure={
+                    "content_schema": payload.get("schema") or asset_type,
+                    "platform_variant_keys": sorted(platform_variants.keys()),
+                },
+                material_context=payload.get("material_manifest") or {},
+                risks=(payload.get("validation") or {}).get("issues") or [],
+            )
             encoded = _bounded_json(payload, "content", 500_000)
             db.execute(
                 """INSERT INTO content_assets
