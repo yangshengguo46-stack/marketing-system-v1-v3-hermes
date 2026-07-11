@@ -23,7 +23,7 @@
 |---|---|---|---|
 | Hermes 产品本体 | 完整源码已成为主仓库根 | code + automated | 上游吸收 CI、正式签名发布 |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
-| Session/account scope | SessionDB 会话绑定与 AccountRegistry 已统一；`accounts.json` 仅一次性迁移 | automated | BrowserContext owner、Playwright contextGetter、真人多账号 |
+| Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；旧 JSON 一次性迁移 | automated | 切换 UI、真人多账号与 profile 清理 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
 | Content plan/assets | 三 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
@@ -65,6 +65,9 @@
 - Hermes `state.db` 已新增原生账号注册表；`agent/account_registry.py` 是账号生命周期 owner，Gateway 只调用该 owner，Electron 不保存或修改账号真相。
 - 旧 `accounts.json` 仅执行一次无敏感字段迁移；Cookie、token、验证码和 QR 内容禁止进入 SessionDB。
 - AccountRegistry 已能为绑定会话签发 secret-free BrowserContext lease；认证失效、断开或删除账号不能获得执行租约。
+- `mcp/marketing-browser` 直接调用 Playwright MCP `createConnection(config, contextGetter)`；schema discovery 不启动浏览器，实际工具调用才按账号租约创建上下文。
+- Hermes 原生 MCP client 已支持 `session_scope=marketing_account`：账号连接池、RPC 串行、熔断与关闭均在原生 MCP owner 内；不存在外部 Router。
+- 开发机真实 Hermes 工具分发已完成 `AccountRegistry → scoped MCP → navigate → snapshot`，52 个 Playwright 工具可见，证据等级为 `dev-runtime`。
 
 尚未完成：
 
@@ -73,10 +76,13 @@
 
 下一纵切（当前环境核验后确定）：
 
-1. 在 Hermes 内建立唯一 BrowserContext owner，按 AccountRegistry 租约提供账号上下文；Electron 不拥有 Cookie、profile 或执行。
-2. 直接使用 Microsoft Playwright MCP 的 `createConnection(config, contextGetter)`，不建 MCP 代理、账号子进程池或 Electron browser-host。
-3. 用平台 Skill 实现知乎第一条流程：登录检测、装载已审核变体、填写编辑器、一次性确认、作品页反查。
-4. 同步开始第一阶段前端：内容审核、发布确认、执行状态、unknown 恢复；前端不承载浏览器执行真相。
+1. 用平台 Skill 实现知乎第一条真人流程：headed 登录检测、认证状态回写、装载已审核变体、填写编辑器、一次性确认、作品页反查。
+2. 实现账号 disconnect/delete 对 BrowserContext 进程与 profile 的原生清理，重启后恢复同一账号租约。
+3. 同步开始第一阶段前端：只显示账号、内容审核、发布确认、执行状态和 unknown 恢复；前端不承载业务或执行真相。
+
+浏览器二进制口径：开发机先使用后端检测到的系统 Chrome/Edge 验证链路；产品安装包必须在
+“单独受控 Chromium”与“首次明确授权后下载”之间完成体积、离线和签名验证。禁止为了省掉
+这个决策而复用 Electron 作为自动化宿主，也禁止运行时静默下载。
 
 完成口径：
 

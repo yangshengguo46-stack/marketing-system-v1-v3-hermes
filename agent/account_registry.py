@@ -148,6 +148,8 @@ class AccountRegistry:
             raise ValueError("conversation is not bound to a Marketing OS account")
         user_id = str(session.get("marketing_user_id") or "default")
         account = self._require(str(session["marketing_account_id"]), user_id=user_id)
+        if account.get("status") not in {"pending", "active", "stale"}:
+            raise ValueError("bound account is disconnected and cannot be used")
         if require_authenticated and account.get("auth_state") != "authenticated":
             raise ValueError("bound account requires login or verification")
         return BrowserContextLease(

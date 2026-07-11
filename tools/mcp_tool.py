@@ -1849,7 +1849,11 @@ class MCPServerTask:
         sampling_kwargs = self._sampling.session_kwargs() if self._sampling else {}
         if self._elicitation:
             sampling_kwargs.update(self._elicitation.session_kwargs())
-        if _MCP_NOTIFICATION_TYPES and _MCP_MESSAGE_HANDLER_SUPPORTED:
+        if (
+            _MCP_NOTIFICATION_TYPES
+            and _MCP_MESSAGE_HANDLER_SUPPORTED
+            and config.get("dynamic_tool_refresh", True)
+        ):
             sampling_kwargs["message_handler"] = self._make_message_handler()
 
         # Snapshot child PIDs before spawning so we can track the new one.
@@ -2535,6 +2539,8 @@ class MCPServerTask:
 # ---------------------------------------------------------------------------
 
 _servers: Dict[str, MCPServerTask] = {}
+_scoped_servers: Dict[tuple[str, str, str], MCPServerTask] = {}
+_scoped_connect_locks: Dict[tuple[str, str, str], asyncio.Lock] = {}
 _server_connecting: set[str] = set()
 _server_connect_errors: Dict[str, str] = {}
 
@@ -3215,7 +3221,14 @@ def _load_mcp_config() -> Dict[str, dict]:
             return {}
         config = load_config()
         servers = config.get("mcp_servers")
-        if not servers or not isinstance(servers, dict):
+        servers = dict(servers) if isinstance(servers, dict) else {}
+        from agent.product import bundled_browser_mcp_config, is_product_runtime
+
+        if is_product_runtime():
+            bundled = bundled_browser_mcp_config()
+            if bundled is not None:
+                servers.setdefault("marketing-browser", bundled)
+        if not servers:
             return {}
         # Ensure .env vars are available for interpolation
         try:
@@ -3258,7 +3271,77 @@ async def _connect_server(name: str, config: dict) -> MCPServerTask:
 # Handler / check-fn factories
 # ---------------------------------------------------------------------------
 
-def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
+def _marketing_account_lease(kwargs: dict) -> dict:
+    session_id = str(kwargs.get("session_id") or kwargs.get("task_id") or "").strip()
+    if not session_id:
+        raise ValueError("account-scoped MCP requires a durable Hermes session")
+    from agent.account_registry import AccountRegistry
+
+    registry = AccountRegistry()
+    try:
+        return registry.lease_for_session(
+            session_id,
+            require_authenticated=False,
+        ).to_dict()
+    finally:
+        registry.close()
+
+
+def _scoped_server_config(config: dict, lease: dict) -> dict:
+    scoped_args = config.get("scoped_args")
+    if not isinstance(scoped_args, list) or not scoped_args:
+        raise ValueError("account-scoped MCP requires scoped_args")
+    result = dict(config)
+    result["args"] = [str(item) for item in scoped_args]
+    result.pop("scoped_args", None)
+    result.pop("session_scope", None)
+    result["dynamic_tool_refresh"] = False
+    env = dict(result.get("env") or {})
+    env["HERMES_MARKETING_ACCOUNT_LEASE"] = json.dumps(
+        lease,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    result["env"] = env
+    return result
+
+
+async def _get_scoped_server(server_name: str, config: dict, lease: dict) -> MCPServerTask:
+    key = (server_name, str(lease["user_id"]), str(lease["account_id"]))
+    with _lock:
+        existing = _scoped_servers.get(key)
+    if existing is not None:
+        if existing.session is not None:
+            return existing
+        _signal_reconnect(existing)
+        raise ConnectionError("account-scoped MCP is reconnecting")
+
+    lock = _scoped_connect_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        with _lock:
+            existing = _scoped_servers.get(key)
+        if existing is not None:
+            if existing.session is not None:
+                return existing
+            _signal_reconnect(existing)
+            raise ConnectionError("account-scoped MCP is reconnecting")
+        scoped_name = (
+            f"{server_name}:"
+            f"{sanitize_mcp_name_component(str(lease['account_id']))}"
+        )
+        scoped = MCPServerTask(scoped_name)
+        await scoped.start(_scoped_server_config(config, lease))
+        with _lock:
+            _scoped_servers[key] = scoped
+        return scoped
+
+
+def _make_tool_handler(
+    server_name: str,
+    tool_name: str,
+    tool_timeout: float,
+    config: Optional[dict] = None,
+):
     """Return a sync handler that calls an MCP tool via the background loop.
 
     The handler conforms to the registry's dispatch interface:
@@ -3266,6 +3349,21 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
     """
 
     def _handler(args: dict, **kwargs) -> str:
+        session_scope = (config or {}).get("session_scope")
+        lease = None
+        if session_scope:
+            if session_scope != "marketing_account":
+                return json.dumps(
+                    {"error": f"unsupported MCP session_scope: {session_scope}"},
+                    ensure_ascii=False,
+                )
+            try:
+                lease = _marketing_account_lease(kwargs)
+            except ValueError as exc:
+                return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        breaker_name = (
+            f"{server_name}:{lease['account_id']}" if lease is not None else server_name
+        )
         # Circuit breaker: if this server has failed too many times
         # consecutively, short-circuit with a clear message so the model
         # stops retrying and uses alternative approaches (#10447).
@@ -3276,15 +3374,15 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
         # failure the error paths below bump the count again, which
         # re-stamps the open-time via _bump_server_error (re-arming
         # the cooldown).
-        if _server_error_counts.get(server_name, 0) >= _CIRCUIT_BREAKER_THRESHOLD:
-            opened_at = _server_breaker_opened_at.get(server_name, 0.0)
+        if _server_error_counts.get(breaker_name, 0) >= _CIRCUIT_BREAKER_THRESHOLD:
+            opened_at = _server_breaker_opened_at.get(breaker_name, 0.0)
             age = time.monotonic() - opened_at
             if age < _CIRCUIT_BREAKER_COOLDOWN_SEC:
                 remaining = max(1, int(_CIRCUIT_BREAKER_COOLDOWN_SEC - age))
                 return json.dumps({
                     "error": (
                         f"MCP server '{server_name}' is unreachable after "
-                        f"{_server_error_counts[server_name]} consecutive "
+                        f"{_server_error_counts[breaker_name]} consecutive "
                         f"failures. Auto-retry available in ~{remaining}s. "
                         f"Do NOT retry this tool yet — use alternative "
                         f"approaches or ask the user to check the MCP server."
@@ -3324,16 +3422,21 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             }, ensure_ascii=False)
 
         async def _call():
-            async with server._rpc_lock:
+            target = (
+                await _get_scoped_server(server_name, config or {}, lease)
+                if lease is not None
+                else server
+            )
+            async with target._rpc_lock:
                 # Snapshot the agent's context so an elicitation callback
                 # triggered during this call (fired on the MCP recv loop
                 # task, which doesn't inherit our contextvars) can replay
                 # it and detect the gateway platform / session for routing.
-                server._pending_call_context = contextvars.copy_context()
+                target._pending_call_context = contextvars.copy_context()
                 try:
-                    result = await server.session.call_tool(tool_name, arguments=args)
+                    result = await target.session.call_tool(tool_name, arguments=args)
                 finally:
-                    server._pending_call_context = None
+                    target._pending_call_context = None
             # MCP CallToolResult has .content (list of content blocks) and .isError
             if result.isError:
                 error_text = ""
@@ -3390,11 +3493,11 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             try:
                 parsed = json.loads(result)
                 if "error" in parsed:
-                    _bump_server_error(server_name)
+                    _bump_server_error(breaker_name)
                 else:
-                    _reset_server_error(server_name)  # success — reset
+                    _reset_server_error(breaker_name)  # success — reset
             except (json.JSONDecodeError, TypeError):
-                _reset_server_error(server_name)  # non-JSON = success
+                _reset_server_error(breaker_name)  # non-JSON = success
             return result
         except InterruptedError:
             return _interrupted_call_result()
@@ -3402,24 +3505,26 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             # Auth-specific recovery path: consult the manager, signal
             # reconnect if viable, retry once. Returns None to fall
             # through for non-auth exceptions.
-            recovered = _handle_auth_error_and_retry(
-                server_name, exc, _call_once,
-                f"tools/call {tool_name}",
-            )
-            if recovered is not None:
-                return recovered
+            if lease is None:
+                recovered = _handle_auth_error_and_retry(
+                    server_name, exc, _call_once,
+                    f"tools/call {tool_name}",
+                )
+                if recovered is not None:
+                    return recovered
 
             # Transport session expiry (#13383): same reconnect flow
             # but skips OAuth recovery because the access token is
             # still valid — only the server-side session is stale.
-            recovered = _handle_session_expired_and_retry(
-                server_name, exc, _call_once,
-                f"tools/call {tool_name}",
-            )
-            if recovered is not None:
-                return recovered
+            if lease is None:
+                recovered = _handle_session_expired_and_retry(
+                    server_name, exc, _call_once,
+                    f"tools/call {tool_name}",
+                )
+                if recovered is not None:
+                    return recovered
 
-            _bump_server_error(server_name)
+            _bump_server_error(breaker_name)
             logger.error(
                 "MCP tool %s/%s call failed: %s",
                 server_name, tool_name, exc,
@@ -4108,7 +4213,7 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
             name=tool_name_prefixed,
             toolset=toolset_name,
             schema=schema,
-            handler=_make_tool_handler(name, mcp_tool.name, server.tool_timeout),
+            handler=_make_tool_handler(name, mcp_tool.name, server.tool_timeout, config),
             check_fn=_make_check_fn(name),
             is_async=False,
             description=schema["description"],
@@ -4727,7 +4832,7 @@ def shutdown_mcp_servers():
     All servers are shut down in parallel via ``asyncio.gather``.
     """
     with _lock:
-        servers_snapshot = list(_servers.values())
+        servers_snapshot = list(_servers.values()) + list(_scoped_servers.values())
 
     # Fast path: nothing to shut down.
     if not servers_snapshot:
@@ -4746,6 +4851,8 @@ def shutdown_mcp_servers():
                 )
         with _lock:
             _servers.clear()
+            _scoped_servers.clear()
+            _scoped_connect_locks.clear()
 
     with _lock:
         loop = _mcp_loop

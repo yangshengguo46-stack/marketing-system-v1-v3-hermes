@@ -8,6 +8,8 @@ external service wrapped around Hermes.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import shutil
 from typing import Mapping
 
 PRODUCT_ID = "marketing-os"
@@ -44,6 +46,7 @@ PRODUCT_CORE_UPDATE_MESSAGE = (
 
 PRODUCT_ARCHITECTURE_PRINCIPLES = (
     "Modify the native capability owner first; never add an outer adapter merely to avoid changing upstream source.",
+    "Electron is presentation and interaction only; it never owns product state, automation, accounts, browsers or tasks.",
     "One Hermes-native runtime owns conversation, tasks, memory, skills and marketing workflows.",
     "Account operations, audience modeling, evidence, content and learning are native Agent capabilities, never external attachments.",
     "Both Hermes core code and Marketing OS enhancements may be decomposed or rewritten.",
@@ -51,6 +54,36 @@ PRODUCT_ARCHITECTURE_PRINCIPLES = (
     "Account modeling, evidence, creation, publishing receipts, metrics and learning form one loop.",
     "Preserve Hermes MCP, skill and plugin contracts so ecosystem capabilities remain independently maintainable.",
 )
+
+
+def bundled_browser_mcp_config(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, object] | None:
+    """Return the Hermes-owned scoped Playwright MCP configuration."""
+
+    values = os.environ if env is None else env
+    root = Path(__file__).resolve().parents[1]
+    entry = root / "mcp" / "marketing-browser" / "src" / "server.js"
+    node = str(values.get("HERMES_NODE_EXECUTABLE") or "").strip() or shutil.which("node")
+    if not node or not entry.is_file():
+        return None
+    profile_root = str(
+        values.get("HERMES_BROWSER_PROFILE_ROOT")
+        or (Path(values.get("HERMES_HOME") or Path.home() / ".hermes") / "browser-profiles")
+    )
+    return {
+        "command": node,
+        "args": [str(entry), "--schema-only"],
+        "scoped_args": [str(entry)],
+        "session_scope": "marketing_account",
+        "env": {
+            "HERMES_BROWSER_PROFILE_ROOT": profile_root,
+            "HERMES_BROWSER_OUTPUT_ROOT": str(Path(profile_root).parent / "browser-output"),
+        },
+        "supports_parallel_tool_calls": False,
+        "connect_timeout": 45,
+        "timeout": 120,
+    }
 
 PRODUCT_AGENT_IDENTITY = (
     "You are Marketing OS, a long-running AI operating system for social-media "

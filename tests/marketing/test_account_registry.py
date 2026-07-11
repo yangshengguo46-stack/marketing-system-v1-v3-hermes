@@ -34,6 +34,12 @@ def test_native_registry_owns_lifecycle_binding_and_browser_lease(tmp_path):
 
         disconnected = registry.disconnect(pending["id"])
         assert disconnected["status"] == "disconnected"
+        try:
+            registry.lease_for_session("session-1", require_authenticated=False)
+        except ValueError as exc:
+            assert "disconnected" in str(exc)
+        else:
+            raise AssertionError("disconnected account must not retain browser authority")
         assert registry.delete(pending["id"]) is True
         assert registry.list() == []
     finally:

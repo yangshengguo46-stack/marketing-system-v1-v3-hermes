@@ -136,12 +136,12 @@ Candidate_t = interpret(Retro_t, repeated evidence, user feedback)
 
 ## 账号浏览器是原生 MCP
 
-Marketing OS 不再为每个平台堆一套 Electron IPC、Provider 和脚本补丁。浏览器执行统一由
-Hermes 原生 AccountRegistry 和 BrowserContext owner 拥有；Microsoft Playwright MCP 通过
+Marketing OS 不再为每个平台堆一套 Electron IPC、Provider 和脚本补丁。账号真相由 Hermes
+原生 AccountRegistry 拥有，浏览器上下文由改造后的 Playwright MCP 原生 owner 拥有；MCP 通过
 `createConnection(config, contextGetter)` 直接取得当前 Hermes 账号上下文。
 
-- Hermes AccountRegistry 负责账号注册、绑定、切换、授权、退出、删除和 profile 生命周期。
-- BrowserContext owner 负责 Cookie/profile、登录页面和受控浏览器上下文；MCP 只执行工具。
+- Hermes AccountRegistry 负责账号注册、绑定、切换、授权、退出、删除和 BrowserContext 租约。
+- 改造后的 Playwright MCP 同时是 BrowserContext owner，负责 Cookie/profile、登录页面和受控浏览器上下文，并保留上游完整工具能力。
 - 平台 Skill 只描述平台语义和操作流程，不重复实现浏览器、会话或账号存储。
 - Electron 只显示和交互，不拥有账号、Cookie、profile、浏览器执行或自动化业务真相。
 - 上游 Playwright MCP 的成熟工具原封不动保留；不建立 MCP 代理、子进程路由或 Electron browser-host。
@@ -149,7 +149,13 @@ Hermes 原生 AccountRegistry 和 BrowserContext owner 拥有；Microsoft Playwr
 
 原生账号生命周期落在 `agent/account_registry.py` 与 `hermes_state.SessionDB.marketing_accounts`。
 AccountRegistry 签发的 BrowserContext lease 只包含 session、user、account、platform、profile_key
-和 auth_state，不包含任何认证秘密；认证无效的账号不能获得执行租约。
+和 auth_state，不包含任何认证秘密；pending/stale 账号只能用同一上下文完成登录或重新验证，
+断开或删除的账号不能再获得执行租约。
+
+Playwright MCP 官方 `createConnection(config, contextGetter)` 要求 `contextGetter` 在同一个 Node
+进程中返回真实 JavaScript `BrowserContext`；Python AccountRegistry 不能跨语言伪造该对象。这是
+新增 `mcp/marketing-browser` 进程边界的充分证据。该入口只消费 Hermes 签发的租约并创建上下文，
+不拥有账号注册、绑定、切换、授权或删除，也不代理、改写或复制 Playwright MCP 工具。
 
 ## 视频边界
 
