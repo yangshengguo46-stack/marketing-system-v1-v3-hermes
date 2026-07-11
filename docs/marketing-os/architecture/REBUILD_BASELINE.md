@@ -3,6 +3,8 @@
 > 状态：active / superseding
 >
 > 2026-07-10 起，本文件取代此前的“Marketing Agent Service + Hermes loop adapter”架构。Hermes 源码是产品主干，不是依赖、插件、子进程里的黑盒或需要保护不动的上游内核。Marketing OS 是直接长在这套主干里的原生营销能力。
+>
+> 2026-07-11 已完成源码归一：本文中的 `runtime/hermes-agent/...` 历史路径统一改为主仓库根路径。产品桌面是 `apps/desktop`，营销领域是 `marketing_os`；不存在嵌套产品仓库和补丁回放。
 
 ## 零、这次重构的核心宗旨
 
@@ -66,9 +68,9 @@ Electron capability host (inside the same product)
 | 证据 | Hermes 工具结果捕获 + Evidence repository | Web/MCP/API 是采集器 | 模型提供 URL 即视为已验证 |
 | 内容 | Content domain + canonical ContentAsset | Agent 负责创作，确定性代码负责校验/版本 | 完整草稿塞进长期记忆、旧 JSON 草稿 |
 | 发布、回执、指标 | Publishing/Receipt/Metrics domains | Electron/MCP/API 是 provider | `publishing.json` 与 SQL 双写 |
-| 产品 UI | `runtime/hermes-agent/apps/desktop` | 迁入旧工作台已验证交互 | 根目录 `src/` + `electron/` 永久并行 |
+| 产品 UI | `apps/desktop` | Electron 宿主能力与原生 Gateway | 第二套根 `src/` + `electron/` |
 
-`runtime/hermes-agent/marketing_os/domains` 是 Hermes 源码树中的产品领域包，不是外部业务插件。若现有 Hermes 文件形态阻碍体验或状态正确性，可以拆分、重写或删除；约束保护的是单运行时、单真相源、安全审批和生态合同，不是旧目录。
+`marketing_os/domains` 是产品源码树中的原生领域包，不是外部业务插件。若现有 Hermes 文件形态阻碍体验或状态正确性，可以拆分、重写或删除；约束保护的是单运行时、单真相源、安全审批和生态合同，不是旧目录。
 
 ## 三、一次请求的真实路径
 

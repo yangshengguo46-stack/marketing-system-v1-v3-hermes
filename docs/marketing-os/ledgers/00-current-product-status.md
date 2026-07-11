@@ -1,11 +1,13 @@
 # Marketing OS 当前产品总控
 
-> 基线日期：2026-07-10
-> 当前分支：`codex/product-architecture-checkpoint-2026-07-09`
+> 基线日期：2026-07-11
+> 当前分支：`codex/marketing-os-product-source`
 > 作用：这是唯一的实时执行入口。`LEDGER.md` 与 `AGENT_CORE_LEDGER.md` 保留第一版产品宪法；其余编号台账是领域历史和实现证据，不再各自宣布“当前主线”。
-> **2026-07-10 内核纠偏（最高优先级）：Hermes 源码是产品主干，Marketing OS 是直接写入这套主干的原生营销增强，不是一个调用 Hermes 的外层应用，也不是第二套 Agent。** 本条覆盖历史资料中“业务差异优先放 adapter/插件”“产品业务逻辑仍留在 `engine/agent_core`、Hermes 只承载少量 runtime patch”“改动最小化”等旧约束。`run_agent.py`、SessionDB、model tools、gateway、cron、memory、skills、plugins、TUI 和 `apps/desktop` 均可按产品体验深度重构；上游可重放/可 rebase 不再高于产品正确性。唯一目标架构、所有权矩阵和旧路径删除门见 `docs/architecture/REBUILD_BASELINE.md`。
+> **2026-07-10 内核纠偏（最高优先级）：Hermes 源码是产品主干，Marketing OS 是直接写入这套主干的原生营销增强，不是一个调用 Hermes 的外层应用，也不是第二套 Agent。** 本条覆盖历史资料中“业务差异优先放 adapter/插件”“产品业务逻辑仍留在 `engine/agent_core`、Hermes 只承载少量 runtime patch”“改动最小化”等旧约束。`run_agent.py`、SessionDB、model tools、gateway、cron、memory、skills、plugins、TUI 和 `apps/desktop` 均可按产品体验深度重构；上游可重放/可 rebase 不再高于产品正确性。唯一目标架构、所有权矩阵和旧路径删除门见 `docs/marketing-os/architecture/REBUILD_BASELINE.md`。
 >
 > **本次重构的最高裁决原则：原本 Hermes 就有的东西，然后我们跟它重叠了，人家方案还比我们优秀的情况下，我们就不要画蛇添足。** 有缺口时修改 Hermes 的原生 owner；只有确实不存在的营销领域能力才新增。不得以 Marketing 名义复制 Provider、密钥、Session、Profile、MCP、Skill、记忆、更新或 UI owner。
+>
+> **2026-07-11 源码归一已经完成：主仓库根目录直接追踪完整 Hermes 派生源码和 Marketing OS 增强；`runtime/hermes-agent` 嵌套仓库、`hermes-patches` 补丁回放、旧 React/Electron 壳、旧 FastAPI、旧构建副本和历史安装包均已删除。上游只作为 `hermes-upstream` 工程 remote，由 Marketing OS 团队吸收、回归并发布产品版本；用户端禁止直接执行 raw `hermes update`。**
 
 ## 一、第一版没有变的目标
 
@@ -33,7 +35,7 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
   → 下一轮内容明显更懂用户和账号
 ```
 
-## 二、产品目标没有跑偏，但内核归属和工程顺序都跑偏了
+## 二、产品目标与内核归属已经纠正，业务闭环仍待收口
 
 | 当前能力 | 与第一版关系 | 当前判断 |
 |---|---|---|
@@ -47,25 +49,22 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 | 微信/飞书 | 后置沟通 surface | 保留，不抢主线 |
 | 60 个模型可见工具 | 内部能力暴露方式 | 明显偏离“最小工具集”；后续按任务能力包收口 |
 
-结论：没有跑偏的是“做一个长期经营账号的真 Agent”；有两处根本偏差：一是先把未来能力、公式、工具和台账做得很满，再补真实内容与交付闭环；二是把 Hermes 当成 `AIAgent` 依赖，由外部 `HermesAgentService` 接管产品 harness，结果变成“Marketing OS 壳 → adapter → Hermes”。
+结论：源码和运行时已经回到“一个 Hermes 派生产品本体”；当前风险不再是外层套壳，而是账号、内容、发布、回执和学习这些领域闭环还没有全部达到真人可长期使用的质量。
 
-## 三、2026-07-10 代码事实
+## 三、2026-07-11 代码事实
 
 以下数字只描述工程规模，不代表产品完成：
 
 | 事实 | 当前证据 |
 |---|---|
-| 主仓库 | 298 个跟踪文件；外层 Git 以本文档所在提交为当前产品基线 |
-| Agent 工具 | 60 个：29 L0、25 L1、5 L2、1 L3 |
-| 本机 API | `engine/marketing-os/server.py` 约 4598 行、126 个 FastAPI 路由 |
-| 状态仓库 | `engine/agent_core/store.py` 约 2969 行，任务、记忆、内容、发布、账号经营和学习集中在单类 |
-| Electron host | `electron/main.js` 约 2427 行，窗口、浏览器、渠道、文件、API 代理、发布和进程生命周期集中在单文件 |
-| Agent adapter | `engine/agent_core/hermes_adapter.py` 约 1757 行，session、任务、计划、证据、回复修复和工具事件集中在单类 |
-| 桌面 UI | 根目录 `npm run dev/build/build:mac/build:win/preview` 已全部切到 fork 的 `apps/desktop`；根 `package.json` 已删除 Electron `main` 和旧 electron-builder 配置。旧 `src/` + `electron/` 仅冻结为待迁移交互素材，不再是默认产品入口 |
-| 自动化 | 2026-07-10 当前工作树全量 Python：1325 passed，TypeScript `tsc --noEmit` 通过，秘密扫描通过；1 个已知 Starlette/httpx 弃用警告 |
-| 构建 | backend 43MB、Hermes 发行源树 39MB、MCP+Chromium 407MB；Electron x64 DMG 约 352MB（未签名） |
-| Hermes 主运行时 | 嵌套产品分支 `codex/marketing-os-runtime` 已提交至 `129ca6aca`；上游 SHA + 产品 tree `226d83bda378` + 十八个 checksummed patch 已锁定，nested repo clean，bootstrap/verifier 可得到同一 tree |
-| 打包验收 | Hermes-native renderer 构建与桌面平台回归通过；旧 FastAPI/backend/MCP fat-package 校验已退役。当前继承的薄安装器仍需联网 bootstrap Agent runtime，尚未满足 C 端断网首启与无全局 Python/Node/Hermes 的最终门 |
+| 主仓库 | 5842 个跟踪文件；根目录就是完整产品源码，不存在子仓库或源码补丁回放 |
+| 上游维护 | `hermes-upstream` 仅供内部 fetch/merge/rebase；用户只接收 Marketing OS 产品版本 |
+| Agent/runtime | `run_agent.py`、`agent/`、`hermes_state.py`、`gateway/`、`skills/`、`plugins/`、`marketing_os/` 同仓同版本 |
+| 桌面 UI | `apps/desktop` 是唯一 React/Electron 产品入口；旧根 `src/`、`electron/` 已删除 |
+| 本机服务 | 旧 `engine/marketing-os/server.py`、PyInstaller backend 与外层 `HermesAgentService` 已删除；桌面直接启动同仓 Hermes dashboard/gateway |
+| 产品运行时 | 根 `.venv` 已通过锁文件改绑当前仓库；Node 依赖也与当前根 `package-lock.json` 对齐 |
+| 自动化 | Marketing OS 定向 Python 110 项通过；桌面平台 260 项通过、1 项按平台跳过；TypeScript/Vite production build 通过 |
+| 打包 | 自包含 Python/产品源码 staging 与 manifest/resolver 已实现并有测试；真实签名安装包和干净机断网首启仍待验收 |
 
 ### 自动化不能证明的事情
 
@@ -76,13 +75,13 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 
 ## 四、已确认的结构性问题
 
-### P0-00 当前仍有外层 Agent 主路径，Hermes 原生增强尚未完全收口
+### P0-00 外层 Agent 主路径和双源码结构已删除
 
-根目录旧源码中仍保留 `engine/marketing-os/server.py` 与 `engine/agent_core/hermes_adapter.py::HermesAgentService`；这个约 1757 行的外层类仍实现第二套 session、AgentTask、计划推断、证据守门、工具事件、暂停恢复和回复修复，因此尚未达到源码层删除完成。但它已经退出产品默认路径：根 `package.json` 不再有 Electron `main` 或旧打包配置，全部开发/构建命令只启动 Hermes-native `apps/desktop`，新桌面会话直接进入 Hermes Gateway/SessionDB。旧 adapter 只允许作为迁移期测试和旧数据读取参考，不得继续接功能；后续按账号管理、工作台、平台登录等功能对等逐段删代码和依赖。
+2026-07-11 已把改造后的 Hermes 历史提升为主仓库产品分支，主目录直接拥有 Agent、Gateway、SessionDB、MCP、Skill、Plugin、渠道、桌面和 Marketing domains。旧 `engine/`、根 `electron/`、根 `src/`、FastAPI/PyInstaller backend、嵌套 Git 和构建副本均已物理删除，不再存在第二套可启动 Agent 主路径。
 
 纠偏目标：增强后的 Hermes 成为唯一 Agent Runtime 和产品 harness。Agent 身份、系统上下文装配、结构化计划、step checkpoint、工具注册与中间件、审批/effect、长任务恢复、记忆检索/沉淀、技能选择/生成、渠道路由和事件流必须在 Hermes 原生执行链里完成。Electron 仍负责系统秘密、窗口、账号 profile 和外部副作用；账号/内容/发布等领域模型可保持独立模块和 SQL 真相源，但只是 Hermes 调用的能力边界，不能由外层 adapter 反过来拥有 Agent。
 
-UI 默认入口纠偏已完成。`runtime/hermes-agent/apps/desktop` 现在是 Marketing OS 唯一可启动、可构建、可打包桌面母体，继续承载 Hermes 原生 JSON-RPC gateway、会话历史、聊天流、工具审批、skills、messaging、cron 和 settings。根目录旧 `src/` + `electron/` 仍需把账号罗盘、账号登录、内容工厂等已验证交互迁入后删除；默认入口切换不等于功能对等，更不能把冻结旧源码长期留成第二套维护对象。
+`apps/desktop` 现在是唯一可启动、可构建、可打包桌面母体，继续承载 Hermes 原生 JSON-RPC gateway、会话历史、聊天流、工具审批、skills、messaging、cron 和 settings。后续 UI 和领域能力只在这套源码继续开发。
 
 “可以爆改”代表源码所有权，而不是把代码写成新的巨石。仍需保留确定性状态机、领域边界、安全审批、可迁移数据和回归测试；但只要最终体验需要，就直接改 Hermes 的原生执行路径，不再先造一层 adapter、bridge、sidecar 或代理来回避修改。
 
@@ -108,23 +107,22 @@ EvidencePack 的首个真实采集纵切也已进入 Hermes 主调度器：`web_
 
 图文父稿也不再通过通用 JSON 草稿绕过质量门：`marketing_draft_article_create` 原生保存一个 ArticleBundle，包含 Agent-authored 父稿、计划中每个平台的独立变体、EvidencePack 引用、平台 stylebook、封面/插图需求和未校准预测声明。父稿不足 800 有效字符、缺章节/证据、引用未知 ID，或知乎/公众号版本缺失、太短、复制父稿、彼此近似，都会保存为可恢复的 `needs_revision` 草稿而不是 `review_ready`；通用草稿工具明确拒绝 `article_soft`。stylebook 同时区分平台编辑器事实和仍需账号数据校准的运营建议，不把“最佳字号”包装成官方硬规则。该实现证明确定性质量门已原生化，仍未证明真实 Provider 写稿质量或真人愿意发布。
 
-### P0-00 迁移映射（当前 → 唯一目标）
+### P0-00 删除与所有权结果
 
-| 当前旁路 | 目标归属 | 收口条件 |
+| 已删除旁路 | 当前唯一归属 | 状态 |
 |---|---|---|
-| 根目录 `src/` + `electron/` | Hermes fork `apps/desktop` | 迁入工作台、账号管理、内容工厂和平台 profile 后删除旧应用入口 |
-| `engine/agent_core/hermes_adapter.py` | fork 的原生 Agent/gateway runtime | session、stream、plan、checkpoint、interrupt、resume 不再由外层类代理 |
-| `engine/agent_core/tool_manifest.py` + 动态 import `server.py` | fork 原生 tool registry/middleware + typed domain ports | 工具注册、审批、effect 和结果契约在 Hermes dispatch 链内生效 |
-| 外置 AgentTask/plan/checkpoint 解释层 | fork SessionDB/agent loop 的结构化任务协议 | 不再从模型文本猜计划，不再靠 resume prompt 冒充精确恢复 |
-| 独立 Agent HTTP 消息转发 | Hermes gateway/platforms | 已删除；微信、飞书消息进入同一 Hermes session/harness，扫码辅助进程只负责连接生命周期 |
-| `engine/marketing-os/server.py` 巨型控制器 | fork gateway RPC + 薄领域服务 API | server 不再拥有 Agent 生命周期，只保留必要的平台/领域端口 |
-| Account/Content/Publishing/Feedback SQL | 保持独立领域真相，但由 fork 内建能力直接消费 | 不复制数据、不建立第二套记忆/任务库 |
+| 根 `src/` + 根 `electron/` | `apps/desktop` | 已删除 |
+| `HermesAgentService` + Tool Manifest | 原生 Agent/Gateway/tool registry | 已删除 |
+| FastAPI/PyInstaller backend | 原生 dashboard/gateway + typed domains | 已删除 |
+| `runtime/hermes-agent` 子仓库 | 主仓库根产品源码 | 已删除 |
+| checksummed patch replay | 产品 Git 历史 + `hermes-upstream` remote | 已删除 |
+| 用户端 raw `hermes update` | Marketing OS 产品发布通道 | 已阻断；内部吸收上游后发布 |
 
 迁移期间允许旧链只读兼容，但禁止再向旧 UI、旧 adapter 或旧 JSON 状态源增加新功能。每完成一条纵向能力就切换默认入口并删除对应旧写路径，避免“新架构完成了、旧架构也永远留着”。
 
 ### P0-01 Hermes 源码与包内运行时已形成 packaged smoke，干净机仍待验
 
-此前开发机依赖一个被主仓库忽略且自身 dirty 的 `runtime/hermes-agent`。2026-07-10 已将增强后的 Hermes 改为“固定上游 commit + 产品 tree + checksummed patch series”，bootstrap 遇 dirty/未知 revision hard fail，自动化可从 baseline 重建相同 tree；未接入且无来源的泛化 skill 草稿已清除。第九至十七个补丁依次收回消息、内容、证据、Provider、身份迁移、文章修订与网页诊断所有权；第十八个补丁把包元数据、exe stamp、卸载和打包测试全部统一到 Marketing OS 产品壳。真实 Hermes Agent 已使用原生 Provider、SessionDB 与营销工具完成文章 v2→v4 修订 E2E；根目录默认开发和构建入口也已切到该 fork。剩余阻断是把产品 runtime 自包含进安装包、干净机/断网首启、代码签名、真人审稿与 Electron UI 人工验收。
+嵌套源码和补丁回放已在 2026-07-11 退役。当前安装包 staging 会从主仓库根复制经过测试的产品 tree、Python 基础运行时和精选依赖，并由 manifest 校验平台、架构和路径边界。剩余阻断是生成正式签名安装包，并在没有本项目、Python、Node、Chrome 或全局 Hermes 的干净机器完成断网首启、真实 Provider 对话和一个 L0 营销工具验收。
 
 ### P0-02 工具结果与审批状态契约（已完成 automated 修复）
 
@@ -144,9 +142,9 @@ EvidencePack 的首个真实采集纵切也已进入 Hermes 主调度器：`web_
 
 前台登录主要使用 Electron partition，后台托管使用 Playwright MCP profile，失败时还可能回退 Electron DOM。用户登录一次却仍被要求再次扫码，根因就在这里。目标是每个平台账号一个持久 profile，需要交互时 headed，后台时复用同一身份执行。
 
-### P1-02 巨石模块与反向依赖
+### P1-02 继承巨石仍需按体验拆分
 
-Tool Manifest 通过动态 import 调用 FastAPI `server.py` 内部函数，领域层反向依赖接口层；server、store、Electron main 和 adapter 都已成为巨石。后续只按纵向闭环拆 service/repository，不重建第二套数据库或第二个 Agent。
+FastAPI、外层 adapter 和旧 store 反向依赖已经随旧源码删除。当前仍有继承的 `apps/desktop/electron/main.cjs`、Agent loop 和 Gateway 大文件；后续只沿真实账号、内容、发布闭环拆模块，不为“看起来分层”重建 wrapper、第二套数据库或第二个 Agent。
 
 ### P1-03 台账不再是事实源
 

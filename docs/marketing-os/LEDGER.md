@@ -1,8 +1,10 @@
 # 智能营销桌面 Agent — 项目总台账
 
-> 2026-07-10 说明：本文件保留 2026-07-01 冻结时的产品宪法与历史快照，其中工具数、进度百分比和“下一步”不再代表当前代码。实时状态与唯一执行入口见 `docs/ledgers/00-current-product-status.md`。
+> 2026-07-10 说明：本文件保留 2026-07-01 冻结时的产品宪法与历史快照，其中工具数、进度百分比和“下一步”不再代表当前代码。实时状态与唯一执行入口见 `docs/marketing-os/ledgers/00-current-product-status.md`。
 >
 > 2026-07-10 内核纠偏：本文件后文“固定上游 + 少量 fork patch”“当前无需 fork patch”等旧判断已经废止。Marketing OS 必须从 Hermes 全栈源码（包括 `apps/desktop` 和底层 runtime）直接改造，不得再以外层 adapter 套壳。
+>
+> 2026-07-11 源码归一：主仓库根目录现已直接追踪完整 Hermes 派生产品源码；`runtime/hermes-agent`、补丁回放、旧 FastAPI、旧根 UI/Electron 均已删除。后文出现这些路径时仅代表历史快照，禁止作为当前施工依据。实时状态只看 `docs/marketing-os/ledgers/00-current-product-status.md`。
 
 > 冻结基线：2026-07-01（抖音登录与自动公共热点已真人验收；MCP 浏览器重构进入实施；后续执行状态只更新 `docs/ledgers/` 子台账）
 >
@@ -12,7 +14,7 @@
 >
 > 计分规则：数据库字段、状态机、接口、Fake/单元测试和 UI 占位只算工程地基；必须接入真实 Agent 主链并完成相应真人/跨重启/平台验收后，才能计入产品完成度。P1-06 等局部闭环先作为 75% 模块内部质量提升记录，不单独改变四舍五入后的 61%/72%。
 >
-> 口径：只记录与 `docs/architecture/REBUILD_BASELINE.md`、`docs/research/` 和 `AGENT_CORE_LEDGER.md` 一致的实现。旧插件、CLI 采集、后端秘密存储和伪完成记录不再保留。本文件在本次定版后不再承载逐日任务流水或 Claude 回填。
+> 口径：只记录与 `docs/marketing-os/architecture/REBUILD_BASELINE.md`、`docs/marketing-os/research/` 和 `AGENT_CORE_LEDGER.md` 一致的实现。旧插件、CLI 采集、后端秘密存储和伪完成记录不再保留。本文件在本次定版后不再承载逐日任务流水或 Claude 回填。
 >
 > 视频生成本轮只保留 `VIDEO_WEB_CONTRACT.md`，不计入桌面主链完成度。
 
@@ -260,7 +262,7 @@
 
 **开始前必须做**
 
-1. 阅读本台账第七至第十节、`docs/research/02-agent-harness-frontier-2026.md` 和 `docs/architecture/REBUILD_BASELINE.md`。
+1. 阅读本台账第七至第十节、`docs/marketing-os/research/02-agent-harness-frontier-2026.md` 和 `docs/marketing-os/architecture/REBUILD_BASELINE.md`。
 2. 承认 `tests/test_approval_e2e.py` 是 API/store integration，不得再命名或描述为真人 Electron E2E。
 3. 工作树已有大量用户改动；不得 reset、checkout、覆盖或整理任务外文件。
 
@@ -344,12 +346,12 @@
 - ✅ 新增只读 `/mcp/status` 与架构文档；全量 `219 passed`，TypeScript、Electron 语法、Vite build、`git diff --check` 通过。
 - ✅ 已核验 Microsoft 官方 Playwright MCP，固定 `@playwright/mcp@0.0.77`、Apache-2.0；40 项 MCP/server 定向测试通过，生产依赖 audit 为 0。
 - 🟡 Playwright MCP 仍保持 `enabled=false`：当前 Broker 是静态单实例，必须先完成 account-scoped 进程/profile 管理与双账号零串号验收。
-- 🟡 两个抖音数据/内容项目仅为近似候选，私信项目无可信唯一仓库；风险与禁用原因见 `docs/research/05-open-source-capability-landscape-2026.md`。
+- 🟡 两个抖音数据/内容项目仅为近似候选，私信项目无可信唯一仓库；风险与禁用原因见 `docs/marketing-os/research/05-open-source-capability-landscape-2026.md`。
 
 ## 十一、冻结后的执行入口
 
 1. 总台账与 `AGENT_CORE_LEDGER.md` 的目标、边界、进度分母从 2026-07-01 起冻结。
-2. 开源方案核验与采用边界统一见 `docs/research/05-open-source-capability-landscape-2026.md`。
+2. 开源方案核验与采用边界统一见 `docs/marketing-os/research/05-open-source-capability-landscape-2026.md`。
 3. Claude/Codex 的唯一任务入口为 `docs/ledgers/README.md`；一次只执行一个子台账 Task ID。
 4. 当前首任务是 `MCP-01`：先定 account-scoped MCP 进程模型 ADR，再实施 manager，不能直接把静态 Playwright server 打开。
 5. 子任务完成只更新对应子台账；不得在本文件追加测试数量、每日记录或自行修改完成百分比。

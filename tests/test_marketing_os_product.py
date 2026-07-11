@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from agent.prompt_builder import DEFAULT_AGENT_IDENTITY, HERMES_AGENT_HELP_GUIDANCE
@@ -12,6 +13,17 @@ from marketing_os.product import (
     product_core_update_status,
 )
 from toolsets import resolve_toolset
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_product_source_is_owned_by_the_main_repository():
+    assert (PROJECT_ROOT / "marketing_os").is_dir()
+    assert (PROJECT_ROOT / "hermes_cli" / "main.py").is_file()
+    assert (PROJECT_ROOT / "apps" / "desktop" / "package.json").is_file()
+    assert not (PROJECT_ROOT / "runtime" / "hermes-agent").exists()
+    assert not (PROJECT_ROOT / "runtime" / "hermes-patches").exists()
 
 
 def test_marketing_os_is_the_native_agent_identity():
