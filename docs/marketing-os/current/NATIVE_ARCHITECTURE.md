@@ -1,0 +1,161 @@
+# Hermes 原生营销 Agent 架构
+
+> 状态：当前唯一架构基线
+> 上位原则：`PRODUCT_PHILOSOPHY.md`
+
+## 唯一运行时
+
+```text
+Desktop / Messaging / Future Web surfaces
+                    │
+                    ▼
+        Marketing OS Hermes Product Fork
+                    │
+ ┌──────────────────┼──────────────────┐
+ │                  │                  │
+ ▼                  ▼                  ▼
+Session/Task     Agent/Tools       Gateway/Cron
+Memory/Skill     Marketing domain  MCP/Channels
+                    │
+                    ▼
+ Account / Evidence / Content / Preflight / Receipt / Candidate
+                    │
+                    ▼
+       SQLite truth + artifact store + platform facts
+```
+
+不存在“Marketing OS 调用 Hermes”。Marketing OS 就是这套被改造后的 Hermes 产品源码。
+
+## 原生 owner
+
+| 职责 | 唯一 owner | 营销改造方式 |
+|---|---|---|
+| 对话与自主规划 | Hermes Agent loop | 注入长期经营身份、证据边界和闭环目标 |
+| 会话与账号绑定 | `hermes_state.SessionDB` | 会话固定 user/account scope，分支与恢复继承 |
+| 长任务与恢复 | Hermes task/checkpoint | 内容经营步骤写 checkpoint，外部动作防重复 |
+| 工具执行 | Hermes tool registry/middleware | 原生注册账号、证据、内容能力；预演在 action 前自动发生 |
+| 外部副作用 | Hermes approval/effect boundary | 发布、付费、敏感账号动作必须生成可验证回执 |
+| 记忆 | Hermes memory/Skill ecosystem | 只接收治理通过的候选；不保存草稿和瞬时热点 |
+| 消息渠道 | Hermes Gateway | 飞书/微信只是同一会话 surface |
+| 定时任务 | Hermes cron/scheduler | 指标 checkpoint、复盘和异常提醒 |
+| 产品界面 | `apps/desktop` | 展示结论、资产、回执和控制，不拥有第二业务状态机 |
+
+## 经营领域
+
+当前原生源码落点：
+
+```text
+agent/product.py
+agent/marketing/
+  domains/
+    account_context.py
+    account_lifecycle.py
+    evidence.py
+    content_policy.py
+    content_assets.py
+  intelligence/
+    content_feature_snapshot.py
+    content_prediction.py
+    content_rubric.py
+    influence_score.py
+    preflight_decision.py
+    production_preflight.py
+    content_retro.py
+    learning_governance.py
+    memory_classification.py
+    store.py
+gateway/product_messaging.py
+tools/marketing_tools.py
+```
+
+这些目录是一个 Agent 内部的职责拆分，不是插件、sidecar 或第二个 Agent。
+
+## 三核数据合同
+
+### PreflightRecord
+
+- action 前创建。
+- 绑定 user/account/platform/session/plan。
+- 保存输入快照、公式版本、分项分数、缺失维度和决策。
+- action 后禁止修改；重新预演产生新版本。
+
+### ReceiptRef
+
+- 指向真实平台、工具、素材、模型、渲染或审批事实。
+- `source_kind + source_id + receipt_type` 幂等。
+- 摘要脱敏；Cookie、Token、Key 不得进入。
+- 不做因果解释。
+
+### LearningCandidate
+
+- 类型：memory / strategy / weight / skill。
+- 引用 preflight、receipt、指标和用户反馈。
+- 默认 pending。
+- accepted 也只代表候选通过治理，不等于已经改写永久策略。
+
+## 内容动作链
+
+```text
+User goal
+→ Session account scope
+→ AccountContext
+→ EvidencePack
+→ ContentProductionPolicy
+→ production plan checkpoint
+→ feature extraction + InfluenceOS
+→ PreflightDecision
+→ draft gate
+→ ContentAsset + immutable feature snapshot
+→ approval/effect
+→ publish ReceiptRef
+→ metric checkpoints and receipts
+→ content_retro(prediction, actual)
+→ learning candidate
+→ replay/user governance
+→ Hermes memory / account strategy / Skill
+```
+
+## InfluenceOS 在架构中的位置
+
+公式是 Agent 的内部判断内核，不拥有自己的工作流：
+
+```text
+Preflight_t = f(Content_t, Account_t, Memory_t, ReceiptHistory_t, Platform_t)
+Retro_t = compare(Preflight_t, Receipt_t)
+Candidate_t = interpret(Retro_t, repeated evidence, user feedback)
+```
+
+权重有版本，预测有时间，结果有来源。没有足够数据时输出缺失维度和低置信，不输出伪精确流量承诺。
+
+## 内容与平台分层
+
+- ContentOps：受众价值、钩子、结构、证据、信任、情绪、行动路径。
+- PlatformOps：格式、分发闸门、合规、标签、时长、编辑器和平台表达。
+- 同一父内容生成平台变体，但共享同一事实、受众目标和经营假设。
+- 平台知识必须带来源、地区、版本、生效/失效时间。
+
+## 视频边界
+
+- 图文、不露脸视频、高阶视频共享账号、证据、素材、音频、版权、回执和复盘合同。
+- 高阶视频片子预演独立判断剧本到画面、镜头、连续性、节奏、声音和预算。
+- 总营销预演不能把电影制作维度塞进一个总分。
+- 视频 Web 工作台是未来 surface，不拥有第二 Agent、记忆或任务系统。
+
+## 禁止架构
+
+- 外层 FastAPI Agent。
+- `HermesAgentService` 或 HTTP 回调同机 Agent。
+- 第二 Session/Task/Memory owner。
+- 为营销再造 Provider、MCP、Skill、Plugin、Secret 管理器。
+- Electron UI 直接修改业务真相。
+- `publishing.json` 与 SQL 双写。
+- Electron profile 与 Playwright profile 永久并存为两个身份世界。
+- 模型直接修改永久权重或把一次结果写成账号真理。
+
+## 迁移纪律
+
+1. 先查 Hermes 原生 owner。
+2. 已有能力直接修改原生 owner。
+3. 只有通用 Hermes 不具备的经营领域状态才新增。
+4. 从 Git 历史只恢复纯算法、合同和验证规则，不恢复旧壳。
+5. 每条纵切必须同时包含代码、迁移、自动化、开发机和真人证据等级。

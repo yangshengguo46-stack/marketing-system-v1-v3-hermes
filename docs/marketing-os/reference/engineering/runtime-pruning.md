@@ -46,7 +46,7 @@ Hermes 的 Agent 核心并不构成主要体积。当前“太大”来自三类
 - 长任务、checkpoint、interrupt/resume、approval/effect、cron
 - memory、Skill、MCP、Plugin 的原生合同
 - `gateway/` 的核心 session、授权、事件、消息与渠道注册机制
-- `marketing_os/` 全部原生领域能力
+- `agent/marketing/` 中的原生账号经营与内容能力
 
 ### 3.2 代码能力与代码生成视觉
 

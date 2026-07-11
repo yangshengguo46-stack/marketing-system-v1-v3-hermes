@@ -5,7 +5,7 @@
 
 ## 决策
 
-首版采用 **产品自有的 account-scoped Playwright MCP assisted provider**：复用账号管理中同一 `account_id` 的持久 profile，由用户导入媒体到 App 管理目录，Provider 完成预检、上传和字段填写；最终“发布”仍通过产品 effect 审批执行。成功必须从创作者中心作品列表反查稳定作品标识或作品 URL，不能凭 toast、按钮消失或空 post ID 宣布成功。
+首版采用 **Hermes 原生 account-scoped Playwright/MCP 发布 Provider**：复用账号管理中同一 `account_id` 的持久 profile，由用户导入媒体到 App 管理目录，Provider 完成预检、上传和字段填写；最终“发布”通过 Hermes 原生任务、工具审批和回执循环执行。成功必须从创作者中心作品列表反查稳定作品标识或作品 URL，不能凭 toast、按钮消失或空 post ID 宣布成功。
 
 长期保留官方开放平台发布 API adapter；取得平台权限后可替换执行 Provider，但不改变 ContentAsset、approval、effect、receipt 和 metrics contract。
 
