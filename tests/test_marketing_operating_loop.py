@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
+
 from agent.marketing.data_paths import MarketingDataPaths
-from agent.marketing.domains import ContentAssetRepository, ContentProductionPolicy
+from agent.marketing.domains import (
+    ContentAssetRepository,
+    ContentProductionPolicy,
+    PublishingRepository,
+)
 from agent.marketing.intelligence import (
     OperatingLoopRepository,
     create_content_production_preflight,
@@ -40,6 +46,47 @@ def _saved_plan(tmp_path):
         user_id="default", account_id="acct-1", plan=plan
     )
     return paths, saved
+
+
+def _review_ready_asset(tmp_path):
+    paths, plan = _saved_plan(tmp_path)
+    loop = OperatingLoopRepository(paths)
+    preflight = create_content_production_preflight(
+        loop,
+        {
+            "user_id": "default",
+            "account_id": "acct-1",
+            "session_id": "session-publish",
+            "plan_id": plan["plan_id"],
+            "plan": plan,
+            "evidence_refs": ["evidence_demo"],
+        },
+    )
+    asset_id = "asset-publish-1"
+    now = "2026-07-11T00:00:00+00:00"
+    content = {
+        "_production_plan_id": plan["plan_id"],
+        "platform_variants": {
+            "zhihu": {"title": "测试文章", "body_markdown": "正文"},
+        },
+        "feature_snapshot": {"version": "test"},
+    }
+    with ContentAssetRepository(paths)._transaction() as db:
+        db.execute(
+            """INSERT INTO content_assets
+            (id,user_id,account_id,platform,title,type,status,version,content_json,
+             metrics_json,created_at,updated_at)
+            VALUES (?,?,?,'multi_article','测试文章','script','review_ready',1,?,'{}',?,?)""",
+            (
+                asset_id,
+                "default",
+                "acct-1",
+                json.dumps(content, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+    return paths, plan, preflight, asset_id
 
 
 def test_influence_formula_keeps_missing_dimensions_explicit():
@@ -247,3 +294,229 @@ def test_repeated_receipt_retros_create_weight_candidate_without_applying_it(tmp
     assert candidate["candidate_type"] == "weight"
     assert candidate["status"] == "pending"
     assert candidate["proposal"]["guardrail"].startswith("pending weight candidate only")
+
+
+def test_publish_action_prelogs_once_and_binds_native_approval(tmp_path):
+    paths, plan, preflight, asset_id = _review_ready_asset(tmp_path)
+    publishing = PublishingRepository(paths)
+
+    first = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+        session_id="session-publish",
+        tool_call_id="tool-call-1",
+    )
+    duplicate = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    executing = publishing.mark_execution_started(
+        first["id"], approval_ref="hermes-approval:turn-1:tool-call-1"
+    )
+
+    assert first["id"] == duplicate["id"]
+    assert first["plan_id"] == plan["plan_id"]
+    assert first["preflight_id"] == preflight["preflight_id"]
+    assert executing["status"] == "executing"
+    assert executing["approval_ref"].startswith("hermes-approval:")
+    asset = ContentAssetRepository(paths).get(
+        asset_id=asset_id, user_id="default", account_id="acct-1"
+    )
+    assert asset["status"] == "approved"
+
+
+def test_publish_success_requires_platform_evidence_and_schedules_metrics(tmp_path):
+    paths, _plan, preflight, asset_id = _review_ready_asset(tmp_path)
+    publishing = PublishingRepository(paths)
+    action = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    publishing.mark_execution_started(action["id"], approval_ref="approval-once")
+
+    try:
+        publishing.settle_action(
+            action["id"], outcome="published", provider_result={}
+        )
+        assert False, "a success without platform evidence must be rejected"
+    except ValueError as exc:
+        assert "platform_post_id" in str(exc)
+
+    settled = publishing.settle_action(
+        action["id"],
+        outcome="published",
+        provider_result={
+            "platform_post_id": "zhihu-post-123",
+            "published_url": "https://www.zhihu.com/question/1/answer/2",
+        },
+        verification_source="creator_center_query",
+    )
+    checkpoints = publishing.list_metric_checkpoints(action["id"])
+    receipt = OperatingLoopRepository(paths).get_receipt(settled["receipt_id"])
+
+    assert settled["status"] == "published"
+    assert receipt["summary"]["platform_post_id"] == "zhihu-post-123"
+    assert receipt["summary"]["verification_source"] == "creator_center_query"
+    assert [item["label"] for item in checkpoints] == ["1h", "6h", "24h", "3d", "7d"]
+    assert OperatingLoopRepository(paths).get_preflight(preflight["preflight_id"])["status"] == "settled"
+    asset = ContentAssetRepository(paths).get(
+        asset_id=asset_id, user_id="default", account_id="acct-1"
+    )
+    assert asset["status"] == "published"
+
+
+def test_unknown_publish_is_queryable_and_can_recover_without_retry(tmp_path):
+    paths, _plan, _preflight, asset_id = _review_ready_asset(tmp_path)
+    publishing = PublishingRepository(paths)
+    action = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    publishing.mark_execution_started(action["id"], approval_ref="approval-once")
+    unknown = publishing.settle_action(
+        action["id"],
+        outcome="unknown",
+        provider_result={"failure_code": "provider_disconnected_after_click"},
+    )
+    unresolved = publishing.list_unresolved_actions(
+        user_id="default", account_id="acct-1"
+    )
+    recovered = publishing.settle_action(
+        action["id"],
+        outcome="published",
+        provider_result={"published_url": "https://www.zhihu.com/p/123456"},
+        verification_source="works_list_recovery_query",
+    )
+    replay = publishing.settle_action(
+        action["id"],
+        outcome="published",
+        provider_result={"published_url": "https://www.zhihu.com/p/123456"},
+        verification_source="works_list_recovery_query",
+    )
+
+    assert unknown["status"] == "unknown"
+    assert [item["id"] for item in unresolved] == [action["id"]]
+    assert recovered["status"] == "published"
+    assert replay["receipt_id"] == recovered["receipt_id"]
+    assert len(publishing.list_metric_checkpoints(action["id"])) == 5
+    assert publishing.list_unresolved_actions(account_id="acct-1") == []
+
+    far_future = "2099-01-01T00:00:00+00:00"
+    due = publishing.list_due_metric_checkpoints(
+        as_of=far_future, user_id="default", account_id="acct-1"
+    )
+    assert [item["label"] for item in due] == ["1h", "6h", "24h", "3d", "7d"]
+
+
+def test_publish_rejects_cross_platform_or_homepage_receipts(tmp_path):
+    paths, _plan, _preflight, asset_id = _review_ready_asset(tmp_path)
+    publishing = PublishingRepository(paths)
+    action = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    publishing.mark_execution_started(action["id"], approval_ref="approval-once")
+
+    for invalid_url in (
+        "https://www.douyin.com/video/123",
+        "https://www.zhihu.com/",
+        "http://www.zhihu.com/p/123",
+    ):
+        try:
+            publishing.settle_action(
+                action["id"],
+                outcome="published",
+                provider_result={"published_url": invalid_url},
+                verification_source="query",
+            )
+            assert False, invalid_url
+        except ValueError:
+            pass
+
+    try:
+        publishing.settle_action(
+            action["id"],
+            outcome="published",
+            provider_result={"platform_post_id": "not a stable id"},
+            verification_source="query",
+        )
+        assert False, "whitespace is not valid inside a stable platform post id"
+    except ValueError:
+        pass
+
+
+def test_native_publish_result_seam_settles_provider_envelope(tmp_path, monkeypatch):
+    from agent.marketing import publish_capture
+
+    paths, _plan, _preflight, asset_id = _review_ready_asset(tmp_path)
+    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
+    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
+    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
+    monkeypatch.setattr(
+        publish_capture,
+        "read_tool_session_scope",
+        lambda **_kwargs: {"user_id": "default", "account_id": "acct-1"},
+    )
+    publishing = PublishingRepository(paths)
+    action = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    publishing.mark_execution_started(action["id"], approval_ref="approval-once")
+
+    enriched = publish_capture.enrich_tool_result_with_publish_receipt(
+        tool_name="marketing_effect_publish",
+        args={"action_id": action["id"]},
+        result=json.dumps(
+            {
+                "marketing_publish_result": {
+                    "outcome": "published",
+                    "platform_post_id": "answer-2",
+                    "published_url": "https://www.zhihu.com/question/1/answer/2",
+                    "verification_source": "works_list_query",
+                }
+            }
+        ),
+        session_id="session-publish",
+    )
+    payload = json.loads(enriched)
+
+    assert payload["marketing_publish_result"]["receipt_id"]
+    assert publishing.get_action(action["id"])["status"] == "published"
+
+
+def test_native_publish_result_seam_ignores_every_other_tool(tmp_path):
+    original = json.dumps(
+        {
+            "marketing_publish_result": {
+                "outcome": "published",
+                "platform_post_id": "fabricated",
+            }
+        }
+    )
+    from agent.marketing.publish_capture import enrich_tool_result_with_publish_receipt
+
+    assert enrich_tool_result_with_publish_receipt(
+        tool_name="web_extract",
+        args={"action_id": "anything"},
+        result=original,
+        session_id="session-publish",
+    ) == original

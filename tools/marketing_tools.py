@@ -10,6 +10,7 @@ from agent.marketing.domains import (
     ContentAssetRepository,
     ContentProductionPolicy,
     EvidenceRepository,
+    PublishingRepository,
 )
 from agent.marketing.session_scope import enforce_tool_account_scope
 from agent.marketing.intelligence import (
@@ -246,6 +247,55 @@ CREATE_ARTICLE_DRAFT_SCHEMA = {
             "platform_variants",
             "evidence_refs",
         ],
+    },
+}
+
+PREPARE_PUBLISH_SCHEMA = {
+    "name": "marketing_prepare_publish",
+    "description": (
+        "Create the durable, idempotent publish action for a review-ready content asset in the "
+        "account bound to this conversation. This only prepares an approval checkpoint; it does "
+        "not publish and must never be described as a successful platform action. The final effect "
+        "is executed separately by the trusted native provider after one-shot user approval."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "asset_id": {"type": "string"},
+            "platform": {
+                "type": "string",
+                "enum": [
+                    "zhihu", "wechat_official", "douyin", "bilibili", "xiaohongshu",
+                    "kuaishou", "wechat_channels", "tiktok", "youtube",
+                ],
+            },
+            "provider": {
+                "type": "string",
+                "enum": ["playwright_mcp", "official_api", "manual_assisted"],
+                "default": "playwright_mcp",
+            },
+        },
+        "required": ["asset_id", "platform"],
+    },
+}
+
+READ_PUBLISH_STATE_SCHEMA = {
+    "name": "marketing_read_publish_state",
+    "description": (
+        "Read one publish action, unresolved actions that must be queried before retry, or due "
+        "metric checkpoints for the account bound to this conversation. Use this after restart, "
+        "timeout or provider disconnect. Unknown is not success and must not be blindly retried."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action_id": {"type": "string"},
+            "include_unresolved": {"type": "boolean", "default": True},
+            "include_due_metrics": {"type": "boolean", "default": False},
+            "as_of": {"type": "string", "description": "Optional ISO-8601 cutoff for due metrics."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+        },
+        "required": [],
     },
 }
 
@@ -500,6 +550,66 @@ def _create_article_draft(args: dict, **kwargs) -> str:
     return json.dumps({**result, "preflight_id": preflight["id"]}, ensure_ascii=False)
 
 
+def _prepare_publish(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    action = PublishingRepository().prepare_action(
+        user_id=user_id,
+        account_id=account_id,
+        asset_id=str(args.get("asset_id") or ""),
+        platform=str(args.get("platform") or ""),
+        provider=str(args.get("provider") or "playwright_mcp"),
+        session_id=str(kwargs.get("session_id") or kwargs.get("task_id") or ""),
+        tool_call_id=str(kwargs.get("tool_call_id") or ""),
+    )
+    return json.dumps(
+        {
+            "action": action,
+            "effect_executed": False,
+            "next_action": (
+                "Request one-shot user approval, then execute the trusted native publishing provider."
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _read_publish_state(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    repository = PublishingRepository()
+    action_id = str(args.get("action_id") or "").strip()
+    result: dict = {"user_id": user_id, "account_id": account_id}
+    if action_id:
+        action = repository.get_action(action_id)
+        if action["user_id"] != user_id or action["account_id"] != account_id:
+            raise ValueError("publish action is outside the bound conversation account")
+        result["action"] = action
+        result["metric_checkpoints"] = repository.list_metric_checkpoints(action_id)
+    if args.get("include_unresolved", True):
+        result["unresolved_actions"] = repository.list_unresolved_actions(
+            user_id=user_id,
+            account_id=account_id,
+            limit=int(args.get("limit") or 20),
+        )
+    if args.get("include_due_metrics") is True:
+        result["due_metric_checkpoints"] = repository.list_due_metric_checkpoints(
+            as_of=str(args.get("as_of") or "") or None,
+            user_id=user_id,
+            account_id=account_id,
+            limit=int(args.get("limit") or 20),
+        )
+    return json.dumps(result, ensure_ascii=False)
+
+
 registry.register(
     name="marketing_read_accounts",
     toolset="marketing",
@@ -570,4 +680,22 @@ registry.register(
     handler=_create_article_draft,
     description="Persist a validated parent article and platform-native variants.",
     emoji="📝",
+)
+
+registry.register(
+    name="marketing_prepare_publish",
+    toolset="marketing",
+    schema=PREPARE_PUBLISH_SCHEMA,
+    handler=_prepare_publish,
+    description="Prepare an idempotent publish action without executing the external effect.",
+    emoji="📤",
+)
+
+registry.register(
+    name="marketing_read_publish_state",
+    toolset="marketing",
+    schema=READ_PUBLISH_STATE_SCHEMA,
+    handler=_read_publish_state,
+    description="Recover unresolved publishing actions and due metric checkpoints.",
+    emoji="🧾",
 )

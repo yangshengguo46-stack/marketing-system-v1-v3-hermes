@@ -21,9 +21,9 @@
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
 | Content plan/assets | 三 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
 | Preflight | InfluenceOS + 不可变记录 + draft gate | automated | 真实账号历史校准、发布前版本链 |
-| Receipt/Learning store | ReceiptRef、LearningCandidate 合同 | automated | 真实发布 effect 与指标尚未接入 |
+| Receipt/Learning store | ReceiptRef、LearningCandidate、PublishAction 合同 | automated | 真实 Provider 与跨天指标尚未接入 |
 | Hermes memory/Skill | 原生能力保留，经营写入规则已加入 | automated | 候选治理后投影、重复成功流程沉淀 |
-| Publishing/metrics | 历史设计与部分旧证据存在 | designed/partial | 当前主干缺真实 L3 发布和跨天指标闭环 |
+| Publishing/metrics | 原生发布 intent、幂等、unknown 恢复、回执校验、5 段指标 checkpoint | automated | 缺实际 L3 Provider、一次性语义审批和真人发布 |
 | Packaging | 自包含 staging 可构建 | automated | 精简依赖、签名、公证、干净机断网首启 |
 | High-end video | 独立项目/合同 | deferred | 不计桌面 v0.1 完成 |
 
@@ -42,6 +42,22 @@
 5. 失败、取消、超时、未知分别落状态；未知先查询，禁止盲重试。
 6. 自动创建 1h/6h/24h/3d/7d metric checkpoints。
 7. 至少完成一条开发机真实图文发布回执，再进入下一个任务。
+
+当前落地（2026-07-11）：
+
+- `agent/marketing/domains/publishing.py` 已成为发布经营事实的唯一 owner。
+- 同一 `account + asset + version + platform` 使用稳定幂等键；重放只返回原 action。
+- `prepared → executing → unknown/failed/cancelled/published` 状态已落库；`unknown` 可查询恢复，不能直接重试。
+- 成功只接受目标平台的 `platform_post_id` 或具体 HTTPS 作品 URL，并要求 `verification_source`。
+- 发布成功自动固化 ReceiptRef、结算 preflight、更新 ContentAsset/plan，并创建 1h/6h/24h/3d/7d checkpoint。
+- `agent/marketing/publish_capture.py` 接入 Hermes 原生 post-tool 路径；只有未来的受信 `marketing_effect_publish` 工具结果能自动结算回执，没有模型可调用的“手填成功”工具。
+- `marketing_prepare_publish` 与 `marketing_read_publish_state` 已进入原生 tool registry，负责预写 action 与重启恢复，不负责假装发布。
+
+尚未完成：
+
+- `marketing_effect_publish` 的一次性语义审批与真实 Provider 尚未实现；当前不能宣称能自动发布。
+- Playwright/MCP 与账号专属 profile 的真实发布动作、作品列表反查尚未接入。
+- 仍需一条开发机真人图文发布和重启恢复证据，证据等级目前停在 `automated`。
 
 完成口径：
 
@@ -96,7 +112,8 @@
 
 ## 当前回归基线
 
-- 营销、Agent、Gateway 定向回归：205 passed，1 skipped。
+- 营销、Agent、Gateway 与审批组合回归：415 passed。
+- LOOP-01 发布账本、回执门与恢复路径单文件回归：13 passed（已包含在上述 415 项组合回归中）。
 - Desktop runtime staging：2 passed。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。
 - 下一次更新本台账时必须写：代码路径、测试、dev-runtime、packaged、human-loop 和仍未完成的风险。

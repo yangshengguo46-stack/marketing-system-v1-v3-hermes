@@ -6,6 +6,7 @@ from .article_drafts import ArticleDraftValidator, article_stylebooks
 from .content_assets import ContentAssetRepository
 from .content_policy import ContentProductionPolicy
 from .evidence import EvidenceRepository
+from .publishing import PublishingRepository
 
 __all__ = [
     "AccountContextRepository",
@@ -14,5 +15,6 @@ __all__ = [
     "ContentAssetRepository",
     "ContentProductionPolicy",
     "EvidenceRepository",
+    "PublishingRepository",
     "article_stylebooks",
 ]

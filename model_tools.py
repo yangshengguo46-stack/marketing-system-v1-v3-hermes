@@ -1194,6 +1194,27 @@ def handle_function_call(
                 _evidence_capture_err,
             )
 
+        # Publishing uses the same native post-handler seam, but only the
+        # trusted marketing_effect_publish tool can settle an action.  There is
+        # deliberately no model-facing "record receipt" tool: verified platform
+        # facts must originate from the actual provider result.
+        try:
+            from agent.marketing.publish_capture import enrich_tool_result_with_publish_receipt
+
+            result = enrich_tool_result_with_publish_receipt(
+                tool_name=function_name,
+                args=function_args,
+                result=result,
+                task_id=task_id or "",
+                session_id=session_id or "",
+            )
+        except Exception as _publish_capture_err:
+            logger.warning(
+                "native Marketing OS publish capture failed for %s: %s",
+                function_name,
+                _publish_capture_err,
+            )
+
         _emit_post_tool_call_hook(
             function_name=function_name,
             function_args=function_args,
