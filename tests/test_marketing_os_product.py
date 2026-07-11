@@ -66,6 +66,8 @@ def test_hermes_ecosystem_contracts_remain_product_capabilities():
 
 
 def test_product_runtime_is_explicit_and_not_inferred_from_import(monkeypatch):
+    monkeypatch.delenv("HERMES_DESKTOP", raising=False)
+    monkeypatch.delenv("HERMES_PRODUCT_ID", raising=False)
     monkeypatch.delenv("MARKETING_OS_USER_DATA", raising=False)
     monkeypatch.delenv("MARKETING_OS_CONFIG_DIR", raising=False)
     monkeypatch.delenv("MARKETING_OS_AGENT_DB", raising=False)
@@ -73,6 +75,18 @@ def test_product_runtime_is_explicit_and_not_inferred_from_import(monkeypatch):
 
     monkeypatch.setenv("MARKETING_OS_USER_DATA", "/tmp/marketing-os")
     assert is_product_runtime() is True
+
+    monkeypatch.delenv("MARKETING_OS_USER_DATA", raising=False)
+    monkeypatch.setenv("HERMES_DESKTOP", "1")
+    assert is_product_runtime() is True
+
+
+def test_electron_does_not_choose_marketing_business_storage():
+    source = (PROJECT_ROOT / "apps" / "desktop" / "electron" / "main.cjs").read_text()
+
+    assert "process.env.MARKETING_OS_USER_DATA" not in source
+    assert "process.env.MARKETING_OS_CONFIG_DIR" not in source
+    assert "process.env.MARKETING_OS_AGENT_DB" not in source
 
 
 def test_raw_core_update_is_blocked_but_ecosystem_updates_stay_available(

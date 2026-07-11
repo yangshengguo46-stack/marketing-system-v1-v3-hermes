@@ -22,6 +22,7 @@
 | 领域 | 当前状态 | 证据 | 主要缺口 |
 |---|---|---|---|
 | Hermes 产品本体 | 完整源码已成为主仓库根 | code + automated | 上游吸收 CI、正式签名发布 |
+| State/data owner | 经营项目、受众、证据、内容、预演、回执和学习表已进入 Hermes `state.db`；旧 `agent_core.db` 一次迁移后只读保留 | dev-runtime | 删除兼容路径、中央匿名知识服务尚未实现 |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
 | Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放上下文，删除时清理 profile | dev-runtime | 切换 UI、真人多账号登录/退出 |
@@ -59,18 +60,22 @@
 - 发布成功自动固化 ReceiptRef、结算 preflight、更新 ContentAsset/plan，并创建 1h/6h/24h/3d/7d checkpoint。
 - `agent/marketing/publish_capture.py` 接入 Hermes 原生 post-tool 路径；只有未来的受信 `marketing_effect_publish` 工具结果能自动结算回执，没有模型可调用的“手填成功”工具。
 - `marketing_prepare_publish` 与 `marketing_read_publish_state` 已进入原生 tool registry，负责预写 action 与重启恢复，不负责假装发布。
-- Hermes 原生 Camofox 的 account_id 隔离作为兼容能力保留；Playwright MCP 已确定为桌面产品主线，但尚未接入 BrowserContext owner，不能宣称运行完成。
+- Hermes 原生 Camofox 的 account_id 隔离作为兼容能力保留；桌面产品主线已切入 Playwright MCP 的原生 BrowserContext owner。
 - `marketing_effect_publish` 已复用 Hermes 原生 MCP elicitation 一次性确认；拒绝、静默或超时不会启动 Provider，也不能永久放行最终发布。
 - 发布 Provider 进入 `agent/marketing/providers/` 原生注册器；只有真实 Provider 已注册时 effect/query 工具才会出现在 Agent 工具集中，避免空按钮和占位能力。
 - Hermes `state.db` 已新增原生账号注册表；`agent/account_registry.py` 是账号生命周期 owner，Gateway 只调用该 owner，Electron 不保存或修改账号真相。
 - 旧 `accounts.json` 仅执行一次无敏感字段迁移；Cookie、token、验证码和 QR 内容禁止进入 SessionDB。
-- AccountRegistry 已能为绑定会话签发 secret-free BrowserContext lease；认证失效、断开或删除账号不能获得执行租约。
+- AccountRegistry 已能为绑定会话签发 secret-free BrowserContext lease；未认证账号只用于登录/验证，断开或删除账号不能获得执行租约。
 - `mcp/marketing-browser` 直接调用 Playwright MCP `createConnection(config, contextGetter)`；schema discovery 不启动浏览器，实际工具调用才按账号租约创建上下文。
 - Hermes 原生 MCP client 已支持 `session_scope=marketing_account`：账号连接池、RPC 串行、熔断与关闭均在原生 MCP owner 内；不存在外部 Router。
 - 开发机真实 Hermes 工具分发已完成 `AccountRegistry → scoped MCP → navigate → snapshot`，52 个 Playwright 工具可见，证据等级为 `dev-runtime`。
 - AccountRegistry 在断开/删除时直接通知原生 MCP owner，MCP 也持续复核权限：无论上下文是否活跃都能完成释放；删除只清理该账号的 profile/output，同平台其他账号不受影响。
 - 已发现并修复 MCP stdio 关闭时未等待 persistent context 落盘的问题；开发机完成“写入持久 Cookie → 关闭 MCP → 重启同账号 → Cookie 恢复”验证。
 - BrowserContext 是否可见由 MCP owner 根据 AccountRegistry 的 auth_state 决定：未登录/需验证自动 headed，认证后可后台运行；Electron 不传浏览器模式。
+- Hermes `state.db` 已成为营销领域唯一物理数据库；Electron 不再设置 `MARKETING_OS_*` 业务路径。
+- 真实旧库已备份并完成一次迁移：1 个经营项目、1 个受众假设、4 个内容资产、1 个生产计划、1 个证据记录；五类数据源/目标逐表哈希一致。
+- 数据飞轮分为用户私有学习和授权后的匿名结构贡献；中央知识只提供版本化先验，不覆盖本地回执。
+- `KnowledgeFlywheelRepository` 已建立授权贡献 outbox：只有 accepted learning candidate 能生成贡献，必须有 consent_ref，禁止账号/用户 ID、原文、URL、消息、Cookie/Token 等字段，且幂等、状态受控。
 
 尚未完成：
 
@@ -94,6 +99,12 @@
 - 无 post ID/URL 时状态只能是 pending/unknown/failed。
 
 ## 后续顺序（不得并行扩建）
+
+### FLYWHEEL-01 中央知识服务
+
+- 当前只完成本地、隐私治理后的贡献 outbox 与知识包 schema；尚未连接任何中央上传接口。
+- 服务端必须执行最小群组阈值、稀疏组合抑制、时间衰减、平台/地区/版本分层和删除传播。
+- 返回客户端的知识包必须有版本、样本量、时间窗、校验和与签名；只做先验，不覆盖本地 Receipt。
 
 ### LOOP-02 指标回收
 
@@ -140,7 +151,7 @@
 ## 当前回归基线
 
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
-- 当前营销域、内容生产与账号 MCP 生命周期组合回归：Python 230 passed；Node 12 passed，包含真实浏览器重启恢复。
+- 当前营销域、内容生产、数据飞轮与账号 MCP 生命周期组合回归：Python 276 passed；Node 12 passed，包含旧库迁移、匿名贡献治理与真实浏览器重启恢复。
 - LOOP-01 发布账本、审批、回执门与恢复路径单文件回归：16 passed（后续组合回归必须继续包含）。
 - Desktop runtime staging：2 passed。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。

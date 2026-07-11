@@ -151,10 +151,6 @@ if (USER_DATA_OVERRIDE) {
   app.setPath('userData', productUserData)
 }
 
-process.env.MARKETING_OS_USER_DATA ||= app.getPath('userData')
-process.env.MARKETING_OS_CONFIG_DIR ||= path.join(app.getPath('userData'), 'config')
-process.env.MARKETING_OS_AGENT_DB ||= path.join(app.getPath('userData'), 'agent-runtime', 'agent_core.db')
-
 const DEV_SERVER = process.env.HERMES_DESKTOP_DEV_SERVER
 const IS_PACKAGED = app.isPackaged
 const IS_MAC = process.platform === 'darwin'

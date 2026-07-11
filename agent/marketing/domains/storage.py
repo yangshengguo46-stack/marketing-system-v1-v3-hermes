@@ -1,9 +1,4 @@
-"""Shared persistence primitives for Marketing OS domain repositories.
-
-Hermes owns the Agent runtime and session database. Marketing domains still
-need durable business state, but they must not each grow their own connection
-and transaction framework. This module is their single SQLite seam.
-"""
+"""Marketing repositories over the Hermes-owned ``state.db``."""
 
 from __future__ import annotations
 
@@ -19,8 +14,15 @@ class MarketingDomainRepository:
 
     def __init__(self, paths: MarketingDataPaths | None = None):
         self.paths = paths or MarketingDataPaths.from_env()
+        if self.paths.agent_db.name == "state.db":
+            from hermes_state import SessionDB
+
+            owner = SessionDB(db_path=self.paths.agent_db)
+            owner.close()
 
     def _connect(self) -> sqlite3.Connection:
+        # SessionDB owns schema and data migrations. Repositories retain a
+        # small SQL seam for domain queries but never choose another database.
         self.paths.agent_db.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(self.paths.agent_db, timeout=10)
         db.row_factory = sqlite3.Row

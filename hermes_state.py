@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 from agent.memory_manager import sanitize_context
+from agent.marketing.schema import LEGACY_MARKETING_TABLES, MARKETING_DOMAIN_SCHEMA_SQL
 from hermes_constants import get_hermes_home
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
@@ -121,7 +122,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 # ---------------------------------------------------------------------------
 # WAL-compatibility fallback
@@ -745,6 +746,8 @@ CREATE INDEX IF NOT EXISTS idx_marketing_accounts_user_platform
     ON marketing_accounts(user_id, platform, status, updated_at DESC);
 """
 
+SCHEMA_SQL += MARKETING_DOMAIN_SCHEMA_SQL
+
 # Indexes that reference columns added in later schema versions must be
 # created AFTER _reconcile_columns() has had a chance to ADD them on
 # existing databases. SCHEMA_SQL above is run by sqlite executescript
@@ -1260,6 +1263,87 @@ class SessionDB:
                             "reconcile %s.%s: %s", table_name, col_name, exc,
                         )
 
+    def _migrate_legacy_marketing_state(self, cursor: sqlite3.Cursor) -> None:
+        """Import compatible business facts from the retired ``agent_core.db``."""
+
+        marker = "marketing_agent_core_import_v1"
+        if cursor.execute(
+            "SELECT 1 FROM state_meta WHERE key=?", (marker,)
+        ).fetchone() is not None:
+            return
+        legacy_path = self.db_path.with_name("agent_core.db")
+        try:
+            if (
+                not legacy_path.is_file()
+                or legacy_path.resolve() == self.db_path.resolve()
+            ):
+                return
+        except OSError:
+            return
+
+        imported: Dict[str, int] = {}
+        attached = False
+        try:
+            cursor.execute("ATTACH DATABASE ? AS legacy_marketing", (str(legacy_path),))
+            attached = True
+            for table in LEGACY_MARKETING_TABLES:
+                source_exists = cursor.execute(
+                    "SELECT 1 FROM legacy_marketing.sqlite_master "
+                    "WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                target_exists = cursor.execute(
+                    "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                if source_exists is None or target_exists is None:
+                    continue
+                source_columns = {
+                    row[1]
+                    for row in cursor.execute(
+                        f'PRAGMA legacy_marketing.table_info("{table}")'
+                    ).fetchall()
+                }
+                target_columns = [
+                    row[1]
+                    for row in cursor.execute(
+                        f'PRAGMA main.table_info("{table}")'
+                    ).fetchall()
+                ]
+                columns = [name for name in target_columns if name in source_columns]
+                if not columns:
+                    continue
+                quoted = ",".join(f'"{name}"' for name in columns)
+                before = self._conn.total_changes
+                cursor.execute(
+                    f'INSERT OR IGNORE INTO main."{table}" ({quoted}) '
+                    f'SELECT {quoted} FROM legacy_marketing."{table}"'
+                )
+                imported[table] = self._conn.total_changes - before
+            cursor.execute(
+                "INSERT OR REPLACE INTO state_meta(key,value) VALUES (?,?)",
+                (
+                    marker,
+                    json.dumps(
+                        {
+                            "source": str(legacy_path),
+                            "imported": imported,
+                            "imported_at": time.time(),
+                        },
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+            logger.info("Imported legacy Marketing OS facts into state.db: %s", imported)
+        except sqlite3.DatabaseError as exc:
+            logger.warning("Legacy Marketing OS state import deferred: %s", exc)
+        finally:
+            if attached:
+                try:
+                    cursor.execute("DETACH DATABASE legacy_marketing")
+                except sqlite3.DatabaseError:
+                    pass
+
     def _init_schema(self):
         """Create tables and FTS if they don't exist, reconcile columns.
 
@@ -1283,6 +1367,10 @@ class SessionDB:
         # migration was skipped (e.g. due to version renumbering), the
         # column gets created here.
         self._reconcile_columns(cursor)
+
+        # Data migration happens only after the native target schema exists.
+        # The legacy file remains untouched as rollback evidence.
+        self._migrate_legacy_marketing_state(cursor)
 
         # Indexes that reference reconciler-added columns must be created
         # AFTER _reconcile_columns runs — declaring them in SCHEMA_SQL

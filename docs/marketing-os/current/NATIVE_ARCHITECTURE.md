@@ -70,6 +70,15 @@ tools/marketing_tools.py
 
 这些目录是一个 Agent 内部的职责拆分，不是插件、sidecar 或第二个 Agent。
 
+## 唯一业务状态库与数据飞轮
+
+Hermes `state.db` 是会话、账号、受众、内容、预演、回执、指标和学习候选的唯一产品数据库 owner。历史 `agent_core.db` 只允许一次性、可校验迁移，不再接收新写入；Electron 不决定业务数据库路径。
+
+- 私有经营事实保留 user/account scope，驱动本地记忆、账号策略和技能学习。
+- 匿名知识贡献必须显式授权、去标识化、结构化并经过最小群组阈值，才能进入未来中央知识库。
+- 中央知识以带版本、平台、地区、时间窗、样本量和置信度的知识包返回 Agent，只提供先验；本地 Receipt 永远拥有更高事实权重。
+- 本地贡献 outbox 的 owner 是 `agent/marketing/domains/knowledge_flywheel.py`；它只接收治理通过的 learning candidate 和显式 consent_ref，不拥有网络上传或中央聚合。
+
 ## 三核数据合同
 
 ### PreflightRecord

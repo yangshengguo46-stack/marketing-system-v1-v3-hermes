@@ -142,6 +142,8 @@ def is_product_runtime(env: Mapping[str, str] | None = None) -> bool:
     return any(
         str(values.get(key) or "").strip()
         for key in (
+            "HERMES_DESKTOP",
+            "HERMES_PRODUCT_ID",
             "MARKETING_OS_USER_DATA",
             "MARKETING_OS_CONFIG_DIR",
             "MARKETING_OS_AGENT_DB",
