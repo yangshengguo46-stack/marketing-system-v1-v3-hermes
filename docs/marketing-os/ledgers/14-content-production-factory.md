@@ -206,7 +206,7 @@ Claude 写的 `engine/video_core` / `engine/video_agents` 不是废物，但它�
 
 | ID | 落地 | 代码事实 | 证据等级 |
 |---|---|---|---|
-| CPF-NATIVE-01 | 原生共享能力池 | `ContentProductionPlanner` 直接运行在 Hermes 源码内，三条 lane 共享账号、证据、文案、授权素材、生成视觉、音频和剪辑能力；只引用当前实际存在的 Hermes 工具/Skill，不再宣称不存在的 Skill 已安装 | automated |
+| CPF-NATIVE-01 | 原生共享能力池 | `ContentProductionPolicy` 直接运行在 Hermes 源码内，三条 lane 共享账号、证据、文案、授权素材、生成视觉、音频和剪辑能力；只引用当前实际存在的 Hermes 工具/Skill，不再宣称不存在的 Skill 已安装 | automated |
 | CPF-NATIVE-02 | 持久生产 checkpoint | `content_production_plans` 绑定 `user_id + account_id + kind + platforms`；相同目标得到稳定 `plan_id`，跨重启可恢复 | automated |
 | CPF-NATIVE-03 | 草稿强制走工单 | `marketing_draft_content_create` 不接受 `account_id`；必须携带当前账号真实 `plan_id`，管线或平台不匹配直接拒绝 | automated |
 | CPF-NATIVE-04 | 内容资产可恢复 | `marketing_read_content_assets` 只读取当前 Hermes session 绑定账号；完整草稿进入 `content_assets`，不进入长期记忆 | automated |

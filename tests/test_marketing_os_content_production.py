@@ -6,14 +6,14 @@ import hermes_state
 import model_tools
 import pytest
 from hermes_state import SessionDB
-from marketing_os.data_paths import MarketingDataPaths
-from marketing_os.domains import (
+from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.domains import (
     ArticleDraftValidator,
     ContentAssetRepository,
-    ContentProductionPlanner,
+    ContentProductionPolicy,
     EvidenceRepository,
 )
-from marketing_os.evidence_capture import enrich_tool_result_with_evidence
+from agent.marketing.evidence_capture import enrich_tool_result_with_evidence
 from model_tools import get_tool_definitions, handle_function_call
 
 
@@ -111,7 +111,7 @@ def _long_article(evidence_id, voice):
     ],
 )
 def test_native_planner_selects_three_connected_lanes(objective, kind):
-    result = ContentProductionPlanner().plan(objective=objective)
+    result = ContentProductionPolicy().plan(objective=objective)
 
     assert result["kind"] == kind
     assert result["architecture"] == "hermes-native-shared-capability-pool"

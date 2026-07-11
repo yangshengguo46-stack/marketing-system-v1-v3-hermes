@@ -7933,7 +7933,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     break
 
             try:
-                from marketing_os.messaging import prepare_inbound_message
+                from gateway.product_messaging import prepare_inbound_message
 
                 event = prepare_inbound_message(event, self)
                 source = event.source

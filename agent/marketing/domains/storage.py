@@ -11,7 +11,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Iterator
 
-from marketing_os.data_paths import MarketingDataPaths
+from agent.marketing.data_paths import MarketingDataPaths
 
 
 class MarketingDomainRepository:

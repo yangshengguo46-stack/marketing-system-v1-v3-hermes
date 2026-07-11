@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from marketing_os.domains.article_drafts import article_stylebooks
+from agent.marketing.domains.article_drafts import article_stylebooks
 
 
 CONTENT_KINDS = {"article_soft", "faceless_video", "premium_human_video"}
@@ -126,7 +126,7 @@ LANE_CONFIG = {
 }
 
 
-class ContentProductionPlanner:
+class ContentProductionPolicy:
     def plan(
         self,
         *,

@@ -9,11 +9,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from marketing_os.data_paths import MarketingDataPaths
-from marketing_os.domains.article_drafts import ArticleDraftValidator
-from marketing_os.domains.content_production import CONTENT_KINDS, VALID_PLATFORMS
-from marketing_os.domains.evidence import EvidenceRepository
-from marketing_os.domains.storage import MarketingDomainRepository
+from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.domains.article_drafts import ArticleDraftValidator
+from agent.marketing.domains.content_policy import CONTENT_KINDS, VALID_PLATFORMS
+from agent.marketing.domains.evidence import EvidenceRepository
+from agent.marketing.domains.storage import MarketingDomainRepository
 
 
 ASSET_TYPES = {"script", "video", "image", "caption"}

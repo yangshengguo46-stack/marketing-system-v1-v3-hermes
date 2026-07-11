@@ -70,7 +70,7 @@ Electron capability host (inside the same product)
 | 发布、回执、指标 | Publishing/Receipt/Metrics domains | Electron/MCP/API 是 provider | `publishing.json` 与 SQL 双写 |
 | 产品 UI | `apps/desktop` | Electron 宿主能力与原生 Gateway | 第二套根 `src/` + `electron/` |
 
-`marketing_os/domains` 是产品源码树中的原生领域包，不是外部业务插件。若现有 Hermes 文件形态阻碍体验或状态正确性，可以拆分、重写或删除；约束保护的是单运行时、单真相源、安全审批和生态合同，不是旧目录。
+`agent/marketing/domains` 是 Agent 源码树中的原生经营领域，不是外部业务插件。若现有 Hermes 文件形态阻碍体验或状态正确性，可以拆分、重写或删除；约束保护的是单运行时、单真相源、安全审批和生态合同，不是旧目录。
 
 ## 三、一次请求的真实路径
 

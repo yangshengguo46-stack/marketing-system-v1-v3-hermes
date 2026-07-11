@@ -59,7 +59,7 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 |---|---|
 | 主仓库 | 5842 个跟踪文件；根目录就是完整产品源码，不存在子仓库或源码补丁回放 |
 | 上游维护 | `hermes-upstream` 仅供内部 fetch/merge/rebase；用户只接收 Marketing OS 产品版本 |
-| Agent/runtime | `run_agent.py`、`agent/`、`hermes_state.py`、`gateway/`、`skills/`、`plugins/`、`marketing_os/` 同仓同版本 |
+| Agent/runtime | `run_agent.py`、`agent/marketing/`、`hermes_state.py`、`gateway/`、`skills/`、`plugins/` 同仓同执行链 |
 | 桌面 UI | `apps/desktop` 是唯一 React/Electron 产品入口；旧根 `src/`、`electron/` 已删除 |
 | 本机服务 | 旧 `engine/marketing-os/server.py`、PyInstaller backend 与外层 `HermesAgentService` 已删除；桌面直接启动同仓 Hermes dashboard/gateway |
 | 产品运行时 | 根 `.venv` 已通过锁文件改绑当前仓库；Node 依赖也与当前根 `package-lock.json` 对齐 |
@@ -87,7 +87,7 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 
 这也不是一场单向的“把 Marketing OS 搬进 Hermes”。Hermes 继承代码和当前 Marketing OS 代码都允许拆分、删除和重写：前者提供成熟的 Agent/harness/session/desktop 骨架，后者提供账号经营、证据、内容、预演、发布回执和学习闭环。迁移按最终能力边界重新组合，不按任一旧目录原样照搬。唯一不可丢的是产品设计哲学：围绕一个用户和一组账号长期经营，用真实证据行动，用真实结果学习，最终表现为同一个超级营销 Agent。
 
-2026-07-10 原生切入基线已落地：Hermes 源码内新增产品身份与营销运行指导 `marketing_os/product.py`，默认 Agent identity 和系统指导直接由 Hermes prompt builder 装配；`tui_gateway` 原生暴露产品状态；`apps/desktop` 根路由成为原生工作台，对话迁至 `/chat` 并兼容旧会话路由；安装包、窗口、协议、导航、通知和多语言用户文案统一为 Marketing OS。生产构建、类型检查、lint、3 个 Python 契约、10 个定向 UI 契约、14 个二级窗口路由契约均通过。该基线证明营销增强可直接长在 Hermes 主干上，但领域迁移与旧主路径删除尚未完成。
+2026-07-10 原生切入基线已落地，2026-07-11 又将当时的 `marketing_os/product.py` 迁为 `agent/product.py`：默认 Agent identity 和系统指导直接由 Hermes prompt builder 装配；`tui_gateway` 原生暴露产品状态；`apps/desktop` 根路由成为原生工作台，对话迁至 `/chat` 并兼容旧会话路由；安装包、窗口、协议、导航、通知和多语言用户文案统一为 Marketing OS。该基线证明营销经营哲学已经进入 Hermes 主干，不再由顶层营销包提供。
 
 第一条领域纵切也已启动：fork 内的 `AccountContextRepository` 不回调 FastAPI、不复制数据，直接以只读方式消费现有 `accounts.json + agent_core.db` 真相源；原生 Gateway 提供 `marketing.accounts.list` 与 `marketing.account.context`，原生工作台已读取真实账号数量。6 个定向 Python 契约通过，并在本机真实数据上读到 1 个抖音账号；该账号当前生命周期仍为 `not_started`、没有 DNA/真实受众快照，这是真实数据缺口，不做 UI 伪填充。写入所有权和 schema migration 尚未迁入 fork。
 
@@ -99,9 +99,9 @@ Marketing OS 不是“营销页面加一个聊天框”，也不是一组热点�
 
 Hermes 生态兼容被明确保留：原生 MCP catalog/自定义 MCP、MCP 动态工具发现，Hub Skill 安装更新、用户 Skill、Skill 自我生成治理，以及插件安装更新仍沿用 Hermes 合同。核心代码升级与生态包升级分离：Marketing OS 运行时禁止直接执行原地 `hermes update` 覆盖产品 fork，核心上游变化必须进入 Marketing OS 版本并经过产品回归；MCP server、Hub Skill、用户 Skill 和插件继续独立更新。Gateway 产品状态和 dashboard update API 会返回该政策，CLI 产品运行时也 fail-safe 阻断 raw apply。48 个 Hermes 原 updater/产品 updater 回归通过，证明非产品 Hermes 模式未被破坏；尚待建立定期 upstream merge/rebase CI，把“可升级”从人工纪律提升为自动维护流水线。
 
-消息渠道的双运行时旁路已经删除：原 `gateway/marketing_os_bridge.py` 会把飞书/微信消息通过 HTTP 送回外层 FastAPI 并创建第二类会话，现已改为 `marketing_os/messaging.py` 只做可信通知窗口准备，随后继续进入 Hermes 原生 Gateway 的授权、session、memory、task 与工具循环。产品状态明确为 `hermes-native-marketing / single-runtime`。这是“以 Hermes 为主、营销模块做增强”的首个反向拆壳样板；真实飞书/微信连续对话仍待人工复验。
+消息渠道的双运行时旁路已经删除：原 `gateway/marketing_os_bridge.py` 会把飞书/微信消息通过 HTTP 送回外层 FastAPI 并创建第二类会话；当前 `gateway/product_messaging.py` 只做可信通知窗口准备，随后继续进入 Gateway 原生授权、session、memory、task 与工具循环。产品状态明确为 `hermes-native-marketing / single-runtime`；真实飞书/微信连续对话仍待人工复验。
 
-内容生产的第一段所有权也已进入 Hermes：原生 `ContentProductionPlanner` 负责三条互通 lane 和共享能力池，`content_production_plans` 把工单变成账号级持久 checkpoint；`marketing_draft_content_create` 必须引用当前账号真实 `plan_id`，模型不能传 `account_id`，跨账号、跨管线或跨平台草稿会被拒绝；`marketing_read_content_assets` 可恢复当前账号草稿。完整内容仍写入现有 `content_assets` 真相源，不复制数据库、不塞入长期记忆。
+内容生产的第一段所有权也已进入 Hermes：原生 `ContentProductionPolicy` 负责三条互通 lane 和共享能力池，`content_production_plans` 把工单变成账号级持久 checkpoint；`marketing_draft_content_create` 必须引用当前账号真实 `plan_id`，模型不能传 `account_id`，跨账号、跨管线或跨平台草稿会被拒绝；`marketing_read_content_assets` 可恢复当前账号草稿。完整内容仍写入现有 `content_assets` 真相源，不复制数据库、不塞入长期记忆。
 
 EvidencePack 的首个真实采集纵切也已进入 Hermes 主调度器：`web_search` 仍只发现候选来源，成功的 `web_extract` 在工具结果返回模型前自动按 SessionDB 当前账号固化 `evidence_records`，系统计算 URL、采集时间、原始抓取内容 SHA-256、摘要来源、session/tool call 和 source-integrity 状态，再把不可伪造的 `evidence_id` 返回模型；没有任何模型可调用的 evidence-create 工具。生产计划和草稿只接受当前账号的 verified EvidencePack ID，原始 URL、`source:` 字符串、跨账号 ID 和失败抓取均被拒绝。这里的 verified 仅证明来源完整性，不宣称网页每个主张为真；多源交叉验证、真实父稿/平台变体、素材/渲染和发布仍待完成，不能宣称内容闭环完成。
 
@@ -158,9 +158,9 @@ FastAPI、外层 adapter 和旧 store 反向依赖已经随旧源码删除。当
 
 ### P1-05 Marketing OS 增强层必须继续去重，但不能误删营销领域
 
-2026-07-11 核对发现 `marketing_os/` 仅约 2,800 行、110KB，旧壳和第二 Agent 已经不在；剩余风险是 owner 重叠，不是代码体积。裁决清单与删除顺序见 `docs/marketing-os/architecture/MARKETING_OS_DEDUPLICATION.md`。
+2026-07-11 核对发现原顶层 `marketing_os/` 仅约 2,800 行、110KB，旧壳和第二 Agent 已经不在；剩余风险是 owner 重叠和“营销哲学只存在于工具层”，不是代码体积。裁决清单与删除顺序见 `docs/marketing-os/architecture/MARKETING_OS_DEDUPLICATION.md`。
 
-第一批已把 AccountLifecycle、EvidencePack、ContentAsset 三个 repository 重复的 SQLite connection/transaction 基础设施合并为一个 `MarketingDomainRepository`。下一批将把 session scope 的读取/绑定进一步归还 SessionDB，把飞书/微信通知窗口持久化统一复用 Gateway 原生 `/sethome`，再通过一次性 migration 淘汰 `accounts.json + agent_core.db` 兼容读取。账号经营、证据、内容资产和平台表达规则属于产品独有领域，继续保留；Agent loop、Provider、密钥、MCP、Skill、Plugin、记忆存储与渠道路由禁止再造。
+第一批已把 AccountLifecycle、EvidencePack、ContentAsset 三个 repository 重复的 SQLite connection/transaction 基础设施合并为一个 `MarketingDomainRepository`，随后物理删除顶层 `marketing_os/`：产品身份进入 `agent/product.py`，账号经营、受众、证据、内容资产和平台表达进入 `agent/marketing/`，消息策略进入 `gateway/`，模型工具进入原生 `tools/`。原生 memory guidance 也已加入“用户偏好—账号模型—业务记录—技能候选”分层学习规则，避免营销哲学只停留在外挂工具说明里。下一批将把 session scope 进一步归还 SessionDB、通知窗口统一复用 `/sethome`，再淘汰 `accounts.json + agent_core.db` 兼容读取。Agent loop、Provider、密钥、MCP、Skill、Plugin、记忆存储与渠道路由禁止再造。
 
 ## 五、v0.1 收口范围
 

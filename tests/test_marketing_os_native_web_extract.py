@@ -4,8 +4,8 @@ import hermes_state
 import httpx
 import pytest
 from hermes_state import SessionDB
-from marketing_os.data_paths import MarketingDataPaths
-from marketing_os.domains import EvidenceRepository
+from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.domains import EvidenceRepository
 from model_tools import get_tool_definitions, handle_function_call
 from tools import web_tools
 

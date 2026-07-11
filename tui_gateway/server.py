@@ -4235,7 +4235,7 @@ def _make_agent(
     # from durable session state on resume, or use the explicit scope attached
     # to a not-yet-persisted desktop draft. Mutable account facts never enter
     # this cached prefix; the native account tool remains authoritative.
-    from marketing_os.session_scope import (
+    from agent.marketing.session_scope import (
         build_account_scope_prompt,
         read_session_scope,
     )
@@ -4403,7 +4403,7 @@ def _init_session(
     if db is not None:
         row = db.get_session(key)
         if row:
-            from marketing_os.session_scope import scope_from_session_row
+            from agent.marketing.session_scope import scope_from_session_row
 
             with _sessions_lock:
                 if sid in _sessions:
@@ -4905,7 +4905,7 @@ def _(rid, params: dict) -> dict:
     source = str(params.get("source") or "tui").strip() or "tui"
     marketing_scope = None
     if account_id := str(params.get("marketing_account_id") or "").strip():
-        from marketing_os.session_scope import resolve_account_scope
+        from agent.marketing.session_scope import resolve_account_scope
 
         try:
             marketing_scope = resolve_account_scope(
@@ -4924,7 +4924,7 @@ def _(rid, params: dict) -> dict:
     profile_home = _profile_home(profile)
     if parent_session_id:
         from hermes_state import SessionDB
-        from marketing_os.session_scope import read_session_scope
+        from agent.marketing.session_scope import read_session_scope
 
         parent_db = None
         close_parent_db = False
@@ -5381,7 +5381,7 @@ def _(rid, params: dict) -> dict:
     profile_resume_cwd = str(found.get("cwd") or "").strip() or _profile_configured_cwd(
         profile_home
     )
-    from marketing_os.session_scope import scope_from_session_row
+    from agent.marketing.session_scope import scope_from_session_row
 
     marketing_scope = scope_from_session_row(found)
 
@@ -12875,7 +12875,7 @@ def _(rid, params: dict) -> dict:
 @method("marketing.product.status")
 def _(rid, _params: dict) -> dict:
     """Expose Marketing OS as native capabilities of the Hermes runtime."""
-    from marketing_os.product import (
+    from agent.product import (
         PRODUCT_ECOSYSTEM_COMPATIBILITY,
         PRODUCT_ID,
         PRODUCT_NAME,
@@ -12904,7 +12904,7 @@ def _(rid, _params: dict) -> dict:
 @method("marketing.accounts.list")
 def _(rid, _params: dict) -> dict:
     """Read connected account summaries from the canonical product store."""
-    from marketing_os.domains import AccountContextRepository
+    from agent.marketing.domains import AccountContextRepository
 
     return _ok(rid, AccountContextRepository().list_accounts())
 
@@ -12912,7 +12912,7 @@ def _(rid, _params: dict) -> dict:
 @method("marketing.account.context")
 def _(rid, params: dict) -> dict:
     """Read the native operating context for one user-scoped account."""
-    from marketing_os.domains import AccountContextRepository
+    from agent.marketing.domains import AccountContextRepository
 
     params = params if isinstance(params, dict) else {}
     try:
@@ -12933,7 +12933,7 @@ def _(rid, params: dict) -> dict:
         return err
     scope = session.get("marketing_scope")
     if scope is None:
-        from marketing_os.session_scope import read_session_scope
+        from agent.marketing.session_scope import read_session_scope
 
         with _session_db(session) as db:
             scope = read_session_scope(db, session.get("session_key") or "")
@@ -12956,7 +12956,7 @@ def _(rid, params: dict) -> dict:
             "account scope is immutable after conversation history begins; create a new chat",
         )
 
-    from marketing_os.session_scope import (
+    from agent.marketing.session_scope import (
         build_account_scope_prompt,
         resolve_account_scope,
     )

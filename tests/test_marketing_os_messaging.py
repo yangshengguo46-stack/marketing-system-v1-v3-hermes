@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import MessageEvent
 from gateway.session import SessionSource
-from marketing_os.messaging import prepare_inbound_message
+from gateway.product_messaging import prepare_inbound_message
 
 
 def _event(text="帮我分析今天热点", user_id="owner", chat_id="chat-1"):

@@ -13,7 +13,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from marketing_os.data_paths import MarketingDataPaths
+from agent.marketing.data_paths import MarketingDataPaths
 
 
 _ACCOUNT_FIELDS = ("id", "platform", "username", "label", "status", "stats")

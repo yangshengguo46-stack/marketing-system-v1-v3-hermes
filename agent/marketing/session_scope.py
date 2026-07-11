@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from marketing_os.domains import AccountContextRepository
+from agent.marketing.domains import AccountContextRepository
 
 
 _SCOPE_ID = re.compile(r"^[A-Za-z0-9_.:@-]{1,160}$")

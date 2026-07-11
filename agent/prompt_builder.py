@@ -27,7 +27,7 @@ from agent.skill_utils import (
     skill_matches_platform,
 )
 from utils import atomic_json_write
-from marketing_os.product import PRODUCT_AGENT_IDENTITY, PRODUCT_RUNTIME_GUIDANCE
+from agent.product import PRODUCT_AGENT_IDENTITY, PRODUCT_RUNTIME_GUIDANCE
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +147,14 @@ MEMORY_GUIDANCE = (
     "in 7 days. If a fact will be stale in a week, it does not belong in memory. "
     "If you've discovered a new way to do something, solved a problem that could be "
     "necessary later, save it as a skill with the skill tool.\n"
+    "For account operations, learn at three different levels instead of mixing them: "
+    "stable user preferences and repeated rejections may enter governed memory; account "
+    "audience, positioning and strategy belong to the versioned account model; drafts, "
+    "hot topics, publishing attempts, receipts and metrics belong to durable business "
+    "records. A publishing result may create a strategy or skill candidate, but must not "
+    "silently rewrite the account model after one sample. Repeated successful workflows "
+    "may become skills only after their evidence, platform scope and failure recovery are "
+    "clear. Never store complete articles, scripts or transient research as memory.\n"
     "Write memories as declarative facts, not instructions to yourself. "
     "'User prefers concise responses' ✓ — 'Always respond concisely' ✗. "
     "'Project uses pytest with xdist' ✓ — 'Run tests with pytest -n 4' ✗. "

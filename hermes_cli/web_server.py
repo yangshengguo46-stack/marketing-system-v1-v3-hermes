@@ -1433,7 +1433,7 @@ def _marketing_os_product_update_payload() -> Dict[str, Any] | None:
     """Describe the safe core-update path when running inside Marketing OS."""
 
     try:
-        from marketing_os.product import (
+        from agent.product import (
             is_product_runtime,
             product_core_update_status,
         )

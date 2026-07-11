@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from marketing_os.domains.evidence import EvidenceRepository
-from marketing_os.session_scope import read_tool_session_scope
+from agent.marketing.domains.evidence import EvidenceRepository
+from agent.marketing.session_scope import read_tool_session_scope
 
 
 def enrich_tool_result_with_evidence(

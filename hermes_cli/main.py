@@ -9071,7 +9071,7 @@ def cmd_update(args):
     # behavior. Core integration is therefore release-gated; independent
     # ecosystem updates keep using their native commands.
     try:
-        from marketing_os.product import PRODUCT_CORE_UPDATE_MESSAGE, is_product_runtime
+        from agent.product import PRODUCT_CORE_UPDATE_MESSAGE, is_product_runtime
 
         if is_product_runtime():
             print(PRODUCT_CORE_UPDATE_MESSAGE)

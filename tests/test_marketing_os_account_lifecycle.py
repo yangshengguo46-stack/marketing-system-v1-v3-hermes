@@ -4,8 +4,8 @@ import pytest
 
 import hermes_state
 from hermes_state import SessionDB
-from marketing_os.data_paths import MarketingDataPaths
-from marketing_os.domains import AccountContextRepository, AccountLifecycleRepository
+from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.domains import AccountContextRepository, AccountLifecycleRepository
 from model_tools import handle_function_call
 
 

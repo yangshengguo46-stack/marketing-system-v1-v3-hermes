@@ -18,8 +18,7 @@ const SOURCE_DIRS = [
   'optional-mcps',
   'acp_adapter',
   'acp_registry',
-  'tui_gateway',
-  'marketing_os'
+  'tui_gateway'
 ]
 
 const ROOT_FILES = [

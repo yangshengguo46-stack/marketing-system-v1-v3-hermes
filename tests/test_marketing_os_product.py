@@ -2,7 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agent.prompt_builder import DEFAULT_AGENT_IDENTITY, HERMES_AGENT_HELP_GUIDANCE
-from marketing_os.product import (
+from agent.product import (
     PRODUCT_AGENT_IDENTITY,
     PRODUCT_ARCHITECTURE_PRINCIPLES,
     PRODUCT_CORE_UPDATE_MESSAGE,
@@ -19,7 +19,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_product_source_is_owned_by_the_main_repository():
-    assert (PROJECT_ROOT / "marketing_os").is_dir()
+    assert (PROJECT_ROOT / "agent" / "marketing").is_dir()
+    assert (PROJECT_ROOT / "gateway" / "product_messaging.py").is_file()
+    assert (PROJECT_ROOT / "tools" / "marketing_tools.py").is_file()
+    assert not (PROJECT_ROOT / "marketing_os").exists()
     assert (PROJECT_ROOT / "hermes_cli" / "main.py").is_file()
     assert (PROJECT_ROOT / "apps" / "desktop" / "package.json").is_file()
     assert not (PROJECT_ROOT / "runtime" / "hermes-agent").exists()
@@ -36,12 +39,12 @@ def test_marketing_os_is_the_native_agent_identity():
 
 def test_runtime_guidance_keeps_hermes_primary_without_a_second_agent():
     assert HERMES_AGENT_HELP_GUIDANCE.startswith(PRODUCT_RUNTIME_GUIDANCE)
-    assert "single primary runtime" in HERMES_AGENT_HELP_GUIDANCE
+    assert "one native operating system" in HERMES_AGENT_HELP_GUIDANCE
     assert "external plugin" in HERMES_AGENT_HELP_GUIDANCE
     assert "HTTP-routed agent" in HERMES_AGENT_HELP_GUIDANCE
     assert "enhanced Hermes agent" in HERMES_AGENT_HELP_GUIDANCE
     assert "Marketing OS capabilities may both" in HERMES_AGENT_HELP_GUIDANCE
-    assert any("never a second runtime" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
+    assert any("never external attachments" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
     assert any("not historical directories" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
     assert "marketing_plan_content_production" in HERMES_AGENT_HELP_GUIDANCE
     assert "marketing_draft_content_create" in HERMES_AGENT_HELP_GUIDANCE

@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from marketing_os.data_paths import MarketingDataPaths
-from marketing_os.domains.storage import MarketingDomainRepository
+from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.domains.storage import MarketingDomainRepository
 
 
 VERIFIED_STATUS = "verified"

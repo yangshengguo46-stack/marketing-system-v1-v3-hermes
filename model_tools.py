@@ -1177,7 +1177,7 @@ def handle_function_call(
         # This seam runs only after the actual collector returns; the model has
         # no parallel tool that can promote an arbitrary URL to verified data.
         try:
-            from marketing_os.evidence_capture import enrich_tool_result_with_evidence
+            from agent.marketing.evidence_capture import enrich_tool_result_with_evidence
 
             result = enrich_tool_result_with_evidence(
                 tool_name=function_name,

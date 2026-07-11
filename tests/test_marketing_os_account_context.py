@@ -1,9 +1,9 @@
 import json
 import sqlite3
 
-from marketing_os.data_paths import MarketingDataPaths
-from marketing_os.domains import AccountContextRepository
-from marketing_os.session_scope import build_account_scope_prompt, resolve_account_scope
+from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.domains import AccountContextRepository
+from agent.marketing.session_scope import build_account_scope_prompt, resolve_account_scope
 from hermes_state import SessionDB
 from model_tools import get_tool_definitions, handle_function_call
 from toolsets import resolve_toolset

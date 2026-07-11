@@ -11,7 +11,7 @@ import dataclasses
 import os
 from typing import Any
 
-from marketing_os.product import is_product_runtime
+from agent.product import is_product_runtime
 
 
 SUPPORTED_PLATFORMS = {"feishu", "weixin"}

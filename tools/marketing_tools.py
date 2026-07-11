@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 
-from marketing_os.domains import (
+from agent.marketing.domains import (
     AccountContextRepository,
     AccountLifecycleRepository,
     ContentAssetRepository,
-    ContentProductionPlanner,
+    ContentProductionPolicy,
     EvidenceRepository,
 )
-from marketing_os.session_scope import enforce_tool_account_scope
+from agent.marketing.session_scope import enforce_tool_account_scope
 from tools.registry import registry
 
 
@@ -329,7 +329,7 @@ def _plan_content_production(args: dict, **kwargs) -> str:
                 evidence_ids=evidence_refs,
             )
         ]
-    result = ContentProductionPlanner().plan(
+    result = ContentProductionPolicy().plan(
         objective=str(args.get("objective") or ""),
         kind=str(args.get("kind") or "auto"),
         platforms=args.get("platforms"),
