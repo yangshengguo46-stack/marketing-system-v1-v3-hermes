@@ -520,3 +520,162 @@ def test_native_publish_result_seam_ignores_every_other_tool(tmp_path):
         result=original,
         session_id="session-publish",
     ) == original
+
+
+def test_native_publish_effect_reuses_hermes_consent_and_provider(tmp_path, monkeypatch):
+    from agent.marketing.providers import (
+        clear_publish_providers,
+        register_publish_provider,
+    )
+    from model_tools import handle_function_call
+
+    class FakeProvider:
+        name = "playwright_mcp"
+
+        def publish(self, action):
+            return {
+                "outcome": "published",
+                "platform_post_id": "answer-native-1",
+                "published_url": "https://www.zhihu.com/question/1/answer/9",
+                "verification_source": "fake_works_list_query",
+            }
+
+        def query(self, action):
+            return {"outcome": "unknown", "failure_code": "not_needed"}
+
+    paths, _plan, _preflight, asset_id = _review_ready_asset(tmp_path)
+    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
+    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
+    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
+    monkeypatch.setattr(
+        "agent.marketing.session_scope.read_tool_session_scope",
+        lambda **_kwargs: {"user_id": "default", "account_id": "acct-1"},
+    )
+    monkeypatch.setattr(
+        "agent.marketing.publish_capture.read_tool_session_scope",
+        lambda **_kwargs: {"user_id": "default", "account_id": "acct-1"},
+    )
+    monkeypatch.setattr(
+        "tools.approval.request_elicitation_consent", lambda *_args, **_kwargs: "accept"
+    )
+    publishing = PublishingRepository(paths)
+    action = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    clear_publish_providers()
+    register_publish_provider(FakeProvider())
+    try:
+        result = json.loads(
+            handle_function_call(
+                "marketing_effect_publish",
+                {"action_id": action["id"]},
+                task_id="turn-1",
+                session_id="session-publish",
+            )
+        )
+    finally:
+        clear_publish_providers()
+
+    assert result["marketing_publish_result"]["receipt_id"]
+    assert publishing.get_action(action["id"])["status"] == "published"
+
+
+def test_native_publish_effect_denial_never_starts_provider(tmp_path, monkeypatch):
+    from agent.marketing.providers import (
+        clear_publish_providers,
+        register_publish_provider,
+    )
+    from model_tools import handle_function_call
+
+    calls = []
+
+    class FakeProvider:
+        name = "playwright_mcp"
+
+        def publish(self, action):
+            calls.append(action["id"])
+            return {"outcome": "unknown"}
+
+        def query(self, action):
+            return {"outcome": "unknown"}
+
+    paths, _plan, _preflight, asset_id = _review_ready_asset(tmp_path)
+    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
+    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
+    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
+    monkeypatch.setattr(
+        "agent.marketing.session_scope.read_tool_session_scope",
+        lambda **_kwargs: {"user_id": "default", "account_id": "acct-1"},
+    )
+    monkeypatch.setattr(
+        "agent.marketing.publish_capture.read_tool_session_scope",
+        lambda **_kwargs: {"user_id": "default", "account_id": "acct-1"},
+    )
+    monkeypatch.setattr(
+        "tools.approval.request_elicitation_consent", lambda *_args, **_kwargs: "decline"
+    )
+    publishing = PublishingRepository(paths)
+    action = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    clear_publish_providers()
+    register_publish_provider(FakeProvider())
+    try:
+        result = json.loads(
+            handle_function_call(
+                "marketing_effect_publish",
+                {"action_id": action["id"]},
+                task_id="turn-1",
+                session_id="session-publish",
+            )
+        )
+    finally:
+        clear_publish_providers()
+
+    assert "not approved" in result["error"]
+    assert calls == []
+    assert publishing.get_action(action["id"])["status"] == "prepared"
+
+
+def test_publish_effect_tools_are_hidden_until_real_provider_registers():
+    from agent.marketing.providers import (
+        clear_publish_providers,
+        register_publish_provider,
+    )
+    from model_tools import get_tool_definitions
+
+    class FakeProvider:
+        name = "playwright_mcp"
+
+        def publish(self, action):
+            return {"outcome": "unknown"}
+
+        def query(self, action):
+            return {"outcome": "unknown"}
+
+    clear_publish_providers()
+    before = {
+        item["function"]["name"]
+        for item in get_tool_definitions(enabled_toolsets=["marketing"], quiet_mode=True)
+    }
+    register_publish_provider(FakeProvider())
+    try:
+        after = {
+            item["function"]["name"]
+            for item in get_tool_definitions(enabled_toolsets=["marketing"], quiet_mode=True)
+        }
+    finally:
+        clear_publish_providers()
+
+    assert "marketing_effect_publish" not in before
+    assert "marketing_publish_query" not in before
+    assert "marketing_effect_publish" in after
+    assert "marketing_publish_query" in after

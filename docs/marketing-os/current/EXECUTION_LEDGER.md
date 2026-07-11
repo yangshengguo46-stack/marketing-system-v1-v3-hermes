@@ -23,7 +23,7 @@
 | Preflight | InfluenceOS + 不可变记录 + draft gate | automated | 真实账号历史校准、发布前版本链 |
 | Receipt/Learning store | ReceiptRef、LearningCandidate、PublishAction 合同 | automated | 真实 Provider 与跨天指标尚未接入 |
 | Hermes memory/Skill | 原生能力保留，经营写入规则已加入 | automated | 候选治理后投影、重复成功流程沉淀 |
-| Publishing/metrics | 原生发布 intent、幂等、unknown 恢复、回执校验、5 段指标 checkpoint | automated | 缺实际 L3 Provider、一次性语义审批和真人发布 |
+| Publishing/metrics | 原生发布 intent、一次性审批、Provider 插槽、unknown 恢复、回执校验、5 段指标 checkpoint | automated | 缺实际 L3 Provider 和真人发布 |
 | Packaging | 自包含 staging 可构建 | automated | 精简依赖、签名、公证、干净机断网首启 |
 | High-end video | 独立项目/合同 | deferred | 不计桌面 v0.1 完成 |
 
@@ -53,11 +53,12 @@
 - `agent/marketing/publish_capture.py` 接入 Hermes 原生 post-tool 路径；只有未来的受信 `marketing_effect_publish` 工具结果能自动结算回执，没有模型可调用的“手填成功”工具。
 - `marketing_prepare_publish` 与 `marketing_read_publish_state` 已进入原生 tool registry，负责预写 action 与重启恢复，不负责假装发布。
 - Hermes 原生 Camofox 持久身份已从“整个本机 profile 共用”改为“绑定账号时按 `account_id` 隔离”；切换账号会轮换浏览器 identity，不再复用同一 cookie 世界。
+- `marketing_effect_publish` 已复用 Hermes 原生 MCP elicitation 一次性确认；拒绝、静默或超时不会启动 Provider，也不能永久放行最终发布。
+- 发布 Provider 进入 `agent/marketing/providers/` 原生注册器；只有真实 Provider 已注册时 effect/query 工具才会出现在 Agent 工具集中，避免空按钮和占位能力。
 
 尚未完成：
 
-- `marketing_effect_publish` 的一次性语义审批与真实 Provider 尚未实现；当前不能宣称能自动发布。
-- Playwright/MCP 与账号专属 profile 的真实发布动作、作品列表反查尚未接入。
+- Playwright/MCP 的真实发布动作与作品列表反查 Provider 尚未接入；当前不能宣称能自动发布。
 - 仍需一条开发机真人图文发布和重启恢复证据，证据等级目前停在 `automated`。
 
 完成口径：
@@ -113,8 +114,8 @@
 
 ## 当前回归基线
 
-- 营销、Agent、Gateway 与审批组合回归：415 passed。
-- LOOP-01 发布账本、回执门与恢复路径单文件回归：13 passed（已包含在上述 415 项组合回归中）。
+- 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
+- LOOP-01 发布账本、审批、回执门与恢复路径单文件回归：16 passed（后续组合回归必须继续包含）。
 - Desktop runtime staging：2 passed。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。
 - 下一次更新本台账时必须写：代码路径、测试、dev-runtime、packaged、human-loop 和仍未完成的风险。

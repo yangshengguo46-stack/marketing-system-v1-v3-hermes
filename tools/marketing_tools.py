@@ -13,6 +13,7 @@ from agent.marketing.domains import (
     PublishingRepository,
 )
 from agent.marketing.session_scope import enforce_tool_account_scope
+from agent.marketing.providers import get_publish_provider, has_publish_providers
 from agent.marketing.intelligence import (
     OperatingLoopRepository,
     create_content_production_preflight,
@@ -296,6 +297,33 @@ READ_PUBLISH_STATE_SCHEMA = {
             "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
         },
         "required": [],
+    },
+}
+
+EXECUTE_PUBLISH_SCHEMA = {
+    "name": "marketing_effect_publish",
+    "description": (
+        "Execute one prepared publish action through its trusted native provider. This is an "
+        "irreversible external effect and always asks the user for one-shot confirmation. Do not "
+        "call it unless marketing_prepare_publish returned the action_id and the user asked to publish."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"action_id": {"type": "string"}},
+        "required": ["action_id"],
+    },
+}
+
+QUERY_PUBLISH_SCHEMA = {
+    "name": "marketing_publish_query",
+    "description": (
+        "Query the trusted provider for an executing or unknown publish action. Use this before "
+        "any retry. A verified platform ID or stable work URL can recover the action to published."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"action_id": {"type": "string"}},
+        "required": ["action_id"],
     },
 }
 
@@ -610,6 +638,97 @@ def _read_publish_state(args: dict, **kwargs) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def _publish_action_in_scope(args: dict, **kwargs) -> tuple[PublishingRepository, dict]:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    repository = PublishingRepository()
+    action = repository.get_action(str(args.get("action_id") or ""))
+    if action["user_id"] != user_id or action["account_id"] != account_id:
+        raise ValueError("publish action is outside the bound conversation account")
+    return repository, action
+
+
+def _execute_publish(args: dict, **kwargs) -> str:
+    repository, action = _publish_action_in_scope(args, **kwargs)
+    if action["status"] != "prepared":
+        raise ValueError(f"publish action cannot execute from {action['status']}")
+    provider = get_publish_provider(action["provider"])
+    from tools.approval import request_elicitation_consent
+
+    consent = request_elicitation_consent(
+        message=(
+            f"Publish {action['platform']} asset {action['asset_id']} "
+            f"version {action['asset_version']}"
+        ),
+        description=(
+            "This will create a public platform post. Approval is valid for this action once only; "
+            "silence, timeout or denial will not publish."
+        ),
+        surface="marketing-publish",
+    )
+    if consent != "accept":
+        return json.dumps(
+            {
+                "error": "Publishing was not approved by the user.",
+                "outcome": "cancel" if consent == "cancel" else "decline",
+                "action_id": action["id"],
+            },
+            ensure_ascii=False,
+        )
+    approval_ref = (
+        f"hermes-once:{kwargs.get('session_id') or kwargs.get('task_id') or 'session'}:"
+        f"{kwargs.get('tool_call_id') or action['id']}"
+    )
+    executing = repository.mark_execution_started(
+        action["id"], approval_ref=approval_ref
+    )
+    try:
+        provider_result = provider.publish(executing)
+    except Exception as exc:
+        provider_result = {
+            "outcome": "unknown",
+            "failure_code": "provider_exception_after_start",
+            "provider_error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+    if not isinstance(provider_result, dict):
+        provider_result = {
+            "outcome": "unknown",
+            "failure_code": "invalid_provider_result",
+        }
+    return json.dumps(
+        {"marketing_publish_result": {"action_id": action["id"], **provider_result}},
+        ensure_ascii=False,
+    )
+
+
+def _query_publish(args: dict, **kwargs) -> str:
+    _repository, action = _publish_action_in_scope(args, **kwargs)
+    if action["status"] not in {"executing", "unknown"}:
+        raise ValueError(f"publish action does not require recovery from {action['status']}")
+    provider = get_publish_provider(action["provider"])
+    try:
+        provider_result = provider.query(action)
+    except Exception as exc:
+        provider_result = {
+            "outcome": "unknown",
+            "failure_code": "provider_query_failed",
+            "provider_error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+    if not isinstance(provider_result, dict):
+        provider_result = {
+            "outcome": "unknown",
+            "failure_code": "invalid_provider_query_result",
+        }
+    return json.dumps(
+        {"marketing_publish_result": {"action_id": action["id"], **provider_result}},
+        ensure_ascii=False,
+    )
+
+
 registry.register(
     name="marketing_read_accounts",
     toolset="marketing",
@@ -698,4 +817,24 @@ registry.register(
     handler=_read_publish_state,
     description="Recover unresolved publishing actions and due metric checkpoints.",
     emoji="🧾",
+)
+
+registry.register(
+    name="marketing_effect_publish",
+    toolset="marketing",
+    schema=EXECUTE_PUBLISH_SCHEMA,
+    handler=_execute_publish,
+    check_fn=has_publish_providers,
+    description="Execute a one-shot approved external publish effect through a trusted provider.",
+    emoji="🚀",
+)
+
+registry.register(
+    name="marketing_publish_query",
+    toolset="marketing",
+    schema=QUERY_PUBLISH_SCHEMA,
+    handler=_query_publish,
+    check_fn=has_publish_providers,
+    description="Recover an unknown publish outcome by querying the original provider.",
+    emoji="🔍",
 )

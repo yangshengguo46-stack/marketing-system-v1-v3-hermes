@@ -9,7 +9,7 @@ from agent.marketing.domains.publishing import PublishingRepository
 from agent.marketing.session_scope import read_tool_session_scope
 
 
-PUBLISH_TOOL_NAME = "marketing_effect_publish"
+PUBLISH_TOOL_NAMES = {"marketing_effect_publish", "marketing_publish_query"}
 PUBLISH_RESULT_KEY = "marketing_publish_result"
 
 
@@ -29,7 +29,7 @@ def enrich_tool_result_with_publish_receipt(
     session before the action is settled.
     """
 
-    if tool_name != PUBLISH_TOOL_NAME or not isinstance(result, str):
+    if tool_name not in PUBLISH_TOOL_NAMES or not isinstance(result, str):
         return result
     scope = read_tool_session_scope(task_id=task_id, session_id=session_id)
     if not scope:
