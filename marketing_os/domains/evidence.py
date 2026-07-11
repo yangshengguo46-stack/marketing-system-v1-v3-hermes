@@ -6,12 +6,12 @@ import hashlib
 import json
 import re
 import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from marketing_os.data_paths import MarketingDataPaths
+from marketing_os.domains.storage import MarketingDomainRepository
 
 
 VERIFIED_STATUS = "verified"
@@ -24,7 +24,7 @@ _TRACKING_QUERY_KEYS = {
 }
 
 
-class EvidenceRepository:
+class EvidenceRepository(MarketingDomainRepository):
     """Persist evidence only after a real Hermes collector returned content.
 
     The repository has no model-facing create method.  The native tool result
@@ -33,7 +33,7 @@ class EvidenceRepository:
     """
 
     def __init__(self, paths: MarketingDataPaths | None = None):
-        self.paths = paths or MarketingDataPaths.from_env()
+        super().__init__(paths)
         self._ensure_schema()
 
     def capture_web_extract_result(
@@ -147,7 +147,7 @@ class EvidenceRepository:
         if not refs:
             return []
         placeholders = ",".join("?" for _ in refs)
-        with self._connect() as db:
+        with self._connection() as db:
             rows = db.execute(
                 f"""SELECT * FROM evidence_records
                 WHERE user_id=? AND account_id=? AND status='verified'
@@ -181,7 +181,7 @@ class EvidenceRepository:
             params.append(status)
         query += " ORDER BY captured_at DESC, id DESC LIMIT ?"
         params.append(safe_limit)
-        with self._connect() as db:
+        with self._connection() as db:
             rows = db.execute(query, params).fetchall()
         records = [_record(row) for row in rows]
         return {
@@ -195,8 +195,7 @@ class EvidenceRepository:
         }
 
     def _ensure_schema(self) -> None:
-        self.paths.agent_db.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as db:
+        with self._connection() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS evidence_records (
@@ -224,26 +223,6 @@ class EvidenceRepository:
                     ON evidence_records(user_id, account_id, status, captured_at);
                 """
             )
-
-    def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.paths.agent_db, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys=ON")
-        return db
-
-    @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-
 
 def _decode_result(result: Any) -> dict[str, Any]:
     if isinstance(result, dict):

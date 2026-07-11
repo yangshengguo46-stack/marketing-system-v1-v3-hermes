@@ -156,6 +156,12 @@ FastAPI、外层 adapter 和旧 store 反向依赖已经随旧源码删除。当
 
 裁剪红线：terminal/file/patch/execute_code、coding context、browser/web/vision、MCP/Skill/Plugin 和 p5.js/HyperFrames/Manim/信息图能力必须保留，因为内容端需要它们生成可复现图片、动态图表、UI 演示和视频 clip。下一步先建立干净的产品构建 venv 与 extras allowlist，再讨论删除 `infographic/website/bootstrap-installer` 等仓库资产。
 
+### P1-05 Marketing OS 增强层必须继续去重，但不能误删营销领域
+
+2026-07-11 核对发现 `marketing_os/` 仅约 2,800 行、110KB，旧壳和第二 Agent 已经不在；剩余风险是 owner 重叠，不是代码体积。裁决清单与删除顺序见 `docs/marketing-os/architecture/MARKETING_OS_DEDUPLICATION.md`。
+
+第一批已把 AccountLifecycle、EvidencePack、ContentAsset 三个 repository 重复的 SQLite connection/transaction 基础设施合并为一个 `MarketingDomainRepository`。下一批将把 session scope 的读取/绑定进一步归还 SessionDB，把飞书/微信通知窗口持久化统一复用 Gateway 原生 `/sethome`，再通过一次性 migration 淘汰 `accounts.json + agent_core.db` 兼容读取。账号经营、证据、内容资产和平台表达规则属于产品独有领域，继续保留；Agent loop、Provider、密钥、MCP、Skill、Plugin、记忆存储与渠道路由禁止再造。
+
 ## 五、v0.1 收口范围
 
 ### 必须交付

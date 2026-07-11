@@ -6,23 +6,23 @@ import json
 import hashlib
 import sqlite3
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any
 
 from marketing_os.data_paths import MarketingDataPaths
 from marketing_os.domains.article_drafts import ArticleDraftValidator
 from marketing_os.domains.content_production import CONTENT_KINDS, VALID_PLATFORMS
 from marketing_os.domains.evidence import EvidenceRepository
+from marketing_os.domains.storage import MarketingDomainRepository
 
 
 ASSET_TYPES = {"script", "video", "image", "caption"}
 CONTENT_ASSET_PLATFORMS = VALID_PLATFORMS | {"multi_article"}
 
 
-class ContentAssetRepository:
+class ContentAssetRepository(MarketingDomainRepository):
     def __init__(self, paths: MarketingDataPaths | None = None):
-        self.paths = paths or MarketingDataPaths.from_env()
+        super().__init__(paths)
         self._ensure_schema()
 
     def save_production_plan(
@@ -138,7 +138,7 @@ class ContentAssetRepository:
         revision_of: str = "",
     ) -> dict[str, Any]:
         plan_id_value = _bounded_text(plan_id, "plan_id", 120)
-        with self._connect() as db:
+        with self._connection() as db:
             plan_row = db.execute(
                 """SELECT * FROM content_production_plans
                 WHERE id=? AND user_id=? AND account_id=?""",
@@ -152,7 +152,7 @@ class ContentAssetRepository:
         next_version = 1
         revision_of_value = str(revision_of or "").strip()
         if revision_of_value:
-            with self._connect() as db:
+            with self._connection() as db:
                 parent_row = db.execute(
                     """SELECT * FROM content_assets
                     WHERE id=? AND user_id=? AND account_id=?""",
@@ -319,7 +319,7 @@ class ContentAssetRepository:
         return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
 
     def get(self, *, asset_id: str, user_id: str, account_id: str) -> dict[str, Any]:
-        with self._connect() as db:
+        with self._connection() as db:
             row = db.execute(
                 "SELECT * FROM content_assets WHERE id=? AND user_id=? AND account_id=?",
                 (asset_id, user_id, account_id),
@@ -352,7 +352,7 @@ class ContentAssetRepository:
             params.append(platform)
         query += " ORDER BY updated_at DESC LIMIT ?"
         params.append(safe_limit)
-        with self._connect() as db:
+        with self._connection() as db:
             rows = db.execute(query, params).fetchall()
         return {
             "user_id": user_id,
@@ -362,8 +362,7 @@ class ContentAssetRepository:
         }
 
     def _ensure_schema(self) -> None:
-        self.paths.agent_db.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as db:
+        with self._connection() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS content_assets (
@@ -496,26 +495,6 @@ class ContentAssetRepository:
                         row["account_id"],
                     ),
                 )
-
-    def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.paths.agent_db, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys=ON")
-        return db
-
-    @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-
 
 def _record(row: sqlite3.Row) -> dict[str, Any]:
     value = dict(row)

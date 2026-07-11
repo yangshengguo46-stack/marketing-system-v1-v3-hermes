@@ -5,19 +5,18 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from marketing_os.data_paths import MarketingDataPaths
+from marketing_os.domains.storage import MarketingDomainRepository
 
 
-class AccountLifecycleRepository:
+class AccountLifecycleRepository(MarketingDomainRepository):
     """Own the first account-strategy transitions inside the Hermes runtime."""
 
     def __init__(self, paths: MarketingDataPaths | None = None):
-        self.paths = paths or MarketingDataPaths.from_env()
+        super().__init__(paths)
         self._ensure_schema()
 
     def begin_project(
@@ -159,8 +158,7 @@ class AccountLifecycleRepository:
         return _hypothesis_record(confirmed, operation="confirmed")
 
     def _ensure_schema(self) -> None:
-        self.paths.agent_db.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as db:
+        with self._connection() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS account_strategy_projects (
@@ -201,26 +199,6 @@ class AccountLifecycleRepository:
                     ON audience_hypotheses(user_id, account_id, project_id);
                 """
             )
-
-    def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.paths.agent_db, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys=ON")
-        return db
-
-    @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-
 
 def _require_active_project(
     db: sqlite3.Connection, *, user_id: str, account_id: str, project_id: str
