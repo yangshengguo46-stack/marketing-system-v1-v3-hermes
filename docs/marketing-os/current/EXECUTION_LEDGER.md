@@ -23,7 +23,8 @@
 |---|---|---|---|
 | Hermes 产品本体 | 完整源码已成为主仓库根 | code + automated | 上游吸收 CI、正式签名发布 |
 | State/data owner | 经营项目、受众、证据、内容、预演、回执和学习表已进入 Hermes `state.db`；旧 `agent_core.db` 一次迁移后只读保留 | dev-runtime | 删除兼容路径、中央匿名知识服务尚未实现 |
-| Short-video sound intelligence | Playwright MCP 原生短视频/BGM 结构化采集；Sound/Observation/Evidence 入 `state.db`；预演、草稿快照和发布回执携带声音身份 | automated | 各平台真人页面 selector 验收、跨日声音速度、匹配样本因果归因 |
+| Short-video sound intelligence | Playwright MCP 原生短视频/BGM 结构化采集；Sound/Observation/Evidence 入 `state.db`；预演、草稿快照和发布回执携带声音身份 | automated | 真人 selector 验收冻结到账号登录 UI 完成后；再做跨日速度与匹配样本归因 |
+| Central knowledge core | 匿名贡献 wire contract、最小群组门槛、稀疏值抑制、时间衰减、Ed25519 签名知识包和 Hermes 验签落库 | automated | 传输认证、服务端持久化、删除传播、运维与真实多用户规模 |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
 | Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放上下文，删除时清理 profile | dev-runtime | 切换 UI、真人多账号登录/退出 |
@@ -38,7 +39,19 @@
 
 ## 当前唯一主线
 
-### LOOP-01 真实发布回执进入三核闭环
+### ARCH-01 数据飞轮与学习闭环收口
+
+在 UI 和真人平台验收前，先完成所有不会因界面变化而改变的 owner、状态机和数据合同：
+
+1. 私有事实、预演、发布、指标、复盘、候选和学习投影全部留在 Hermes 原生 owner。
+2. 只有用户授权且去标识化的结构贡献可以形成中央 outbox。
+3. 中央服务必须独立执行最小群组、稀疏抑制、时间衰减和签名；客户端独立验签。
+4. 全局知识只进入先验层，本地 Receipt、用户明确偏好和账号事实拥有更高权重。
+5. 完成 metric checkpoint → retro → candidate → memory/strategy/skill projection 后，才冻结底层合同进入 UI。
+
+当前落地：匿名 contribution 不含 user/account/consent/source candidate；中央聚合内核已执行 k-anonymity 门槛、类别稀疏抑制和时间衰减；知识包使用 Ed25519 签名，Hermes 验签后写入 `state.db` 并标记为 `global_prior_below_local_receipt`。尚未实现网络传输、服务端持久化和删除传播，不能宣称云端已上线。
+
+### LOOP-01 真实发布回执进入三核闭环（底层完成，真人验收冻结）
 
 目标：让一个真实内容 action 从 Hermes 原生审批/执行边界得到可验证 ReceiptRef，并且未知结果不能被当成成功。
 
@@ -86,10 +99,7 @@
 - Playwright/MCP 的真实发布动作与作品列表反查 Provider 尚未接入；当前不能宣称能自动发布。
 - 仍需一条开发机真人图文发布和重启恢复证据，证据等级目前停在 `automated`。
 
-下一纵切（当前环境核验后确定）：
-
-1. 用平台 Skill 实现知乎第一条真人流程：headed 登录检测、认证状态回写、装载已审核变体、填写编辑器、一次性确认、作品页反查。
-2. 同步开始第一阶段前端：只显示账号、内容审核、发布确认、执行状态和 unknown 恢复；前端不承载业务或执行真相。
+真人纵切依赖账号登录 UI，当前冻结。底层架构收口后统一实现第一阶段前端：账号登录/切换、内容审核、发布确认、执行状态和 unknown 恢复；前端不承载业务或执行真相。随后再用平台 Skill 验收知乎与短视频真人流程。
 
 浏览器二进制口径：开发机先使用后端检测到的系统 Chrome/Edge 验证链路；产品安装包必须在
 “单独受控 Chromium”与“首次明确授权后下载”之间完成体积、离线和签名验证。禁止为了省掉
@@ -104,11 +114,11 @@
 
 ## 后续顺序（不得并行扩建）
 
-### FLYWHEEL-01 中央知识服务
+### FLYWHEEL-02 中央服务工程化
 
-- 当前只完成本地、隐私治理后的贡献 outbox 与知识包 schema；尚未连接任何中央上传接口。
-- 服务端必须执行最小群组阈值、稀疏组合抑制、时间衰减、平台/地区/版本分层和删除传播。
-- 返回客户端的知识包必须有版本、样本量、时间窗、校验和与签名；只做先验，不覆盖本地 Receipt。
+- 聚合与签名内核已完成；尚未连接上传/下载接口。
+- 增加服务端持久化、传输认证、限流、重放保护、删除传播和密钥轮换。
+- 真实部署前用合成多租户数据做隐私攻击与稀疏重识别测试。
 
 ### LOOP-02 指标回收
 
@@ -150,13 +160,14 @@
 - 微信/飞书体验扩张。
 - Windows 正式交付。
 - 高阶视频 Provider 和多 Agent 片场。
+- 抖音/B站/小红书 BGM 真人页面 selector 验收（等待账号登录 UI）。
 - 未校准的流量、完播、互动和 InfluenceOS 对外承诺。
 
 ## 当前回归基线
 
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
-- 当前营销域、内容生产、短视频声音、数据飞轮与账号 MCP 生命周期组合回归：Python 280 passed；Node 12 passed，包含旧库迁移、匿名贡献治理、BGM post-tool 证据链与真实浏览器重启恢复。
+- 当前营销域、内容生产、短视频声音、数据飞轮与账号 MCP 生命周期组合回归：Python 283 passed；Node 12 passed，包含旧库迁移、匿名贡献治理、中央群组抑制/签名知识包、BGM post-tool 证据链与真实浏览器重启恢复。
 - LOOP-01 发布账本、审批、回执门与恢复路径单文件回归：16 passed（后续组合回归必须继续包含）。
-- Desktop runtime staging：2 passed。
+- Desktop runtime staging：5 passed。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。
 - 下一次更新本台账时必须写：代码路径、测试、dev-runtime、packaged、human-loop 和仍未完成的风险。

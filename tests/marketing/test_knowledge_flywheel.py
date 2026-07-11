@@ -3,10 +3,12 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import KnowledgeFlywheelRepository
 from hermes_state import SessionDB
+from services.marketing_knowledge import KnowledgeAggregator
 
 
 def _repository(tmp_path, *, candidate_status: str = "accepted"):
@@ -101,3 +103,39 @@ def test_contribution_rejects_identity_and_raw_content_fields(tmp_path):
             **base,
             features={"username": "creator"},
         )
+
+
+def test_export_strips_local_identity_and_verified_pack_installs_as_prior(tmp_path):
+    repository = _repository(tmp_path)
+    contribution = repository.create_contribution(
+        user_id="default",
+        account_id="acct-1",
+        source_candidate_id="learn-1",
+        consent_ref="private-consent-record",
+        schema_version="knowledge.v1",
+        cohort={"platform": "zhihu", "knowledge_type": "content_prior"},
+        features={"hook_type": "contrarian"},
+        outcomes={"save_rate": 0.08},
+    )
+    envelope = repository.export_contribution(contribution["id"])
+
+    assert "user_id" not in envelope
+    assert "account_id" not in envelope
+    assert "consent_ref" not in envelope
+    assert "source_candidate_id" not in envelope
+    private_key = Ed25519PrivateKey.generate()
+    pack = KnowledgeAggregator(
+        signing_key=private_key,
+        key_id="product-1",
+        min_cohort_size=2,
+        min_category_size=2,
+    ).build_packs(
+        [envelope, {**envelope, "contribution_ref": "contrib_second"}],
+        version="v1",
+    )[0]
+    installed = repository.install_knowledge_pack(
+        pack,
+        public_keys={"product-1": private_key.public_key()},
+    )
+    assert installed["status"] == "verified"
+    assert installed["authority"] == "global_prior_below_local_receipt"

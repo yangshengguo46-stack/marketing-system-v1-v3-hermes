@@ -79,6 +79,18 @@ Hermes `state.db` 是会话、账号、受众、内容、预演、回执、指�
 - 中央知识以带版本、平台、地区、时间窗、样本量和置信度的知识包返回 Agent，只提供先验；本地 Receipt 永远拥有更高事实权重。
 - 本地贡献 outbox 的 owner 是 `agent/marketing/domains/knowledge_flywheel.py`；它只接收治理通过的 learning candidate 和显式 consent_ref，不拥有网络上传或中央聚合。
 
+中央知识服务是唯一有充分证据新增的产品边界：多用户聚合不可能由任一用户本机 Hermes 正确拥有。它只接收 `marketing.knowledge-contribution.v1` 匿名 wire envelope，不接收本地 user/account/consent/source candidate。`services/marketing_knowledge` 独立执行最小群组、稀疏类别抑制和时间衰减，并用 Ed25519 签署 `marketing.knowledge-pack.v1`。Hermes 必须使用内置信任公钥独立验签后才能落库；Electron 不参与贡献、上传、聚合、验签或安装。
+
+```text
+Hermes local facts
+→ governed contribution outbox
+→ anonymous wire envelope
+→ central threshold/decay aggregation
+→ signed knowledge pack
+→ Hermes checksum/signature verification
+→ global prior (below local Receipt)
+```
+
 ### 短视频声音信号
 
 `mcp/marketing-browser` 原生增加 `browser_extract_short_video_signals`，从真实账号浏览器页面提取作品指标和平台声音身份。工具结果经 Hermes post-tool seam 固化为 EvidenceRecord、Sound 和 ShortVideoObservation，Electron 不采集、不解析也不保存这些数据。

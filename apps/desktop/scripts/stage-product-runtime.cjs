@@ -36,6 +36,7 @@ const ROOT_FILES = [
   'hermes_state.py',
   'hermes_time.py',
   'hermes_logging.py',
+  'marketing_knowledge_protocol.py',
   'utils.py',
   'mcp_serve.py'
 ]
