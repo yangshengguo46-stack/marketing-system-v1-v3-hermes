@@ -148,6 +148,7 @@ Marketing OS 不再为每个平台堆一套 Electron IPC、Provider 和脚本补
 - 同一账号 profile 同时只允许一个执行 owner；切换账号不复制 Cookie，也不共享 profile。
 - AccountRegistry 的断开/删除直接驱动 MCP owner 释放；MCP 同时定期复核账号权限，防止绕过 owner 的旧写入留下活跃上下文。只有删除才清理该账号 profile/output。
 - stdio 关闭必须先等待 persistent BrowserContext 落盘，禁止依靠父进程强杀，否则重启后可能丢失登录态。
+- 未认证或需重新验证的账号由 MCP owner 自动创建 headed context；已认证账号才允许恢复为后台 context，Electron 不选择浏览器模式。
 
 原生账号生命周期落在 `agent/account_registry.py` 与 `hermes_state.SessionDB.marketing_accounts`。
 AccountRegistry 签发的 BrowserContext lease 只包含 session、user、account、platform、profile_key

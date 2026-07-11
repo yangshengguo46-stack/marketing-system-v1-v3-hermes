@@ -37,6 +37,23 @@ def test_scoped_mcp_config_replaces_discovery_mode_with_account_lease():
     assert result["dynamic_tool_refresh"] is False
     assert result["env"]["HERMES_BROWSER_PROFILE_ROOT"] == "/profiles"
     assert json.loads(result["env"]["HERMES_MARKETING_ACCOUNT_LEASE"]) == lease
+    assert "HERMES_BROWSER_HEADED" not in result["env"]
+
+
+def test_pending_account_opens_the_mcp_owned_browser_in_headed_mode():
+    result = mcp_tool._scoped_server_config(
+        {"scoped_args": ["server.js"]},
+        {
+            "session_id": "session-login",
+            "user_id": "default",
+            "account_id": "acct-login",
+            "platform": "zhihu",
+            "profile_key": "zhihu:acct-login",
+            "auth_state": "unauthenticated",
+        },
+    )
+
+    assert result["env"]["HERMES_BROWSER_HEADED"] == "1"
 
 
 def test_scoped_mcp_config_requires_an_execution_command():

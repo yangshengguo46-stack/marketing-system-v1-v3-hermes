@@ -70,6 +70,7 @@
 - 开发机真实 Hermes 工具分发已完成 `AccountRegistry → scoped MCP → navigate → snapshot`，52 个 Playwright 工具可见，证据等级为 `dev-runtime`。
 - AccountRegistry 在断开/删除时直接通知原生 MCP owner，MCP 也持续复核权限：无论上下文是否活跃都能完成释放；删除只清理该账号的 profile/output，同平台其他账号不受影响。
 - 已发现并修复 MCP stdio 关闭时未等待 persistent context 落盘的问题；开发机完成“写入持久 Cookie → 关闭 MCP → 重启同账号 → Cookie 恢复”验证。
+- BrowserContext 是否可见由 MCP owner 根据 AccountRegistry 的 auth_state 决定：未登录/需验证自动 headed，认证后可后台运行；Electron 不传浏览器模式。
 
 尚未完成：
 

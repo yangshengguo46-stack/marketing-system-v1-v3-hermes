@@ -3304,6 +3304,8 @@ def _scoped_server_config(config: dict, lease: dict) -> dict:
         ensure_ascii=False,
         separators=(",", ":"),
     )
+    if str(lease.get("auth_state") or "unknown") != "authenticated":
+        env["HERMES_BROWSER_HEADED"] = "1"
     result["env"] = env
     return result
 
