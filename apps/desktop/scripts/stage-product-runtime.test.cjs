@@ -4,7 +4,19 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
-const { ROOT_FILES, SOURCE_DIRS, stageProductRuntime } = require('./stage-product-runtime.cjs')
+const { ROOT_FILES, SOURCE_DIRS, discoverPython, stageProductRuntime } = require('./stage-product-runtime.cjs')
+
+test('discovers the real build Python used by the product runtime', () => {
+  const python = process.env.MARKETING_OS_BUILD_PYTHON || path.resolve(__dirname, '..', '..', '..', '.venv', 'bin', 'python')
+  assert.ok(fs.existsSync(python), `build Python missing: ${python}`)
+
+  const info = discoverPython(python)
+
+  assert.equal(fs.realpathSync(info.executable), fs.realpathSync(python))
+  assert.ok(fs.statSync(info.base_prefix).isDirectory())
+  assert.ok(fs.statSync(info.purelib).isDirectory())
+  assert.match(info.version, /^\d+\.\d+\.\d+$/)
+})
 
 test('stages a self-contained product runtime without editable checkout pointers', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'marketing-os-runtime-stage-'))

@@ -150,6 +150,12 @@ FastAPI、外层 adapter 和旧 store 反向依赖已经随旧源码删除。当
 
 旧总台账仍写 19 个工具、61%/72% 和不同“当前入口”；15 号台账已超过千行且章节乱序。以后工具数、版本、启用能力和测试事实由代码生成；手工台账只记录产品判断、验证等级、阻断和下一步。
 
+### P1-04 Hermes 产品化裁剪必须先缩运行时，禁止误删代码能力
+
+2026-07-11 完成首轮源码与打包体积审计，结论见 `docs/marketing-os/architecture/HERMES_PRODUCT_PRUNING.md`。当前 staged runtime 447MB，其中 Agent 源码仅 40MB，site-packages 达 304MB；Google、开发调试和未交付消息平台依赖是主要浪费。隔离 profile 实测核心依赖 88MB、核心加飞书 139MB，说明首阶段无需阉割 Agent 即可把 staged runtime 降到约 231–282MB。
+
+裁剪红线：terminal/file/patch/execute_code、coding context、browser/web/vision、MCP/Skill/Plugin 和 p5.js/HyperFrames/Manim/信息图能力必须保留，因为内容端需要它们生成可复现图片、动态图表、UI 演示和视频 clip。下一步先建立干净的产品构建 venv 与 extras allowlist，再讨论删除 `infographic/website/bootstrap-installer` 等仓库资产。
+
 ## 五、v0.1 收口范围
 
 ### 必须交付

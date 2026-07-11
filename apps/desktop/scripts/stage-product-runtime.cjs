@@ -63,7 +63,7 @@ function copyTree(source, destination, options = {}) {
 
 function discoverPython(pythonExecutable) {
   const script = [
-    'import json, platform, sys, sysconfig',
+    'import json, platform, sys, sysconfig;',
     'print(json.dumps({',
     '"executable": sys.executable,',
     '"base_prefix": sys.base_prefix,',
@@ -72,7 +72,7 @@ function discoverPython(pythonExecutable) {
     '"platform": sys.platform,',
     '"machine": platform.machine()',
     '}))'
-  ].join(';')
+  ].join(' ')
   return JSON.parse(execFileSync(pythonExecutable, ['-c', script], { encoding: 'utf8' }))
 }
 
