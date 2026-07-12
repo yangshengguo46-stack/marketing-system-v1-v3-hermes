@@ -14,11 +14,10 @@ class MarketingDomainRepository:
 
     def __init__(self, paths: MarketingDataPaths | None = None):
         self.paths = paths or MarketingDataPaths.from_env()
-        if self.paths.agent_db.name == "state.db":
-            from hermes_state import SessionDB
+        from hermes_state import SessionDB
 
-            owner = SessionDB(db_path=self.paths.agent_db)
-            owner.close()
+        owner = SessionDB(db_path=self.paths.agent_db)
+        owner.close()
 
     def _connect(self) -> sqlite3.Connection:
         # SessionDB owns schema and data migrations. Repositories retain a

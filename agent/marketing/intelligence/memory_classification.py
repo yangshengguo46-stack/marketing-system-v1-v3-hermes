@@ -1,10 +1,15 @@
-"""UPGRADE-03 (Q15): Three-layer knowledge classification for memory candidates.
+"""Legacy three-layer classification for *memory candidates*, not knowledge truth.
 
 Inspired by Cheat on Content's knowledge base structure:
   - source: where the knowledge came from (tool/agent/user/published_result)
   - entity: what the knowledge is about (account/platform/industry/audience)
   - topic: specific subject within the entity (e.g. "optimal_posting_time",
            "title_patterns", "audience_age_distribution")
+
+User/model statements classified here remain preferences, events or pending
+interpretations.  They never enter the governed platform/account/content
+knowledge bases without the evidence and receipt gates owned by
+``KnowledgeBaseRepository``.
 
 This module provides deterministic classification helpers that produce
 structured classification dicts to be stored in memory_candidates.classification_json.

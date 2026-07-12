@@ -7,6 +7,7 @@ from .content_assets import ContentAssetRepository
 from .content_policy import ContentProductionPolicy
 from .evidence import EvidenceRepository
 from .knowledge_flywheel import KnowledgeFlywheelRepository
+from .knowledge_bases import KnowledgeBaseRepository
 from .publishing import PublishingRepository
 from .short_video_signals import ShortVideoSignalRepository
 
@@ -18,6 +19,7 @@ __all__ = [
     "ContentProductionPolicy",
     "EvidenceRepository",
     "KnowledgeFlywheelRepository",
+    "KnowledgeBaseRepository",
     "PublishingRepository",
     "ShortVideoSignalRepository",
     "article_stylebooks",

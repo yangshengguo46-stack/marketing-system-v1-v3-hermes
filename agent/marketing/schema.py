@@ -278,6 +278,34 @@ CREATE INDEX IF NOT EXISTS idx_short_video_observation_scope
     ON marketing_short_video_observations(user_id,account_id,platform,observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_short_video_observation_sound
     ON marketing_short_video_observations(sound_id,platform,observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS marketing_knowledge_entries (
+    id TEXT PRIMARY KEY,
+    knowledge_base TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT 'default',
+    account_id TEXT,
+    platform TEXT,
+    region TEXT NOT NULL DEFAULT '',
+    content_kind TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL,
+    statement_json TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    confidence REAL NOT NULL DEFAULT 0.5,
+    version TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    valid_from TEXT NOT NULL,
+    valid_to TEXT,
+    supersedes_id TEXT REFERENCES marketing_knowledge_entries(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_knowledge_retrieval
+    ON marketing_knowledge_entries(knowledge_base,user_id,account_id,platform,topic,status,valid_from);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_marketing_knowledge_identity
+    ON marketing_knowledge_entries(knowledge_base,user_id,IFNULL(account_id,''),IFNULL(platform,''),
+                                   region,content_kind,topic,version,source_kind,source_ref);
 """
 
 LEGACY_MARKETING_TABLES = (
@@ -293,4 +321,5 @@ LEGACY_MARKETING_TABLES = (
     "marketing_metric_checkpoints",
     "marketing_sounds",
     "marketing_short_video_observations",
+    "marketing_knowledge_entries",
 )

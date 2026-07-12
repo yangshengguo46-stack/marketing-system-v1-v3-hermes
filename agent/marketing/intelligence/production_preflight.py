@@ -20,7 +20,7 @@ from .influence_score import build_influence_score
 from .preflight_decision import build_preflight_decision
 
 
-CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.2"
+CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.3"
 
 
 def _text(value: Any) -> str:
@@ -125,6 +125,17 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
     memory_score = _memory_signal(params)
     sound_context = params.get("sound_context") if isinstance(params.get("sound_context"), dict) else {}
     sound_candidates = sound_context.get("candidates") if isinstance(sound_context.get("candidates"), list) else []
+    knowledge_context = params.get("knowledge_context") if isinstance(params.get("knowledge_context"), dict) else {}
+    knowledge_counts = {
+        key: len(knowledge_context.get(key) or [])
+        for key in ("platform", "account", "content")
+        if isinstance(knowledge_context.get(key) or [], list)
+    }
+    knowledge_support = _clamp(
+        min(0.45, knowledge_counts.get("account", 0) * 0.12)
+        + min(0.25, knowledge_counts.get("platform", 0) * 0.08)
+        + min(0.15, knowledge_counts.get("content", 0) * 0.03)
+    )
 
     audience_fit = 0.78 if has_audience else 0.34
     evidence_strength = _clamp(0.28 + min(0.45, 0.15 * url_evidence))
@@ -143,6 +154,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         "production_feasibility": production_feasibility,
         "cost_safety": _clamp(cost_safety),
         "memory_support": memory_score,
+        "knowledge_support": knowledge_support,
     }
     if kind in {"faceless_video", "premium_human_video"}:
         top_sound_score = max(
@@ -150,7 +162,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
             default=0.0,
         )
         scores["sound_fit"] = _clamp(top_sound_score)
-        overall = _clamp(
+        base_overall = (
             scores["audience_fit"] * 0.22
             + scores["evidence_strength"] * 0.19
             + scores["platform_fit"] * 0.15
@@ -160,14 +172,21 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
             + scores["sound_fit"] * 0.13
         )
     else:
-        overall = _clamp(
-            scores["audience_fit"] * 0.24
+        base_overall = (
+            scores["audience_fit"] * 0.23
             + scores["evidence_strength"] * 0.22
             + scores["platform_fit"] * 0.18
             + scores["production_feasibility"] * 0.18
             + scores["cost_safety"] * 0.10
-            + scores["memory_support"] * 0.08
+            + scores["memory_support"] * 0.09
         )
+    # Knowledge is confidence coverage, not proof that a draft is good.  It
+    # may reduce confidence when absent, but generic principles cannot inflate
+    # a weak content score merely by existing in the database.
+    scores["knowledge_confidence_factor"] = _clamp(
+        0.9 + scores["knowledge_support"] * 0.1
+    )
+    overall = _clamp(base_overall * scores["knowledge_confidence_factor"])
     scores["overall"] = overall
 
     blockers: list[str] = []
@@ -256,6 +275,13 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
                 for item in sound_candidates[:10]
                 if isinstance(item, dict) and item.get("sound_id")
             ],
+            "knowledge_entry_ids": [
+                str(item.get("id"))
+                for base in ("account", "platform", "content")
+                for item in (knowledge_context.get(base) or [])[:20]
+                if isinstance(item, dict) and item.get("id")
+            ],
+            "knowledge_counts": knowledge_counts,
         },
         "separation": {
             "general_preflight_owns": [
@@ -265,6 +291,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
                 "production_feasibility",
                 "cost_safety",
                 "sound_fit_for_short_video",
+                "governed_knowledge_support",
                 "content_lane_go_no_go",
             ],
             "high_end_video_previsualization_agent_owns": [

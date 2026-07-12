@@ -10,6 +10,7 @@ from agent.marketing.domains import (
     ContentAssetRepository,
     ContentProductionPolicy,
     EvidenceRepository,
+    KnowledgeBaseRepository,
     PublishingRepository,
     ShortVideoSignalRepository,
 )
@@ -178,6 +179,27 @@ READ_SOUND_TRENDS_SCHEMA = {
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
         },
         "required": ["platform"],
+    },
+}
+
+READ_KNOWLEDGE_SCHEMA = {
+    "name": "marketing_read_knowledge",
+    "description": (
+        "Read governed platform, account, or content knowledge. Platform knowledge contains current "
+        "rules and operating guidance; account knowledge contains only accepted receipt-backed learning; "
+        "content knowledge contains attention, psychology, sociology, trust and propagation principles. "
+        "User statements and model opinions are never knowledge truth."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "knowledge_base": {"type": "string", "enum": ["platform", "account", "content"]},
+            "platform": {"type": "string"},
+            "content_kind": {"type": "string"},
+            "topics": {"type": "array", "items": {"type": "string"}},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+        },
+        "required": ["knowledge_base"],
     },
 }
 
@@ -453,6 +475,12 @@ def _plan_content_production(args: dict, **kwargs) -> str:
         account_id=account_id,
         plan=result,
     )
+    knowledge_context = KnowledgeBaseRepository().retrieve_for_preflight(
+        user_id=user_id,
+        account_id=account_id,
+        platforms=result.get("target_platforms") or [],
+        content_kind=result["kind"],
+    )
     sound_context: dict = {}
     if result["kind"] in {"faceless_video", "premium_human_video"}:
         sound_context = {
@@ -482,6 +510,7 @@ def _plan_content_production(args: dict, **kwargs) -> str:
             "plan": checkpoint,
             "evidence_refs": evidence_refs,
             "sound_context": sound_context,
+            "knowledge_context": knowledge_context,
         },
     )
     return json.dumps(
@@ -546,6 +575,26 @@ def _read_sound_trends(args: dict, **kwargs) -> str:
         objective=str(args.get("objective") or ""),
         window_hours=int(args.get("window_hours") or 72),
         limit=int(args.get("limit") or 20),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _read_knowledge(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    base = str(args.get("knowledge_base") or "")
+    result = KnowledgeBaseRepository().retrieve(
+        knowledge_base=base,
+        user_id=user_id,
+        account_id=account_id if base == "account" else None,
+        platform=str(args.get("platform") or "") or None,
+        content_kind=str(args.get("content_kind") or "") or None,
+        topics=args.get("topics") or [],
+        limit=int(args.get("limit") or 50),
     )
     return json.dumps(result, ensure_ascii=False)
 
@@ -855,6 +904,15 @@ registry.register(
     handler=_read_sound_trends,
     description="Read evidence-backed short-video sound momentum for the current account.",
     emoji="🎵",
+)
+
+registry.register(
+    name="marketing_read_knowledge",
+    toolset="marketing",
+    schema=READ_KNOWLEDGE_SCHEMA,
+    handler=_read_knowledge,
+    description="Read governed platform, account, or content knowledge without allowing model writes.",
+    emoji="📚",
 )
 
 registry.register(

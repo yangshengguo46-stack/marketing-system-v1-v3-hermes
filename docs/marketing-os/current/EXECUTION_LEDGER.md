@@ -25,6 +25,7 @@
 | State/data owner | 经营项目、受众、证据、内容、预演、回执和学习表已进入 Hermes `state.db`；旧 `agent_core.db` 一次迁移后只读保留 | dev-runtime | 删除兼容路径、中央匿名知识服务尚未实现 |
 | Short-video sound intelligence | Playwright MCP 原生短视频/BGM 结构化采集；Sound/Observation/Evidence 入 `state.db`；预演、草稿快照和发布回执携带声音身份 | automated | 真人 selector 验收冻结到账号登录 UI 完成后；再做跨日速度与匹配样本归因 |
 | Central knowledge core | 匿名贡献 wire contract、最小群组门槛、稀疏值抑制、时间衰减、Ed25519 签名知识包和 Hermes 验签落库 | automated | 传输认证、服务端持久化、删除传播、运维与真实多用户规模 |
+| Three knowledge bases | Platform/Account/Content 三库进入 Hermes `state.db`；内置 stylebook 与社会注意力原理；账号知识只接收 Receipt-backed accepted learning；用户/模型写入被拒绝 | automated | 海量采集、规则时效巡检、Retro 自动投影、治理 UI |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
 | Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放上下文，删除时清理 profile | dev-runtime | 切换 UI、真人多账号登录/退出 |
@@ -50,6 +51,10 @@
 5. 完成 metric checkpoint → retro → candidate → memory/strategy/skill projection 后，才冻结底层合同进入 UI。
 
 当前落地：匿名 contribution 不含 user/account/consent/source candidate；中央聚合内核已执行 k-anonymity 门槛、类别稀疏抑制和时间衰减；知识包使用 Ed25519 签名，Hermes 验签后写入 `state.db` 并标记为 `global_prior_below_local_receipt`。尚未实现网络传输、服务端持久化和删除传播，不能宣称云端已上线。
+
+三类知识库已按 Git 历史有效合同重建到 Hermes 原生 owner：平台库恢复 source/region/version/valid time 和平台 stylebook；内容库恢复个体注意力、认知负荷、情绪、信任、身份与群体传播的可观察模型；账号库只允许真实 Receipt 支持且已 accepted 的 LearningCandidate 晋升。旧 `memory_classification` 明确降级为“记忆候选分类器”，用户/模型陈述不再具有知识写权限。内容计划与 Preflight 已读取三库覆盖度及 entry IDs，公式升级为 `content-production-preflight-v0.3`。
+
+开发机真实 `state.db` 已完成 schema 升级并种入 2 条平台 stylebook、8 条内容原理、0 条账号知识；账号库为 0 证明系统没有把用户陈述或模型推断伪装成账号经验。升级前备份位于 `backups/knowledge-bases-20260712-143602/state.db`。
 
 ### LOOP-01 真实发布回执进入三核闭环（底层完成，真人验收冻结）
 
@@ -166,7 +171,7 @@
 ## 当前回归基线
 
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
-- 当前营销域、内容生产、短视频声音、数据飞轮与账号 MCP 生命周期组合回归：Python 283 passed；Node 12 passed，包含旧库迁移、匿名贡献治理、中央群组抑制/签名知识包、BGM post-tool 证据链与真实浏览器重启恢复。
+- 当前营销域、三类知识库、内容生产、短视频声音、数据飞轮与账号 MCP 生命周期组合回归：Python 287 passed；Node 12 passed，包含知识防污染、Receipt-backed 账号晋升、旧库迁移、匿名贡献治理、中央群组抑制/签名知识包、BGM post-tool 证据链与真实浏览器重启恢复。
 - LOOP-01 发布账本、审批、回执门与恢复路径单文件回归：16 passed（后续组合回归必须继续包含）。
 - Desktop runtime staging：5 passed。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。

@@ -173,6 +173,7 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
         "marketing_plan_content_production",
         "marketing_read_evidence_pack",
         "marketing_read_sound_trends",
+        "marketing_read_knowledge",
         "marketing_read_content_assets",
         "marketing_draft_article_create",
         "marketing_draft_content_create",

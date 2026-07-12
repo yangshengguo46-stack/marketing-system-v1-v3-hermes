@@ -99,6 +99,15 @@ Hermes local facts
 
 ## 三核数据合同
 
+三类知识库的详细边界见 `KNOWLEDGE_ARCHITECTURE.md`：
+
+- Platform KB 保存带地区、版本和有效期的平台“术”。
+- Account KB 只接收 Receipt-backed、Retro 后已接受的账号经验。
+- Content KB 保存可检验的人类注意力、信任和群体传播“道”。
+- Hermes 用户记忆保存偏好与拒绝，不是知识真相；用户/模型不能直接写三类知识库。
+
+内容计划会在 Preflight 前检索三库并只保存知识 entry ID 和覆盖度；知识原文不复制进不可变预演记录。权威顺序为本地账号回执知识、有效平台知识、内容原理、签名聚合先验，模型推断只能成为候选。
+
 ### PreflightRecord
 
 - action 前创建。

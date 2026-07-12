@@ -209,7 +209,13 @@ class KnowledgeFlywheelRepository(MarketingDomainRepository):
                     now,
                 ),
             )
-        return self.get_knowledge_pack(verified["id"])
+        installed = self.get_knowledge_pack(verified["id"])
+        from agent.marketing.domains.knowledge_bases import KnowledgeBaseRepository
+
+        installed["knowledge_entry"] = KnowledgeBaseRepository(self.paths).install_signed_pack(
+            verified
+        )
+        return installed
 
     def get_knowledge_pack(self, pack_id: str) -> dict[str, Any]:
         with self._connection() as db:

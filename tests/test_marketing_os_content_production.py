@@ -140,6 +140,15 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
             enabled_toolsets=["marketing"],
         )
     )
+    knowledge = json.loads(
+        handle_function_call(
+            "marketing_read_knowledge",
+            {"knowledge_base": "content", "content_kind": "article_soft"},
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
     created = json.loads(
         handle_function_call(
             "marketing_draft_article_create",
@@ -187,7 +196,10 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     assert planned["account_scope"]["account_id"] == "acct-1"
     assert planned["checkpoint_status"] == "planned"
     assert planned["preflight"]["id"].startswith("preflight_")
-    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.2"
+    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.3"
+    assert planned["preflight"]["scores"]["knowledge_support"] > 0
+    assert planned["preflight"]["scores"]["knowledge_confidence_factor"] <= 1
+    assert knowledge["total"] >= 8
     assert planned["preflight"]["decision"]["version"] == "preflight-decision-v0.1"
     assert planned["preflight"]["influence_score"]["version"] == "influenceos-score-v0.1"
     assert planned["recommended_next_action"].startswith("使用已固化")
@@ -226,6 +238,7 @@ def test_content_write_schema_cannot_override_account_scope():
     assert "account_id" not in plan_properties
     assert "marketing_read_evidence_pack" in by_name
     assert "marketing_read_sound_trends" in by_name
+    assert "marketing_read_knowledge" in by_name
     assert "marketing_read_content_assets" in by_name
 
 
