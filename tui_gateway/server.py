@@ -13015,6 +13015,45 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, result)
 
 
+@method("marketing.content.assets.list")
+def _(rid, params: dict) -> dict:
+    """List bounded review summaries from the native content asset owner."""
+    from agent.marketing.domains import ContentAssetRepository
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    if not account_id:
+        return _err(rid, -32602, "account_id is required")
+    try:
+        result = ContentAssetRepository().list_summaries(
+            user_id=str(params.get("user_id") or "default"),
+            account_id=account_id,
+            status=str(params.get("status") or "").strip() or None,
+            platform=str(params.get("platform") or "").strip() or None,
+            limit=int(params.get("limit") or 20),
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
+
+
+@method("marketing.content.asset.get")
+def _(rid, params: dict) -> dict:
+    """Read one full content asset only when the user opens its review surface."""
+    from agent.marketing.domains import ContentAssetRepository
+
+    params = params if isinstance(params, dict) else {}
+    try:
+        asset = ContentAssetRepository().get(
+            asset_id=str(params.get("asset_id") or ""),
+            user_id=str(params.get("user_id") or "default"),
+            account_id=str(params.get("account_id") or ""),
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    return _ok(rid, {"asset": asset})
+
+
 @method("marketing.knowledge.contributions.list")
 def _(rid, params: dict) -> dict:
     """List one account's local consent and central-sync audit records."""

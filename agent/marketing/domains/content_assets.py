@@ -437,6 +437,66 @@ class ContentAssetRepository(MarketingDomainRepository):
             "total": len(rows),
         }
 
+    def list_summaries(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        status: str | None = None,
+        platform: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Return bounded review metadata without loading full draft bodies into UI."""
+
+        result = self.list(
+            user_id=user_id,
+            account_id=account_id,
+            status=status,
+            platform=platform,
+            limit=limit,
+        )
+        summaries = []
+        for asset in result["assets"]:
+            content = asset.get("content") if isinstance(asset.get("content"), dict) else {}
+            validation = (
+                content.get("validation")
+                if isinstance(content.get("validation"), dict)
+                else {}
+            )
+            variants = (
+                content.get("platform_variants")
+                if isinstance(content.get("platform_variants"), dict)
+                else {}
+            )
+            summaries.append(
+                {
+                    key: asset.get(key)
+                    for key in (
+                        "id",
+                        "account_id",
+                        "platform",
+                        "title",
+                        "type",
+                        "status",
+                        "parent_id",
+                        "experiment_id",
+                        "topic",
+                        "hook",
+                        "version",
+                        "created_at",
+                        "updated_at",
+                    )
+                }
+                | {
+                    "production_kind": content.get("production_kind"),
+                    "review_status": content.get("review_status"),
+                    "validation_ready": validation.get("ready"),
+                    "validation_issue_count": len(validation.get("issues") or []),
+                    "target_platforms": list(variants),
+                }
+            )
+        return {**result, "assets": summaries}
+
     def _ensure_schema(self) -> None:
         with self._connection() as db:
             db.executescript(
