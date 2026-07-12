@@ -2099,6 +2099,11 @@ function createBundledProductBackend(dashboardArgs) {
         pythonPathEntries: [runtime.agentRoot, runtime.sitePackages],
         venvRoot: null
       }),
+      HERMES_NODE_EXECUTABLE: process.execPath,
+      HERMES_NODE_IS_ELECTRON: '1',
+      NODE_PATH: runtime.nodeModules,
+      HERMES_BROWSER_EXECUTABLE: runtime.playwrightBrowserExecutable,
+      PLAYWRIGHT_BROWSERS_PATH: runtime.playwrightBrowsers,
       PYTHONNOUSERSITE: '1',
       PYTHONUTF8: '1'
     },

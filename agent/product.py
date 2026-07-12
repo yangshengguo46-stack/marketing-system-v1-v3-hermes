@@ -71,14 +71,26 @@ def bundled_browser_mcp_config(
         values.get("HERMES_BROWSER_PROFILE_ROOT")
         or (Path(values.get("HERMES_HOME") or Path.home() / ".hermes") / "browser-profiles")
     )
+    electron_node = str(values.get("HERMES_NODE_IS_ELECTRON") or "").strip() == "1"
     return {
         "command": node,
         "args": [str(entry), "--schema-only"],
         "scoped_args": [str(entry)],
         "session_scope": "marketing_account",
         "env": {
+            **({"ELECTRON_RUN_AS_NODE": "1"} if electron_node else {}),
             "HERMES_BROWSER_PROFILE_ROOT": profile_root,
             "HERMES_BROWSER_OUTPUT_ROOT": str(Path(profile_root).parent / "browser-output"),
+            **(
+                {"PLAYWRIGHT_BROWSERS_PATH": str(values["PLAYWRIGHT_BROWSERS_PATH"])}
+                if str(values.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+                else {}
+            ),
+            **(
+                {"HERMES_BROWSER_EXECUTABLE": str(values["HERMES_BROWSER_EXECUTABLE"])}
+                if str(values.get("HERMES_BROWSER_EXECUTABLE") or "").strip()
+                else {}
+            ),
         },
         "supports_parallel_tool_calls": False,
         "connect_timeout": 45,

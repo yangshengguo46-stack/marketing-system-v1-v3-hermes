@@ -28,21 +28,39 @@ function resolveBundledProductRuntime(resourcesPath, options = {}) {
     throw new Error('unsupported bundled Marketing OS runtime manifest')
   }
   if (manifest.platform !== platform || manifest.arch !== arch) {
-    throw new Error(
-      `bundled runtime target mismatch: ${manifest.platform}/${manifest.arch} != ${platform}/${arch}`
-    )
+    throw new Error(`bundled runtime target mismatch: ${manifest.platform}/${manifest.arch} != ${platform}/${arch}`)
   }
   const pythonExecutable = safeRuntimePath(root, manifest.python?.executable, 'python executable')
   const agentRoot = safeRuntimePath(root, manifest.paths?.agent, 'agent')
   const sitePackages = safeRuntimePath(root, manifest.paths?.sitePackages, 'site-packages')
+  const nodeModules = safeRuntimePath(root, manifest.paths?.nodeModules, 'browser node_modules')
+  const playwrightBrowsers = safeRuntimePath(root, manifest.paths?.playwrightBrowsers, 'Playwright browsers')
+  const playwrightBrowserExecutable = safeRuntimePath(
+    root,
+    manifest.paths?.playwrightBrowserExecutable,
+    'Playwright browser executable'
+  )
   for (const [label, target] of [
     ['python executable', pythonExecutable],
     ['Hermes agent', path.join(agentRoot, 'hermes_cli', 'main.py')],
-    ['site-packages', sitePackages]
+    ['site-packages', sitePackages],
+    ['marketing browser MCP', path.join(agentRoot, 'mcp', 'marketing-browser', 'src', 'server.js')],
+    ['browser node_modules', nodeModules],
+    ['Playwright browsers', playwrightBrowsers],
+    ['Playwright browser executable', playwrightBrowserExecutable]
   ]) {
     if (!fsImpl.existsSync(target)) throw new Error(`bundled ${label} missing: ${target}`)
   }
-  return { root, manifest, pythonExecutable, agentRoot, sitePackages }
+  return {
+    root,
+    manifest,
+    pythonExecutable,
+    agentRoot,
+    sitePackages,
+    nodeModules,
+    playwrightBrowsers,
+    playwrightBrowserExecutable
+  }
 }
 
 module.exports = { resolveBundledProductRuntime, safeRuntimePath }

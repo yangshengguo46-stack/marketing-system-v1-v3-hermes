@@ -1,6 +1,6 @@
 'use strict'
 
-const { execFileSync } = require('node:child_process')
+const { execFileSync, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 
@@ -15,6 +15,7 @@ const SOURCE_DIRS = [
   'cron',
   'assets',
   'locales',
+  'mcp',
   'optional-mcps',
   'acp_adapter',
   'acp_registry',
@@ -44,7 +45,7 @@ const ROOT_FILES = [
 function copyTree(source, destination, options = {}) {
   fs.cpSync(source, destination, {
     recursive: true,
-    dereference: true,
+    dereference: options.dereference !== false,
     preserveTimestamps: true,
     filter(item) {
       const relative = path.relative(source, item)
@@ -74,6 +75,66 @@ function discoverPython(pythonExecutable) {
     '}))'
   ].join(' ')
   return JSON.parse(execFileSync(pythonExecutable, ['-c', script], { encoding: 'utf8' }))
+}
+
+function productionDependencyPaths(agentRoot) {
+  const result = spawnSync(
+    'npm',
+    ['ls', '--all', '--parseable', '--omit=dev', '--workspace', '@marketing-os/browser-mcp'],
+    { cwd: agentRoot, encoding: 'utf8' }
+  )
+  if (result.error) throw result.error
+  const output = String(result.stdout || '')
+  if (!output.trim()) {
+    throw new Error(`Marketing browser dependency discovery failed: ${String(result.stderr || '').trim()}`)
+  }
+  const modulesRoot = path.join(agentRoot, 'node_modules')
+  return output
+    .split(/\r?\n/)
+    .map(value => value.trim())
+    .filter(Boolean)
+    .filter(value => value === modulesRoot || value.startsWith(`${modulesRoot}${path.sep}`))
+    .filter(value => value !== modulesRoot)
+    .filter(value => path.basename(value) !== 'fsevents')
+}
+
+function stageMarketingBrowserDependencies({
+  agentRoot,
+  output,
+  dependencyPaths = productionDependencyPaths(agentRoot)
+}) {
+  const modulesRoot = path.join(agentRoot, 'node_modules')
+  const destinationRoot = path.join(output, 'agent', 'node_modules')
+  let copied = 0
+  for (const source of dependencyPaths) {
+    const relative = path.relative(modulesRoot, source)
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue
+    copyTree(source, path.join(destinationRoot, relative))
+    copied += 1
+  }
+  if (!copied) throw new Error('Marketing browser production dependencies are missing')
+  return { copied, relative: path.posix.join('agent', 'node_modules') }
+}
+
+function playwrightBrowserDirectory(executablePath) {
+  let current = path.resolve(executablePath)
+  while (current !== path.dirname(current)) {
+    if (/^chromium-\d+$/.test(path.basename(current))) return current
+    current = path.dirname(current)
+  }
+  throw new Error(`Playwright Chromium directory could not be derived from ${executablePath}`)
+}
+
+function stagePlaywrightBrowser({ executablePath, output }) {
+  if (!executablePath || !fs.existsSync(executablePath)) {
+    throw new Error('Playwright Chromium is missing; run `npx playwright install chromium` before packaging')
+  }
+  const source = playwrightBrowserDirectory(executablePath)
+  const relativeRoot = 'playwright-browsers'
+  const browserRelative = path.join(relativeRoot, path.basename(source))
+  copyTree(source, path.join(output, browserRelative), { dereference: false })
+  const executableRelative = path.join(browserRelative, path.relative(source, executablePath))
+  return { executableRelative, relativeRoot }
 }
 
 function stageProductRuntime({ desktopRoot, agentRoot, pythonInfo, productTree }) {
@@ -129,11 +190,9 @@ function stageProductRuntime({ desktopRoot, agentRoot, pythonInfo, productTree }
 function main() {
   const desktopRoot = path.resolve(__dirname, '..')
   const agentRoot = path.resolve(desktopRoot, '..', '..')
-  const pythonExecutable = process.env.MARKETING_OS_BUILD_PYTHON || path.join(
-    agentRoot,
-    '.venv',
-    process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'
-  )
+  const pythonExecutable =
+    process.env.MARKETING_OS_BUILD_PYTHON ||
+    path.join(agentRoot, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
   if (!fs.existsSync(pythonExecutable)) {
     throw new Error(`Marketing OS build Python missing: ${pythonExecutable}`)
   }
@@ -143,12 +202,31 @@ function main() {
     encoding: 'utf8'
   }).trim()
   const result = stageProductRuntime({ desktopRoot, agentRoot, pythonInfo, productTree })
+  const dependencies = stageMarketingBrowserDependencies({ agentRoot, output: result.output })
+  const { chromium } = require('playwright')
+  const browser = stagePlaywrightBrowser({
+    executablePath: chromium.executablePath(),
+    output: result.output
+  })
+  result.manifest.paths.nodeModules = dependencies.relative
+  result.manifest.paths.playwrightBrowsers = browser.relativeRoot
+  result.manifest.paths.playwrightBrowserExecutable = browser.executableRelative
+  fs.writeFileSync(path.join(result.output, 'runtime-manifest.json'), `${JSON.stringify(result.manifest, null, 2)}\n`)
   console.log(
     `[stage-product-runtime] ${result.manifest.python.version} ${result.manifest.platform}/${result.manifest.arch} ` +
       `tree ${productTree.slice(0, 12)} -> ${result.output}`
   )
 }
 
-module.exports = { SOURCE_DIRS, ROOT_FILES, discoverPython, stageProductRuntime }
+module.exports = {
+  SOURCE_DIRS,
+  ROOT_FILES,
+  discoverPython,
+  playwrightBrowserDirectory,
+  productionDependencyPaths,
+  stageMarketingBrowserDependencies,
+  stagePlaywrightBrowser,
+  stageProductRuntime
+}
 
 if (require.main === module) main()
