@@ -700,6 +700,10 @@ def _plan_content_production(args: dict, **kwargs) -> str:
             for platform_result in sound_context["platforms"]
             for candidate in platform_result.get("candidates") or []
         ]
+    calibration = AccountStrategyRepository().get_active_influence_calibration(
+        user_id=user_id,
+        account_id=account_id,
+    )
     preflight = create_content_production_preflight(
         OperatingLoopRepository(),
         {
@@ -711,6 +715,8 @@ def _plan_content_production(args: dict, **kwargs) -> str:
             "evidence_refs": evidence_refs,
             "sound_context": sound_context,
             "knowledge_context": knowledge_context,
+            "influence_weights": calibration.get("weights") if calibration else None,
+            "influence_calibration_id": calibration.get("id") if calibration else None,
         },
     )
     return json.dumps(

@@ -40,6 +40,62 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "RiskPenalty": 0.18,
 }
 
+
+def resolve_influence_weights(value: Any = None) -> dict[str, float]:
+    """Return a complete, bounded weight set for one score calculation.
+
+    Account-specific calibration is allowed to change relative emphasis, but it
+    cannot add hidden dimensions, remove a dimension, or turn one observation
+    into an unbounded score override.  Positive weights are normalised to the
+    same total as the product defaults; risk remains an explicit penalty.
+    """
+
+    if value is None:
+        return dict(DEFAULT_WEIGHTS)
+    if not isinstance(value, dict):
+        raise ValueError("influence weights must be an object")
+    unknown = sorted(set(value) - set(DEFAULT_WEIGHTS))
+    if unknown:
+        raise ValueError(f"unknown influence weight dimensions: {', '.join(unknown)}")
+    resolved = dict(DEFAULT_WEIGHTS)
+    for key, raw in value.items():
+        number = _number(raw)
+        if number is None or not 0.02 <= number <= 0.5:
+            raise ValueError(f"influence weight {key} must be between 0.02 and 0.5")
+        resolved[key] = float(number)
+    positive_total = sum(resolved[key] for key in POSITIVE_COMPONENTS)
+    if positive_total <= 0:
+        raise ValueError("positive influence weights must have a non-zero total")
+    default_positive_total = sum(DEFAULT_WEIGHTS[key] for key in POSITIVE_COMPONENTS)
+    for key in POSITIVE_COMPONENTS:
+        resolved[key] = round(resolved[key] * default_positive_total / positive_total, 6)
+    resolved["RiskPenalty"] = round(resolved["RiskPenalty"], 6)
+    return resolved
+
+
+def apply_influence_weight_adjustment(
+    base: dict[str, Any] | None,
+    adjustment: dict[str, Any],
+) -> dict[str, float]:
+    """Resolve one replay-approved bounded calibration over ``base`` weights."""
+
+    weights = resolve_influence_weights(base)
+    if not isinstance(adjustment, dict):
+        raise ValueError("influence adjustment must be an object")
+    component = str(adjustment.get("component") or "").strip()
+    direction = str(adjustment.get("direction") or "").strip()
+    amount = _number(adjustment.get("amount"))
+    if component not in DEFAULT_WEIGHTS:
+        raise ValueError("influence adjustment references an unknown component")
+    if direction not in {"increase_weight", "increase_prior", "increase_penalty",
+                         "decrease_weight", "decrease_prior", "decrease_penalty"}:
+        raise ValueError("unsupported influence adjustment direction")
+    if amount is None or not 0 < amount <= 0.1:
+        raise ValueError("influence adjustment amount must be greater than 0 and at most 0.1")
+    delta = amount if direction.startswith("increase") else -amount
+    weights[component] = max(0.02, min(0.5, weights[component] + delta))
+    return resolve_influence_weights(weights)
+
 BUCKET_VALUES: dict[str, float] = {
     "zero": 0.05,
     "low": 0.28,
@@ -131,6 +187,7 @@ def build_influence_score(features: dict[str, Any] | None = None) -> dict[str, A
     """
 
     features = dict(features or {})
+    weights = resolve_influence_weights(features.get("weights"))
     metric_labels = features.get("metric_labels") if isinstance(features.get("metric_labels"), dict) else {}
     content_score = features.get("content_score") if isinstance(features.get("content_score"), dict) else {}
     preflight_scores = features.get("preflight_scores") if isinstance(features.get("preflight_scores"), dict) else {}
@@ -267,10 +324,10 @@ def build_influence_score(features: dict[str, Any] | None = None) -> dict[str, A
         for key in POSITIVE_COMPONENTS
         if key in components
     ]
-    positive_weight = sum(DEFAULT_WEIGHTS[key] for key in POSITIVE_COMPONENTS if key in components)
+    positive_weight = sum(weights[key] for key in POSITIVE_COMPONENTS if key in components)
     if positive_values and positive_weight > 0:
         weighted_log = sum(
-            DEFAULT_WEIGHTS[key] * math.log(max(0.05, components[key]["value"]))
+            weights[key] * math.log(max(0.05, components[key]["value"]))
             for key in POSITIVE_COMPONENTS
             if key in components
         ) / positive_weight
@@ -278,7 +335,7 @@ def build_influence_score(features: dict[str, Any] | None = None) -> dict[str, A
     else:
         multiplicative_core = 0.0
 
-    risk_penalty_points = components["RiskPenalty"]["value"] * DEFAULT_WEIGHTS["RiskPenalty"] * 100
+    risk_penalty_points = components["RiskPenalty"]["value"] * weights["RiskPenalty"] * 100
     score = round(max(0.0, min(100.0, multiplicative_core * 100 - risk_penalty_points)), 1)
     missing = [key for key in POSITIVE_COMPONENTS if key not in components]
     source_groups: set[str] = set()
@@ -302,9 +359,8 @@ def build_influence_score(features: dict[str, Any] | None = None) -> dict[str, A
         "score": score,
         "decision": decision,
         "components": components,
-        "weights": DEFAULT_WEIGHTS,
+        "weights": weights,
         "missing_dimensions": missing,
         "confidence": confidence,
         "formula_note": "weighted multiplicative kernel over positive components minus explicit risk penalty",
     }
-

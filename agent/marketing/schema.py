@@ -151,6 +151,27 @@ CREATE TABLE IF NOT EXISTS content_system_versions (
     UNIQUE(project_id, version)
 );
 
+CREATE TABLE IF NOT EXISTS account_influence_calibrations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    source_candidate_id TEXT NOT NULL REFERENCES marketing_learning_candidates(id),
+    version INTEGER NOT NULL,
+    formula_version TEXT NOT NULL,
+    weights_json TEXT NOT NULL DEFAULT '{}',
+    adjustment_json TEXT NOT NULL DEFAULT '{}',
+    review_reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    UNIQUE(project_id, version),
+    UNIQUE(source_candidate_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_influence_calibration_one_active
+    ON account_influence_calibrations(project_id) WHERE status='active';
+CREATE INDEX IF NOT EXISTS idx_influence_calibration_scope
+    ON account_influence_calibrations(user_id, account_id, project_id, status);
+
 CREATE TABLE IF NOT EXISTS account_experiments (
     id TEXT PRIMARY KEY,
     source_key TEXT,
@@ -466,6 +487,7 @@ PROSPECT_SCOPE_COLUMNS = {
     "benchmark_observations": "target_account_id",
     "positioning_versions": "account_id",
     "content_system_versions": "account_id",
+    "account_influence_calibrations": "account_id",
     "account_experiments": "account_id",
     "evidence_records": "account_id",
     "content_production_plans": "account_id",
@@ -499,6 +521,7 @@ LEGACY_MARKETING_TABLES = (
     "marketing_preflight_records",
     "marketing_receipt_refs",
     "marketing_learning_candidates",
+    "account_influence_calibrations",
     "marketing_publish_actions",
     "marketing_metric_checkpoints",
     "marketing_sounds",

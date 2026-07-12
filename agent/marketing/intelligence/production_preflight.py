@@ -242,6 +242,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         "preflight_scores": scores,
         "content_score": params.get("content_score") if isinstance(params.get("content_score"), dict) else {},
         "metric_labels": params.get("metric_labels") if isinstance(params.get("metric_labels"), dict) else {},
+        "weights": params.get("influence_weights"),
     })
     preflight_decision = build_preflight_decision(
         influence_score,
@@ -303,6 +304,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
                 if isinstance(item, dict) and item.get("id")
             ],
             "knowledge_counts": knowledge_counts,
+            "influence_calibration_id": _text(params.get("influence_calibration_id")),
         },
         "separation": {
             "general_preflight_owns": [

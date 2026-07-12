@@ -631,20 +631,68 @@ def _strategy_candidate_from_weight(
     candidate: dict[str, Any],
     replay: dict[str, Any],
 ) -> dict[str, Any]:
-    """Keep accepted calibration separate from durable account strategy.
+    """Create the second-review strategy candidate after replay acceptance.
 
-    The previous implementation called the deleted ``AgentCoreStore`` account
-    service.  The Hermes-native fork deliberately stops at the accepted
-    learning candidate until the versioned account-strategy owner consumes it.
+    A replay-approved ``weight`` candidate is still not durable account truth.
+    It becomes a separate ``strategy`` candidate so the operator can inspect
+    the actual account-level change before the versioned strategy owner applies
+    it.  ``source_key`` makes repeated decisions/restarts idempotent.
     """
 
+    if candidate.get("status") != "accepted" or replay.get("status") != "passed":
+        return {
+            "status": "skipped",
+            "reason": "weight_not_accepted_or_replay_not_passed",
+            "strategy_candidate_id": None,
+            "source_weight_candidate_id": candidate.get("id"),
+            "replay_status": replay.get("status"),
+        }
+    proposal = _proposal(candidate)
+    source_id = str(candidate.get("id") or "")
+    strategy = store.create_learning_candidate(
+        candidate_type="strategy",
+        user_id=str(candidate.get("user_id") or "default"),
+        account_id=str(candidate.get("account_id") or ""),
+        platform=candidate.get("platform"),
+        receipt_refs=list(candidate.get("receipt_refs") or []),
+        evidence_refs=list(dict.fromkeys([
+            f"learning_candidate:{source_id}",
+            *(str(ref) for ref in (candidate.get("evidence_refs") or [])),
+        ])),
+        proposal={
+            "kind": "account_influence_calibration",
+            "version": GOVERNANCE_VERSION,
+            "score_version": proposal.get("score_version") or INFLUENCE_SCORE_VERSION,
+            "source_weight_candidate_id": source_id,
+            "rule_key": proposal.get("rule_key"),
+            "proposed_adjustment": proposal.get("proposed_adjustment"),
+            "recommendation": proposal.get("recommendation"),
+            "support_count": proposal.get("support_count"),
+            "sample_size": replay.get("sample_size"),
+            "replay": {
+                "version": replay.get("version"),
+                "status": replay.get("status"),
+                "support_count": replay.get("support_count"),
+                "conflict_count": replay.get("conflict_count"),
+                "conflict_ratio": replay.get("conflict_ratio"),
+                "harm_count": replay.get("harm_count"),
+                "coverage": replay.get("coverage"),
+            },
+            "guardrail": (
+                "pending strategy candidate only; explicit second review is required "
+                "before versioned account calibration"
+            ),
+        },
+        confidence=min(float(candidate.get("confidence") or 0.5), 0.9),
+        source_key=f"strategy-calibration:{source_id}:{WEIGHT_REPLAY_VERSION}",
+    )
     return {
-        "status": "skipped",
-        "reason": "awaiting_native_account_strategy_projection",
-        "strategy_candidate_id": None,
-        "source_weight_candidate_id": candidate.get("id"),
+        "status": "candidate_created" if strategy.get("status") == "pending" else "candidate_exists",
+        "reason": "awaiting_explicit_strategy_review",
+        "strategy_candidate_id": strategy["id"],
+        "source_weight_candidate_id": source_id,
         "replay_status": replay.get("status"),
-        "guardrail": "accepted learning is not durable strategy or memory",
+        "guardrail": "no durable strategy weights changed",
     }
 
 
@@ -719,5 +767,5 @@ def decide_weight_candidate_with_replay(
         "replay": replay,
         "strategy_candidate": strategy_candidate,
         "strategy_candidate_id": strategy_candidate.get("strategy_candidate_id"),
-        "guardrail": "candidate status changed only; no durable weights changed",
+        "guardrail": "weight accepted after replay; durable weights await separate strategy review",
     }

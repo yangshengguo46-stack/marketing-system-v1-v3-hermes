@@ -22,6 +22,10 @@ from urllib.parse import urlsplit
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.evidence import EvidenceRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
+from agent.marketing.intelligence.influence_score import (
+    INFLUENCE_SCORE_VERSION,
+    apply_influence_weight_adjustment,
+)
 
 
 PROFILE_STATUSES = {"draft", "confirmed", "superseded"}
@@ -957,6 +961,129 @@ class AccountStrategyRepository(MarketingDomainRepository):
             raise KeyError("experiment not found in account scope")
         return _experiment_record(row)
 
+    # ------------------------------------------------------------------
+    # Influence calibration: replay-approved, versioned account strategy.
+    # ------------------------------------------------------------------
+
+    def apply_learning_calibration(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        candidate_id: str,
+    ) -> dict[str, Any]:
+        """Promote one accepted strategy candidate into active account weights.
+
+        The learning-candidate table remains the review/audit owner.  This
+        method owns only the durable, versioned strategy truth consumed by
+        preflight.  It deliberately refuses raw ``weight`` candidates so replay
+        approval and strategy review cannot be collapsed into one click.
+        """
+
+        with self._transaction() as db:
+            candidate = db.execute(
+                """SELECT * FROM marketing_learning_candidates
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (candidate_id, user_id, account_id),
+            ).fetchone()
+            if candidate is None:
+                raise KeyError("strategy learning candidate not found in account scope")
+            if candidate["candidate_type"] != "strategy" or candidate["status"] != "accepted":
+                raise ValueError("an accepted strategy candidate is required")
+            proposal = json.loads(candidate["proposal_json"] or "{}")
+            if proposal.get("kind") != "account_influence_calibration":
+                raise ValueError("strategy candidate is not an account influence calibration")
+            source_weight_id = str(proposal.get("source_weight_candidate_id") or "")
+            source_weight = db.execute(
+                """SELECT candidate_type,status,proposal_json
+                FROM marketing_learning_candidates
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (source_weight_id, user_id, account_id),
+            ).fetchone()
+            if source_weight is None or source_weight["candidate_type"] != "weight" \
+                    or source_weight["status"] != "accepted":
+                raise ValueError("calibration requires its replay-approved weight candidate")
+            source_proposal = json.loads(source_weight["proposal_json"] or "{}")
+            adjustment = proposal.get("proposed_adjustment")
+            if adjustment != source_proposal.get("proposed_adjustment"):
+                raise ValueError("strategy calibration diverges from the approved weight candidate")
+
+            existing = db.execute(
+                "SELECT * FROM account_influence_calibrations WHERE source_candidate_id=?",
+                (candidate_id,),
+            ).fetchone()
+            if existing is not None:
+                return _calibration_record(existing)
+
+            project = db.execute(
+                """SELECT id FROM account_strategy_projects
+                WHERE user_id=? AND account_id=? AND status='active'""",
+                (user_id, account_id),
+            ).fetchone()
+            if project is None:
+                raise ValueError("active account strategy project is required")
+            previous = db.execute(
+                """SELECT * FROM account_influence_calibrations
+                WHERE project_id=? AND status='active'""",
+                (project["id"],),
+            ).fetchone()
+            base_weights = (
+                json.loads(previous["weights_json"] or "{}") if previous is not None else None
+            )
+            weights = apply_influence_weight_adjustment(base_weights, adjustment)
+            version = int(
+                db.execute(
+                    """SELECT COALESCE(MAX(version),0)+1
+                    FROM account_influence_calibrations WHERE project_id=?""",
+                    (project["id"],),
+                ).fetchone()[0]
+            )
+            now = _now()
+            if previous is not None:
+                db.execute(
+                    """UPDATE account_influence_calibrations SET status='superseded'
+                    WHERE project_id=? AND status='active'""",
+                    (project["id"],),
+                )
+            calibration_id = _id("calibration")
+            db.execute(
+                """INSERT INTO account_influence_calibrations
+                (id,project_id,user_id,account_id,source_candidate_id,version,
+                 formula_version,weights_json,adjustment_json,review_reason,status,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,'active',?)""",
+                (
+                    calibration_id,
+                    project["id"],
+                    user_id,
+                    account_id,
+                    candidate_id,
+                    version,
+                    str(proposal.get("score_version") or INFLUENCE_SCORE_VERSION),
+                    _json(weights, field="influence_weights", limit=8_000),
+                    _json(adjustment, field="influence_adjustment", limit=4_000),
+                    str(candidate["decision_reason"] or "")[:500],
+                    now,
+                ),
+            )
+            created = db.execute(
+                "SELECT * FROM account_influence_calibrations WHERE id=?",
+                (calibration_id,),
+            ).fetchone()
+        return _calibration_record(created)
+
+    def get_active_influence_calibration(
+        self, *, user_id: str, account_id: str
+    ) -> dict[str, Any] | None:
+        with self._connection() as db:
+            row = db.execute(
+                """SELECT calibration.* FROM account_influence_calibrations AS calibration
+                JOIN account_strategy_projects AS project ON project.id=calibration.project_id
+                WHERE calibration.user_id=? AND calibration.account_id=?
+                AND calibration.status='active' AND project.status='active'""",
+                (user_id, account_id),
+            ).fetchone()
+        return _calibration_record(row) if row is not None else None
+
     def read_operating_model(
         self, *, user_id: str, account_id: str, project_id: str
     ) -> dict[str, Any]:
@@ -976,6 +1103,11 @@ class AccountStrategyRepository(MarketingDomainRepository):
                 WHERE project_id=? AND user_id=? AND account_id=?""",
                 (project_id, user_id, account_id),
             ).fetchone()[0]
+            calibration = db.execute(
+                """SELECT * FROM account_influence_calibrations
+                WHERE project_id=? AND user_id=? AND account_id=? AND status='active'""",
+                (project_id, user_id, account_id),
+            ).fetchone()
         positioning_record = _positioning_record(positioning) if positioning else None
         content_system_record = _content_system_record(content_system) if content_system else None
         active_basis = {
@@ -1006,6 +1138,7 @@ class AccountStrategyRepository(MarketingDomainRepository):
                 "stale_basis_refs": sorted(active_basis - positioning_basis),
             },
             "experiment_count": int(experiments),
+            "influence_calibration": _calibration_record(calibration) if calibration else None,
         }
 
     def _verified_evidence(
@@ -1277,6 +1410,13 @@ def _experiment_record(row) -> dict[str, Any]:
         value[key.removesuffix("_json")] = json.loads(value.pop(key) or "{}")
     for key in ("variants_json", "asset_ids_json"):
         value[key.removesuffix("_json")] = json.loads(value.pop(key) or "[]")
+    return value
+
+
+def _calibration_record(row) -> dict[str, Any]:
+    value = dict(row)
+    value["weights"] = json.loads(value.pop("weights_json") or "{}")
+    value["adjustment"] = json.loads(value.pop("adjustment_json") or "{}")
     return value
 
 

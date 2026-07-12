@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.domains.account_strategy import AccountStrategyRepository
 from agent.marketing.domains.publishing import PublishingRepository
 from agent.marketing.intelligence.content_retro import reconcile, retro_to_dict
 from agent.marketing.intelligence.influence_score import build_influence_score
@@ -123,6 +124,7 @@ class MetricLoopRunner:
         self.paths = paths or MarketingDataPaths.from_env()
         self.publishing = PublishingRepository(self.paths)
         self.loop = OperatingLoopRepository(self.paths)
+        self.strategy = AccountStrategyRepository(self.paths)
 
     def run_due(
         self,
@@ -259,8 +261,15 @@ class MetricLoopRunner:
                     "note": "没有经过校准的发布前指标区间；只沉淀真实标签，不伪造预测偏差。",
                 }
             preflight = self.loop.get_preflight(action["preflight_id"])
+            calibration = self.strategy.get_active_influence_calibration(
+                user_id=action["user_id"], account_id=action["account_id"]
+            )
             influence = build_influence_score(
-                {"preflight_scores": preflight["scores"], "metric_labels": labels}
+                {
+                    "preflight_scores": preflight["scores"],
+                    "metric_labels": labels,
+                    "weights": calibration.get("weights") if calibration else None,
+                }
             )
             receipt_refs = list(
                 dict.fromkeys(

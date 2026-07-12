@@ -6,6 +6,8 @@ import pytest
 
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import (
+    AccountLifecycleRepository,
+    AccountStrategyRepository,
     ContentAssetRepository,
     ContentProductionPolicy,
     PublishingRepository,
@@ -19,6 +21,7 @@ from agent.marketing.intelligence.content_prediction import build_prediction_dim
 from agent.marketing.intelligence.content_retro import reconcile, retro_to_dict
 from agent.marketing.intelligence.content_rubric import OPINION_VIDEO_RUBRIC, score_content
 from agent.marketing.intelligence.learning_governance import (
+    decide_weight_candidate_with_replay,
     propose_weight_candidate_from_recent_retros,
     summarize_learning_patterns,
 )
@@ -333,6 +336,97 @@ def test_repeated_receipt_retros_create_weight_candidate_without_applying_it(tmp
     assert candidate["candidate_type"] == "weight"
     assert candidate["status"] == "pending"
     assert candidate["proposal"]["guardrail"].startswith("pending weight candidate only")
+
+
+def test_replay_approved_weight_requires_second_review_then_versions_account_calibration(tmp_path):
+    paths = _paths(tmp_path)
+    lifecycle = AccountLifecycleRepository(paths)
+    strategy = AccountStrategyRepository(paths)
+    lifecycle.begin_project(
+        user_id="default",
+        account_id="acct-1",
+        business_goal="用真实发布结果持续校准内容预演",
+    )
+    loop = OperatingLoopRepository(paths)
+    proposal = {
+        "kind": "published_metric_retro",
+        "metric_labels": {
+            "labels": {
+                "attention": {"bucket": "high"},
+                "retention": {"bucket": "low"},
+                "action": {"bucket": "mid"},
+                "risk": {"bucket": "low"},
+            }
+        },
+        "retro": {"bias_direction": "over"},
+        "influence_score": {"score": 52.0},
+    }
+    for index in range(3):
+        loop.create_learning_candidate(
+            candidate_type="memory",
+            user_id="default",
+            account_id="acct-1",
+            platform="douyin",
+            proposal=proposal,
+            evidence_refs=[f"metric-snapshot-{index}"],
+            confidence=0.75,
+        )
+    weight_result = propose_weight_candidate_from_recent_retros(
+        loop,
+        user_id="default",
+        account_id="acct-1",
+        platform="douyin",
+    )
+    weight_id = weight_result["weight_candidate_id"]
+
+    with pytest.raises(ValueError, match="require replay approval"):
+        AccountLearningGovernance(paths).accept_and_project(
+            weight_id, reason="must not bypass replay"
+        )
+
+    replayed = decide_weight_candidate_with_replay(
+        loop,
+        weight_id,
+        decision="accepted",
+        reason="three consistent real-result retrospectives",
+    )
+    strategy_id = replayed["strategy_candidate_id"]
+    assert replayed["replay"]["status"] == "passed"
+    assert loop.get_learning_candidate(strategy_id)["status"] == "pending"
+    assert strategy.get_active_influence_calibration(
+        user_id="default", account_id="acct-1"
+    ) is None
+
+    projected = AccountLearningGovernance(paths).accept_and_project(
+        strategy_id,
+        reason="reviewed bounded retention adjustment",
+    )
+    calibration = projected["account_strategy"]
+    assert calibration["status"] == "active"
+    assert calibration["adjustment"]["component"] == "RetentionDesign"
+    assert calibration["weights"]["RetentionDesign"] > 0.16
+    assert calibration["review_reason"] == "reviewed bounded retention adjustment"
+    assert build_influence_score(
+        {
+            "preflight_scores": {
+                "platform_fit": 0.7,
+                "production_feasibility": 0.7,
+            },
+            "weights": calibration["weights"],
+        }
+    )["weights"] == calibration["weights"]
+    assert strategy.get_active_influence_calibration(
+        user_id="default", account_id="acct-other"
+    ) is None
+
+    replay_projection = AccountLearningGovernance(paths).accept_and_project(
+        strategy_id,
+        reason="idempotent repeated action",
+    )
+    assert replay_projection["account_strategy"]["id"] == calibration["id"]
+    assert strategy.get_active_influence_calibration(
+        user_id="default", account_id="acct-1"
+    )["version"] == 1
 
 
 def test_publish_action_prelogs_once_and_binds_native_approval(tmp_path):
