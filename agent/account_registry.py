@@ -14,6 +14,25 @@ from hermes_state import SessionDB
 
 logger = logging.getLogger(__name__)
 
+MARKETING_ACCOUNT_PLATFORMS: dict[str, dict[str, Any]] = {
+    "douyin": {"label": "抖音", "region": "china", "content": ["video"]},
+    "xiaohongshu": {"label": "小红书", "region": "china", "content": ["image", "video"]},
+    "bilibili": {"label": "B站", "region": "china", "content": ["video"]},
+    "kuaishou": {"label": "快手", "region": "china", "content": ["video"]},
+    "wechat_channels": {"label": "视频号", "region": "china", "content": ["video"]},
+    "wechat_official": {"label": "微信公众号", "region": "china", "content": ["article"]},
+    "zhihu": {"label": "知乎", "region": "china", "content": ["article", "video"]},
+    "tiktok": {"label": "TikTok", "region": "global", "content": ["video"]},
+    "youtube": {"label": "YouTube", "region": "global", "content": ["video"]},
+}
+
+
+def marketing_account_platforms() -> list[dict[str, Any]]:
+    return [
+        {"id": platform, **details}
+        for platform, details in MARKETING_ACCOUNT_PLATFORMS.items()
+    ]
+
 
 @dataclass(frozen=True)
 class BrowserContextLease:
@@ -52,6 +71,15 @@ class AccountRegistry:
         label: str | None = None,
         permissions: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        platform = str(platform or "").strip().lower()
+        if platform not in MARKETING_ACCOUNT_PLATFORMS:
+            raise ValueError("unsupported Marketing OS account platform")
+        user_id = str(user_id or "default").strip() or "default"
+        if len(user_id) > 160:
+            raise ValueError("user_id must be at most 160 characters")
+        label = str(label or "").strip() or None
+        if label is not None and len(label) > 256:
+            raise ValueError("label must be at most 256 characters")
         account_id = f"acct_{uuid.uuid4().hex[:16]}"
         return self.db.upsert_marketing_account(
             account_id=account_id,
@@ -123,6 +151,9 @@ class AccountRegistry:
 
     def list(self, *, user_id: str = "default") -> list[dict[str, Any]]:
         return self.db.list_marketing_accounts(user_id=user_id)
+
+    def get(self, account_id: str, *, user_id: str = "default") -> dict[str, Any]:
+        return dict(self._require(account_id, user_id=user_id))
 
     def browser_context_lifecycle(
         self, account_id: str, *, user_id: str = "default"
@@ -215,6 +246,24 @@ class AccountRegistry:
             raise ValueError("bound account requires login or verification")
         return BrowserContextLease(
             session_id=session_id,
+            user_id=user_id,
+            account_id=str(account["id"]),
+            platform=str(account["platform"]),
+            profile_key=str(account["profile_key"]),
+            auth_state=str(account["auth_state"]),
+            issued_at=time.time(),
+        )
+
+    def lease_for_login(
+        self, account_id: str, *, user_id: str = "default"
+    ) -> BrowserContextLease:
+        """Issue a bounded lease for an explicit product-surface login flow."""
+
+        account = self._require(account_id, user_id=user_id)
+        if account.get("status") not in {"pending", "stale"}:
+            raise ValueError("account is not waiting for login or verification")
+        return BrowserContextLease(
+            session_id=f"login-{account_id}",
             user_id=user_id,
             account_id=str(account["id"]),
             platform=str(account["platform"]),

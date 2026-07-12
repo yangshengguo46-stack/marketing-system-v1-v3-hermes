@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.account_registry import AccountRegistry
+from agent.account_registry import AccountRegistry, marketing_account_platforms
 from hermes_state import SessionDB
 from tools import mcp_tool
 
@@ -72,3 +72,23 @@ def test_product_account_lifecycle_notifies_native_browser_owner(tmp_path, monke
 
     assert [call["purge_profile"] for call in calls] == [False, True]
     assert all(call["account_id"] == account["id"] for call in calls)
+
+
+def test_login_lease_is_only_issued_for_supported_pending_or_stale_accounts(tmp_path):
+    db = SessionDB(db_path=tmp_path / "state.db")
+    registry = AccountRegistry(db)
+    try:
+        account = registry.register_pending(platform="wechat_official")
+        lease = registry.lease_for_login(account["id"])
+        assert lease.session_id == f"login-{account['id']}"
+        assert lease.platform == "wechat_official"
+        registry.mark_authenticated(account["id"])
+        try:
+            registry.lease_for_login(account["id"])
+        except ValueError as exc:
+            assert "not waiting for login" in str(exc)
+        else:
+            raise AssertionError("authenticated account must not open a headed login lease")
+        assert "weibo" not in {item["id"] for item in marketing_account_platforms()}
+    finally:
+        db.close()

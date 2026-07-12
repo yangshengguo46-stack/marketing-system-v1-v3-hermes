@@ -12909,6 +12909,15 @@ def _(rid, _params: dict) -> dict:
     return _ok(rid, AccountContextRepository().list_accounts())
 
 
+@method("marketing.accounts.platforms")
+def _(rid, _params: dict) -> dict:
+    """Return the account platform catalog owned by Hermes."""
+    from agent.account_registry import marketing_account_platforms
+
+    platforms = marketing_account_platforms()
+    return _ok(rid, {"platforms": platforms, "total": len(platforms)})
+
+
 @method("marketing.assets.list")
 def _(rid, params: dict) -> dict:
     """List user-owned media assets visible to the selected account."""
@@ -13166,6 +13175,97 @@ def _(rid, params: dict) -> dict:
     except ValueError as exc:
         return _err(rid, -32602, str(exc))
     return _ok(rid, {"account": account})
+
+
+@method("marketing.account.login.start")
+def _(rid, params: dict) -> dict:
+    """Open the MCP-owned isolated browser for an explicit account login."""
+    from agent.account_registry import AccountRegistry
+    from tools.mcp_tool import execute_marketing_account_browser_tool
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    user_id = str(params.get("user_id") or "default").strip() or "default"
+    db = _get_db()
+    if db is None:
+        return _db_unavailable_error(rid, code=5017)
+    try:
+        account = AccountRegistry(db).get(account_id, user_id=user_id)
+        execute_marketing_account_browser_tool(
+            account_id=account_id,
+            user_id=user_id,
+            tool_name="browser_start_account_login",
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    except (RuntimeError, TimeoutError) as exc:
+        return _err(rid, 5026, str(exc))
+    return _ok(
+        rid,
+        {
+            "account": account,
+            "login_state": "waiting_for_user",
+            "browser_owner": "marketing-browser-mcp",
+        },
+    )
+
+
+@method("marketing.account.login.verify")
+def _(rid, params: dict) -> dict:
+    """Verify login in the MCP profile and project it into account truth."""
+    from agent.account_registry import AccountRegistry
+    from agent.marketing.account_auth_capture import (
+        apply_account_auth_verification,
+        decode_account_auth_result,
+    )
+    from tools.mcp_tool import execute_marketing_account_browser_tool
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    user_id = str(params.get("user_id") or "default").strip() or "default"
+    db = _get_db()
+    if db is None:
+        return _db_unavailable_error(rid, code=5017)
+    try:
+        account = AccountRegistry(db).get(account_id, user_id=user_id)
+        raw = execute_marketing_account_browser_tool(
+            account_id=account_id,
+            user_id=user_id,
+            tool_name="browser_verify_account_login",
+        )
+        verification = decode_account_auth_result(raw)
+        if verification is None:
+            raise RuntimeError("account browser returned no verification evidence")
+        if verification.get("verified") is not True:
+            return _ok(
+                rid,
+                {
+                    "verified": False,
+                    "verification": verification,
+                    "account": account,
+                },
+            )
+        transition = apply_account_auth_verification(
+            verification,
+            user_id=user_id,
+            account_id=account_id,
+            platform=str(account["platform"]),
+            session_db=db,
+        )
+        connected = AccountRegistry(db).get(account_id, user_id=user_id)
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    except (RuntimeError, TimeoutError) as exc:
+        return _err(rid, 5026, str(exc))
+    return _ok(
+        rid,
+        {
+            "verified": True,
+            "verification": verification,
+            "transition": transition,
+            "account": connected,
+        },
+    )
 
 
 @method("marketing.account.disconnect")

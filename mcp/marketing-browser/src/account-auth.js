@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url)
 const { tools } = require('playwright-core/lib/coreBundle')
 const { z } = require('playwright-core/lib/utilsBundle')
 
+const START_TOOL_NAME = 'browser_start_account_login'
 const TOOL_NAME = 'browser_verify_account_login'
 const SCHEMA = 'marketing_account_auth_verification.v1'
 
@@ -13,39 +14,54 @@ const PLATFORM_AUTH = {
   douyin: {
     hosts: ['douyin.com'],
     cookieSets: [['sessionid'], ['sessionid_ss'], ['sid_guard']],
+    loginUrl: 'https://creator.douyin.com/',
   },
   bilibili: {
     hosts: ['bilibili.com'],
     cookieSets: [['SESSDATA', 'bili_jct']],
+    loginUrl: 'https://member.bilibili.com/platform/home',
   },
   xiaohongshu: {
     hosts: ['xiaohongshu.com'],
     cookieSets: [['web_session']],
+    loginUrl: 'https://creator.xiaohongshu.com/',
   },
   kuaishou: {
     hosts: ['kuaishou.com'],
     cookieSets: [['kuaishou.server.web_st']],
+    loginUrl: 'https://cp.kuaishou.com/',
   },
   wechat_channels: {
     hosts: ['channels.weixin.qq.com'],
     cookieSets: [['finder_username'], ['wxuin', 'pass_ticket']],
+    loginUrl: 'https://channels.weixin.qq.com/',
   },
   wechat_official: {
     hosts: ['mp.weixin.qq.com'],
     cookieSets: [['slave_sid', 'slave_user']],
+    loginUrl: 'https://mp.weixin.qq.com/',
   },
   zhihu: {
     hosts: ['zhihu.com'],
     cookieSets: [['z_c0']],
+    loginUrl: 'https://www.zhihu.com/creator',
   },
   tiktok: {
     hosts: ['tiktok.com'],
     cookieSets: [['sessionid']],
+    loginUrl: 'https://www.tiktok.com/tiktokstudio',
   },
   youtube: {
     hosts: ['youtube.com', 'google.com'],
     cookieSets: [['SAPISID', 'SID']],
+    loginUrl: 'https://studio.youtube.com/',
   },
+}
+
+export function accountLoginTarget(platform) {
+  const config = PLATFORM_AUTH[String(platform || '').toLowerCase()]
+  if (!config?.loginUrl) throw new Error('unsupported platform account login')
+  return config.loginUrl
 }
 
 export function evaluateAccountAuthentication({ platform, pageUrl, cookies }) {
@@ -87,6 +103,32 @@ export function safePageLocation(pageUrl) {
 }
 
 export function installAccountAuthTool() {
+  if (!tools.browserTools.some(tool => tool.schema?.name === START_TOOL_NAME)) {
+    tools.browserTools.push({
+      capability: 'core',
+      schema: {
+        name: START_TOOL_NAME,
+        title: 'Start the bound account login',
+        description: 'Open the official creator surface for the bound platform in its isolated persistent browser profile. Use only for an explicit user login action.',
+        inputSchema: z.object({}),
+        type: 'destructive',
+      },
+      handle: async (tab, _params, response) => {
+        const lease = parseAccountLease()
+        const loginUrl = accountLoginTarget(lease.platform)
+        await tab.page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 })
+        const payload = {
+          schema: 'marketing_account_login_started.v1',
+          account_id: lease.account_id,
+          platform: lease.platform,
+          page_url: safePageLocation(tab.page.url()),
+          started_at: new Date().toISOString(),
+        }
+        response.addCode(`await page.goto(${JSON.stringify(loginUrl)});`)
+        await response.addResult('Marketing account login started', JSON.stringify(payload, null, 2))
+      },
+    })
+  }
   if (tools.browserTools.some(tool => tool.schema?.name === TOOL_NAME)) return
   tools.browserTools.push({
     capability: 'core',
@@ -125,3 +167,4 @@ export function installAccountAuthTool() {
 
 export const accountAuthSchema = SCHEMA
 export const accountAuthToolName = TOOL_NAME
+export const accountLoginStartToolName = START_TOOL_NAME

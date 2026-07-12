@@ -36,6 +36,68 @@ def decode_account_auth_result(result: Any) -> dict[str, Any] | None:
     return None
 
 
+def apply_account_auth_verification(
+    payload: dict[str, Any],
+    *,
+    user_id: str,
+    account_id: str,
+    platform: str,
+    session_db: Any = None,
+) -> dict[str, Any]:
+    """Apply one verified MCP result to canonical account and lifecycle truth."""
+
+    if payload.get("schema") != AUTH_SCHEMA or payload.get("verified") is not True:
+        raise ValueError("account login has not been verified")
+    observed_account = str(payload.get("account_id") or "")
+    observed_platform = str(payload.get("platform") or "")
+    if observed_account != account_id or observed_platform != platform:
+        raise ValueError("browser login verification does not match the bound account scope")
+    if account_id.startswith("prospect_"):
+        raise ValueError("a prospect scope cannot be marked as a platform login")
+
+    registry = AccountRegistry(session_db)
+    try:
+        account = registry.mark_authenticated(account_id, user_id=user_id)
+        prospect_id = default_marketing_scope(user_id)[1]
+        try:
+            adoption = registry.adopt_prospect(
+                prospect_id,
+                account_id,
+                user_id=user_id,
+            )
+        except ValueError as exc:
+            adoption = {
+                "status": "review_required",
+                "reason": str(exc),
+                "prospect_account_id": prospect_id,
+                "target_account_id": account_id,
+            }
+    finally:
+        registry.close()
+
+    # The login browser was headed because the lease was unauthenticated.
+    # Close it after verification; later authenticated leases reuse its profile
+    # in background mode.
+    from tools.mcp_tool import reconcile_marketing_account_browser
+
+    reconcile_marketing_account_browser(
+        user_id=str(account["user_id"]),
+        account_id=str(account["id"]),
+        platform=str(account["platform"]),
+        profile_key=str(account["profile_key"]),
+        purge_profile=False,
+    )
+    return {
+        "schema": AUTH_SCHEMA,
+        "account_id": account_id,
+        "platform": platform,
+        "auth_state": account["auth_state"],
+        "account_status": account["status"],
+        "prospect_adoption": adoption,
+        "browser_transition": "headed_login_closed_next_lease_background",
+    }
+
+
 def enrich_tool_result_with_account_auth(
     *,
     tool_name: str,
@@ -53,57 +115,12 @@ def enrich_tool_result_with_account_auth(
         return result
     if payload.get("verified") is not True:
         return result
-    account_id = str(payload.get("account_id") or "")
-    platform = str(payload.get("platform") or "")
-    if account_id != str(scope["account_id"]) or platform != str(scope["platform"]):
-        raise ValueError("browser login verification does not match the bound account scope")
-    if account_id.startswith("prospect_"):
-        raise ValueError("a prospect scope cannot be marked as a platform login")
-
-    registry = AccountRegistry()
-    try:
-        account = registry.mark_authenticated(
-            account_id,
-            user_id=str(scope["user_id"]),
-        )
-        prospect_id = default_marketing_scope(str(scope["user_id"]))[1]
-        try:
-            adoption = registry.adopt_prospect(
-                prospect_id,
-                account_id,
-                user_id=str(scope["user_id"]),
-            )
-        except ValueError as exc:
-            adoption = {
-                "status": "review_required",
-                "reason": str(exc),
-                "prospect_account_id": prospect_id,
-                "target_account_id": account_id,
-            }
-    finally:
-        registry.close()
-
-    # The login browser was headed because the lease was unauthenticated.
-    # Close it after the successful tool result; the next lease is authenticated
-    # and therefore restarts the same persistent profile in background mode.
-    from tools.mcp_tool import reconcile_marketing_account_browser
-
-    reconcile_marketing_account_browser(
-        user_id=str(account["user_id"]),
-        account_id=str(account["id"]),
-        platform=str(account["platform"]),
-        profile_key=str(account["profile_key"]),
-        purge_profile=False,
+    transition = apply_account_auth_verification(
+        payload,
+        user_id=str(scope["user_id"]),
+        account_id=str(scope["account_id"]),
+        platform=str(scope["platform"]),
     )
-    transition = {
-        "schema": AUTH_SCHEMA,
-        "account_id": account_id,
-        "platform": platform,
-        "auth_state": account["auth_state"],
-        "account_status": account["status"],
-        "prospect_adoption": adoption,
-        "browser_transition": "headed_login_closed_next_lease_background",
-    }
     return str(result) + "\n\nMarketing OS account transition:\n" + json.dumps(
         transition, ensure_ascii=False, indent=2
     )

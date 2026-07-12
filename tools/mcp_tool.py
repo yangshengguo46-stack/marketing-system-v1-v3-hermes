@@ -3481,6 +3481,54 @@ async def _release_marketing_account_browser(
             await _purge_scoped_account_data(config, lease)
 
 
+_PRODUCT_ACCOUNT_BROWSER_TOOLS = {
+    "browser_start_account_login",
+    "browser_verify_account_login",
+}
+
+
+def execute_marketing_account_browser_tool(
+    *,
+    account_id: str,
+    user_id: str = "default",
+    tool_name: str,
+    arguments: Optional[dict] = None,
+) -> str:
+    """Execute a bounded product action in the native account browser owner."""
+
+    if tool_name not in _PRODUCT_ACCOUNT_BROWSER_TOOLS:
+        raise ValueError("unsupported direct account browser action")
+    from agent.account_registry import AccountRegistry
+    from agent.product import bundled_browser_mcp_config
+
+    registry = AccountRegistry()
+    try:
+        lease = registry.lease_for_login(account_id, user_id=user_id).to_dict()
+    finally:
+        registry.close()
+    config = bundled_browser_mcp_config()
+    if not config:
+        raise RuntimeError("bundled marketing browser MCP is unavailable")
+    _ensure_mcp_loop()
+
+    async def _call() -> str:
+        target = await _get_scoped_server("marketing-browser", config, lease)
+        async with target._rpc_lock:
+            result = await target.session.call_tool(tool_name, arguments=arguments or {})
+        parts = [
+            str(block.text)
+            for block in (result.content or [])
+            if getattr(block, "text", None)
+        ]
+        text_result = "\n".join(parts)
+        if result.isError:
+            raise RuntimeError(_sanitize_error(text_result or "account browser action failed"))
+        return text_result
+
+    timeout = float(config.get("timeout") or 120)
+    return _run_on_mcp_loop(_call, timeout=timeout)
+
+
 def reconcile_marketing_account_browser(
     *,
     user_id: str,

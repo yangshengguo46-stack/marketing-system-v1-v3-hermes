@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { evaluateAccountAuthentication, safePageLocation } from '../src/account-auth.js'
+import {
+  accountLoginTarget,
+  evaluateAccountAuthentication,
+  safePageLocation,
+} from '../src/account-auth.js'
+
+test('owns official creator login targets inside the account browser MCP', () => {
+  assert.equal(accountLoginTarget('douyin'), 'https://creator.douyin.com/')
+  assert.equal(accountLoginTarget('wechat_official'), 'https://mp.weixin.qq.com/')
+  assert.equal(accountLoginTarget('zhihu'), 'https://www.zhihu.com/creator')
+  assert.throws(() => accountLoginTarget('weibo'), /unsupported platform/)
+})
 
 test('verifies a real first-party Douyin login without returning cookie values', () => {
   const result = evaluateAccountAuthentication({
