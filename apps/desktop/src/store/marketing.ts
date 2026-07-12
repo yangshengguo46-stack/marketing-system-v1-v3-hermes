@@ -4,9 +4,18 @@ import { Codecs, persistentAtom } from '@/lib/persisted'
 
 export interface MarketingAccountSummary {
   id: string
+  auth_state?: string
   label?: string
   platform?: string
+  status?: string
   username?: string
+}
+
+export interface MarketingPlatformSummary {
+  content: string[]
+  id: string
+  label: string
+  region: 'china' | 'global' | string
 }
 
 export const $marketingAccounts = atom<MarketingAccountSummary[]>([])

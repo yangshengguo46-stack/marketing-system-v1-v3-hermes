@@ -1,15 +1,19 @@
 import { useStore } from '@nanostores/react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
+import { Plus } from '@/lib/icons'
 import { PRODUCT_NAME, PRODUCT_TAGLINE } from '@/product'
 import {
   $selectedMarketingAccountId,
   type MarketingAccountSummary,
+  type MarketingPlatformSummary,
   selectMarketingAccount,
   setMarketingAccounts
 } from '@/store/marketing'
+
+import { AccountConnectDialog, MarketingPlatformAvatar } from './account-connect-dialog'
 
 interface MarketingProductStatus {
   product_id: string
@@ -26,6 +30,11 @@ interface MarketingAccountsSummary {
   source: string
 }
 
+interface MarketingPlatformsSummary {
+  platforms: MarketingPlatformSummary[]
+  total: number
+}
+
 interface WorkbenchViewProps {
   onNewChat: () => void
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
@@ -34,12 +43,48 @@ interface WorkbenchViewProps {
 export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps) {
   const [status, setStatus] = useState<MarketingProductStatus | null>(null)
   const [accounts, setAccounts] = useState<MarketingAccountsSummary | null>(null)
+  const [platforms, setPlatforms] = useState<MarketingPlatformSummary[]>([])
+  const [connectOpen, setConnectOpen] = useState(false)
+  const [resumeAccount, setResumeAccount] = useState<MarketingAccountSummary | null>(null)
   const [error, setError] = useState('')
   const selectedAccountId = useStore($selectedMarketingAccountId)
 
   const startForAccount = (accountId: string) => {
     selectMarketingAccount(accountId)
     onNewChat()
+  }
+
+  const applyAccounts = useCallback((result: MarketingAccountsSummary) => {
+    setAccounts(result)
+    setMarketingAccounts(result.accounts)
+  }, [])
+
+  const refreshAccounts = useCallback(async () => {
+    const result = await requestGateway<MarketingAccountsSummary>('marketing.accounts.list')
+    applyAccounts(result)
+  }, [applyAccounts, requestGateway])
+
+  const handleAccountChanged = useCallback(
+    (account: MarketingAccountSummary) => {
+      setAccounts(current => {
+        const previous = current?.accounts || []
+        const next = [...previous.filter(item => item.id !== account.id), account]
+        setMarketingAccounts(next)
+
+        return { accounts: next, source: current?.source || 'hermes_state', total: next.length }
+      })
+
+      if (account.auth_state === 'authenticated') {
+        selectMarketingAccount(account.id)
+        void refreshAccounts().catch(() => undefined)
+      }
+    },
+    [refreshAccounts]
+  )
+
+  const openAccountConnect = (account: MarketingAccountSummary | null = null) => {
+    setResumeAccount(account)
+    setConnectOpen(true)
   }
 
   useEffect(() => {
@@ -60,9 +105,16 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
     void requestGateway<MarketingAccountsSummary>('marketing.accounts.list')
       .then(result => {
         if (active) {
-          setAccounts(result)
-          setMarketingAccounts(result.accounts)
+          applyAccounts(result)
         }
+      })
+
+    void requestGateway<MarketingPlatformsSummary>('marketing.accounts.platforms')
+      .then(result => {
+        if (active) {setPlatforms(result.platforms)}
+      })
+      .catch(reason => {
+        if (active) {setError(reason instanceof Error ? reason.message : String(reason))}
       })
       .catch(reason => {
         if (active) {
@@ -73,7 +125,7 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
     return () => {
       active = false
     }
-  }, [requestGateway])
+  }, [applyAccounts, requestGateway])
 
   return (
     <main className="h-full overflow-y-auto bg-(--ui-background) px-10 pb-16 pt-[calc(var(--titlebar-height)+2.5rem)] text-foreground">
@@ -101,23 +153,40 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
             value={status ? '原生运行' : '正在连接'}
           />
           <article className="min-h-40 rounded-2xl border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-6">
-            <p className="text-xs text-(--ui-text-tertiary)">经营对象</p>
-            <strong className="mt-5 block text-xl font-semibold tracking-[-0.03em]">
-              {accounts ? `${accounts.total} 个账号` : '正在读取'}
-            </strong>
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs text-(--ui-text-tertiary)">经营对象</p>
+                <strong className="mt-5 block text-xl font-semibold tracking-[-0.03em]">
+                  {accounts ? `${accounts.total} 个账号` : '正在读取'}
+                </strong>
+              </div>
+              <Button aria-label="连接平台账号" onClick={() => openAccountConnect()} size="icon-sm" variant="outline">
+                <Plus className="size-4" />
+              </Button>
+            </div>
+            <div className="mt-4 flex flex-col gap-2">
               {accounts?.accounts.map(account => (
                 <button
-                  className={`rounded-full border px-3 py-1.5 text-left text-xs transition-colors ${
+                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs transition-colors ${
                     selectedAccountId === account.id
                       ? 'border-(--ui-accent) bg-(--ui-accent)/10 text-foreground'
                       : 'border-(--ui-stroke-tertiary) text-(--ui-text-secondary) hover:text-foreground'
                   }`}
                   key={account.id}
-                  onClick={() => startForAccount(account.id)}
+                  onClick={() =>
+                    account.auth_state === 'authenticated' ? startForAccount(account.id) : openAccountConnect(account)
+                  }
                   type="button"
                 >
-                  {account.platform || '平台'} · {account.label || account.username || account.id}
+                  <MarketingPlatformAvatar platform={account.platform || ''} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-foreground">
+                      {account.label || account.username || account.id}
+                    </span>
+                    <span className="mt-0.5 block text-[0.68rem] text-(--ui-text-tertiary)">
+                      {account.auth_state === 'authenticated' ? '已连接 · 点击开始工作' : '等待登录 · 点击继续'}
+                    </span>
+                  </span>
                 </button>
               ))}
               {accounts?.total === 0 ? (
@@ -147,6 +216,14 @@ export function WorkbenchView({ onNewChat, requestGateway }: WorkbenchViewProps)
           {error ? <p className="mt-4 text-xs text-red-400">原生 Gateway 尚未就绪：{error}</p> : null}
         </section>
       </div>
+      <AccountConnectDialog
+        onAccountChanged={handleAccountChanged}
+        onOpenChange={setConnectOpen}
+        open={connectOpen}
+        platforms={platforms}
+        requestGateway={requestGateway}
+        resumeAccount={resumeAccount}
+      />
     </main>
   )
 }
