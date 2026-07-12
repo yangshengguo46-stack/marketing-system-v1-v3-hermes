@@ -1,7 +1,7 @@
 # 开源/第三方视频生成与素材生态调研
 
 > 建立日期：2026-07-03
-> 关联台账：`08-video-generation-volcano.md`
+> 当前任务入口：[`../current/EXECUTION_LEDGER.md`](../current/EXECUTION_LEDGER.md)；高级视频历史方案：[`../deferred/high-end-video-volcengine.md`](../deferred/high-end-video-volcengine.md)。
 > 调研目标：评估 MoneyPrinterTurbo、素材 MCP、音效方案、LibTV 技术路径，为视频生成板块补充技术选型依据。
 
 ---

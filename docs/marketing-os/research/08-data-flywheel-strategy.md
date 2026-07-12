@@ -1,7 +1,7 @@
 # 数据飞轮策略：营销系统数据复用与内容生产闭环
 
 > 建立日期：2026-07-02
-> 关联台账：`08-video-generation-volcano.md`、`04-memory-learning-knowledge.md`、`05-content-publishing-feedback.md`
+> 当前任务入口：[`../current/EXECUTION_LEDGER.md`](../current/EXECUTION_LEDGER.md)；高级视频历史方案：[`../deferred/high-end-video-volcengine.md`](../deferred/high-end-video-volcengine.md)。旧编号台账只可通过 Git 历史追溯。
 > 核心问题：系统推向市场后产生大量数据，如何复用于内容生产，让系统越用越强。
 >
 > **上位概念：网感。** 所有数据飞轮、多 Agent 协同、爆款归因，最终都指向"网感"二字。

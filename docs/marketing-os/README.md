@@ -17,7 +17,7 @@
 - [`verification/`](./verification/)：必须由真人执行的验收清单。
 - [`security/`](./security/)：安全与供应链要求。
 - [`sbom/`](./sbom/)：生成的依赖和许可证清单。
-- [`deferred/`](./deferred/)：明确暂停、不能进入当前桌面主线的项目。
+- [`deferred/`](./deferred/)：明确暂停、不能进入当前桌面主线的项目；包括可追溯但未进入执行顺序的[高级视频方案](./deferred/high-end-video-volcengine.md)。
 
 旧总台账、Claude/GLM 任务、套壳架构、FastAPI/AgentCoreStore 路线和阶段事故日志已从工作树删除。需要追溯时使用 Git 历史，不得把历史文件恢复为任务入口。
 

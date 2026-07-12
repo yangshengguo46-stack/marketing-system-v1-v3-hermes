@@ -1,9 +1,18 @@
-# 视频生成板块执行台账（火山引擎）
+# 高级视频方案与历史执行记录（火山引擎）
 
 > 建立日期：2026-07-02
-> 资料库：`docs/research/07-volcano-video-production-research.md`
+> 状态：deferred；不计入桌面 v0.1 完成，不得从本文直接发起任务。
+> 当前任务入口：[`../current/EXECUTION_LEDGER.md`](../current/EXECUTION_LEDGER.md)
+> 资料库：[`../research/07-volcano-video-production-research.md`](../research/07-volcano-video-production-research.md)
 > 目标：对标火山剧创工业级多 Agent 协同架构，集成 Seedance 2.0（视频生成）和 Seedream 5.0（图片生成），实现 6 环节视频生产流水线。
-> 2026-07-08 修订：本台账只负责第三条 `premium_human_video` 高质量视频 lane。内容生产端的总入口已迁移到 `14-content-production-factory.md`，软文与不露脸素材拼接视频不再阻塞于火山/Seedance provider。
+> 当前边界：本文只保留 `premium_human_video` 高质量视频 lane 的架构、校准证据和历史记录。软文与不露脸素材视频属于 Hermes 原生内容生产能力，不依赖火山或 Seedance provider。
+
+## 当前状态边界
+
+- 已落地并有自动化证据：`engine/video_core` 的画布 schema、项目存储、成本 hook、火山 adapter、TaskPoller、EDL/renderer 命令生成、共享剪辑协议和解耦边界测试。
+- 有开发机真实校准证据：ARK 模型清单、Seedream 图片请求、Seedance fast 视频提交/轮询及结果字段；该证据不等于完整产品闭环。
+- 尚未完成真人闭环：8 角色独立 Agent 调度、动态样片审批、真实 FFmpeg 成片、完整参考资产模式、反馈修改、营销接入和成片质量验收。
+- 暂停原则：恢复开发前，必须先在当前执行台账重新排入顺序；本文中的历史任务状态不得覆盖当前代码和测试事实。
 
 ## 完成目标
 
@@ -22,7 +31,7 @@
 
 ## VIDEO-01 架构 ADR v2（2026-07-03 定版，用户已确认）
 
-> 依据：`docs/research/07-volcano-video-production-research.md`（火山 API 底层逻辑）、`docs/research/09-video-ecosystem-research.md`（ViMax/OpenMontage/LibTV/MoneyPrinterTurbo 等开源生态）。2026-07-03 用户确认按本版执行。
+> 依据：[`../research/07-volcano-video-production-research.md`](../research/07-volcano-video-production-research.md)（火山 API 底层逻辑）、[`../research/09-video-ecosystem-research.md`](../research/09-video-ecosystem-research.md)（ViMax/OpenMontage/LibTV/MoneyPrinterTurbo 等开源生态）。2026-07-03 用户确认按本版执行。
 >
 > v2 相对 v1 草案的变化：流水线制改为**剧组制（8 角色）**；新增**三个倒置**（时间线先行 / 动态样片两阶段 / 制片人预算制）；新增场记连续性检查；新增可解耦 Agent 层与独立售卖空间；技术栈定案。画布黑板、剪辑两层、反馈闭环保留。
 
