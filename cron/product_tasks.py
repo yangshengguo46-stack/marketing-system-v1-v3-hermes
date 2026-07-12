@@ -50,6 +50,24 @@ def _run_registered_tasks() -> list[dict[str, Any]]:
                 "error": f"{type(exc).__name__}: {exc}",
             }
         )
+    try:
+        from agent.marketing.providers.knowledge_sync import (
+            has_knowledge_sync_provider,
+            run_knowledge_sync,
+        )
+
+        if has_knowledge_sync_provider():
+            results.append(
+                {"task": "marketing_knowledge_sync", "result": run_knowledge_sync()}
+            )
+    except Exception as exc:
+        logger.error("Knowledge sync Cron task failed: %s", exc, exc_info=True)
+        results.append(
+            {
+                "task": "marketing_knowledge_sync",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
     return results
 
 

@@ -110,6 +110,8 @@ _GLOBAL_ENV_PREFIXES = (
     "HERMES_KANBAN_",
     "HERMES_TELEGRAM_",   # tuning knobs (batch delays, fallback toggles) — NOT the token
     "TERMINAL_",          # terminal/sandbox backend settings
+    # Installation-wide central knowledge service, never a user profile key.
+    "MARKETING_KNOWLEDGE_",
 )
 
 
@@ -202,4 +204,3 @@ def build_profile_secret_scope(hermes_home: Path) -> Dict[str, str]:
     from ``os.environ`` directly, so the scope holds only profile secrets.
     """
     return load_env_file(Path(hermes_home) / ".env")
-

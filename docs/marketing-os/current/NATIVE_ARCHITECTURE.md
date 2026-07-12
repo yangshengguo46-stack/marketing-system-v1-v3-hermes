@@ -83,7 +83,9 @@ Hermes `state.db` 是会话、账号、受众、内容、预演、回执、指�
 
 中央服务的持久 owner 是 `services/marketing_knowledge/storage.py`：它只存匿名 envelope、内容哈希、时间和最小删除 tombstone，不存本地账号身份。引用重试必须内容一致，删除后的引用永不允许复活；任何 corpus 变化都会使旧签名包失效，重聚合与落包共享一个 SQLite 写事务。
 
-网络入口由同一服务边界的 `services/marketing_knowledge/api.py` 拥有。每个产品安装实例使用独立可轮换 token，服务端只存 token 哈希；请求必须带短时效时间戳和一次性 nonce，限流与 nonce 都持久化。贡献表不保存 client ID，而保存按 client 与 contribution 生成的不可关联删除 owner proof；删除 HMAC key-ring 支持轮换，旧 proof 在成功访问后迁移到当前 key。Provisioning 只能走离线运维，不提供公共注册接口。Hermes 后续只作为这个 HTTP 协议的客户端；Desktop/Electron 永不持有中央同步逻辑或全局服务密钥。
+网络入口由同一服务边界的 `services/marketing_knowledge/api.py` 拥有。每个产品安装实例使用独立可轮换 token，服务端只存 token 哈希；请求必须带短时效时间戳和一次性 nonce，限流与 nonce 都持久化。贡献表不保存 client ID，而保存按 client 与 contribution 生成的不可关联删除 owner proof；删除 HMAC key-ring 支持轮换，旧 proof 在成功访问后迁移到当前 key。Provisioning 只能走离线运维，不提供公共注册接口。
+
+Hermes 客户端 owner 是 `agent/marketing/providers/knowledge_sync.py`：它只读取 `KnowledgeFlywheelRepository` 的 pending consented outbox，上传成功后结算 submitted；下载结果必须经 Ed25519 信任 key-ring 验证，篡改或未知签名包不能进入本地知识库。`cron/product_tasks.py` 只决定何时调用 provider，不解析 envelope、签名或知识。服务地址、安装级 token 与公钥 ring 通过 `MARKETING_KNOWLEDGE_*` 部署作用域读取，即使 Gateway multiplex 多个用户 profile 也不会借用其中任何人的 credential。Desktop/Electron 永不持有中央同步逻辑或全局服务密钥。
 
 ```text
 Hermes local facts

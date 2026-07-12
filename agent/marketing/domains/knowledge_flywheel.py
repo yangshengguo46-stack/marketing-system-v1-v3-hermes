@@ -144,6 +144,25 @@ class KnowledgeFlywheelRepository(MarketingDomainRepository):
             value[key.removesuffix("_json")] = json.loads(value.pop(key))
         return value
 
+    def list_contributions(
+        self,
+        *,
+        statuses: tuple[str, ...] = ("pending",),
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        selected = tuple(dict.fromkeys(str(value or "").strip() for value in statuses))
+        if not selected or any(value not in _STATUSES for value in selected):
+            raise ValueError("invalid contribution status filter")
+        bounded_limit = max(1, min(int(limit), 500))
+        placeholders = ",".join("?" for _ in selected)
+        with self._connection() as db:
+            rows = db.execute(
+                f"""SELECT id FROM marketing_knowledge_contributions
+                WHERE status IN ({placeholders}) ORDER BY created_at,id LIMIT ?""",
+                (*selected, bounded_limit),
+            ).fetchall()
+        return [self.get_contribution(str(row["id"])) for row in rows]
+
     def update_contribution_status(self, contribution_id: str, status: str) -> dict[str, Any]:
         if status not in _STATUSES - {"pending"}:
             raise ValueError("invalid contribution status")
