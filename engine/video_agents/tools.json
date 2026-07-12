@@ -1,0 +1,15 @@
+{
+  "$comment": "引擎工具 function-call 声明骨架。参数 schema 在 VIDEO-03/04/05 接口冻结后补全。skills 只准调用本清单内工具（解耦纪律）。",
+  "version": 0,
+  "tools": [
+    { "name": "video_project_read", "description": "读取画布（Project JSON）", "status": "todo" },
+    { "name": "video_project_write", "description": "写入画布指定区块（按角色写权限校验：美术→assets，制片人→budget 等）", "status": "todo" },
+    { "name": "video_generate_image", "description": "Seedream 同步文生图（best-of-k）", "status": "todo" },
+    { "name": "video_submit_shot", "description": "提交 Seedance 异步任务（经制片人批额 + 成本门）", "status": "todo" },
+    { "name": "video_task_status", "description": "查询异步任务状态（一般由 Poller 代管，Agent 只读画布）", "status": "todo" },
+    { "name": "video_render", "description": "EDL → mp4（final / animatic 两路径）", "status": "todo" },
+    { "name": "video_estimate_cost", "description": "成本预估（cost.py 表驱动）", "status": "todo" },
+    { "name": "video_gate_request", "description": "花钱卡点申请（hooks.CostGate）", "status": "todo" },
+    { "name": "video_tts", "description": "TTS 配音合成", "status": "todo" }
+  ]
+}
