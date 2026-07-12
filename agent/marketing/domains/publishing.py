@@ -129,6 +129,7 @@ class PublishingRepository(MarketingDomainRepository):
                 if isinstance(content.get("sound_plan"), dict)
                 else None,
                 "content_kind": str(content.get("production_kind") or ""),
+                "experiment_id": str(asset["experiment_id"] or "") or None,
                 "prediction": content.get("prediction")
                 if isinstance(content.get("prediction"), dict)
                 else None,
@@ -249,6 +250,7 @@ class PublishingRepository(MarketingDomainRepository):
             "observed_at": str(result.get("observed_at") or _now()),
             "sound_id": sound_plan.get("sound_id"),
             "sound_mode": sound_plan.get("mode"),
+            "experiment_id": request_payload.get("experiment_id"),
         }
         source_id = post_id or published_url or action_id
         # ReceiptRef is created first through its single owner.  If the process

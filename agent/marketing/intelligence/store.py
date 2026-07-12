@@ -148,6 +148,7 @@ class OperatingLoopRepository(MarketingDomainRepository):
         summary: dict[str, Any],
         platform: str | None = None,
         plan_id: str | None = None,
+        experiment_id: str | None = None,
         preflight_id: str | None = None,
         session_id: str = "",
     ) -> dict[str, Any]:
@@ -159,6 +160,16 @@ class OperatingLoopRepository(MarketingDomainRepository):
         if not source_kind or not source_id or not receipt_type:
             raise ValueError("source_kind, source_id and receipt_type are required")
         with self._transaction() as db:
+            resolved_experiment_id = str(experiment_id or "").strip() or None
+            if not resolved_experiment_id and plan_id:
+                plan = db.execute(
+                    """SELECT experiment_id FROM content_production_plans
+                    WHERE id=? AND user_id=? AND account_id=?""",
+                    (plan_id, user_id, account_id),
+                ).fetchone()
+                resolved_experiment_id = (
+                    str(plan["experiment_id"] or "").strip() or None if plan else None
+                )
             existing = db.execute(
                 """SELECT id FROM marketing_receipt_refs
                 WHERE source_kind=? AND source_id=? AND receipt_type=?""",
@@ -176,8 +187,8 @@ class OperatingLoopRepository(MarketingDomainRepository):
                 db.execute(
                     """INSERT INTO marketing_receipt_refs
                     (id,source_kind,source_id,receipt_type,user_id,account_id,platform,
-                     plan_id,preflight_id,session_id,summary_json,created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     plan_id,experiment_id,preflight_id,session_id,summary_json,created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         receipt_id,
                         source_kind,
@@ -187,6 +198,7 @@ class OperatingLoopRepository(MarketingDomainRepository):
                         account_id,
                         platform,
                         plan_id,
+                        resolved_experiment_id,
                         preflight_id,
                         session_id,
                         _json(_redact(summary)),
@@ -365,6 +377,7 @@ class OperatingLoopRepository(MarketingDomainRepository):
                     account_id TEXT NOT NULL,
                     platform TEXT,
                     plan_id TEXT,
+                    experiment_id TEXT REFERENCES account_experiments(id),
                     preflight_id TEXT REFERENCES marketing_preflight_records(id),
                     session_id TEXT NOT NULL DEFAULT '',
                     summary_json TEXT NOT NULL DEFAULT '{}',

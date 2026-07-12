@@ -168,6 +168,12 @@ PLAN_CONTENT_PRODUCTION_SCHEMA = {
             "audience": {"type": "string"},
             "evidence_refs": {"type": "array", "items": {"type": "string"}},
             "constraints": {"type": "object"},
+            "experiment_id": {
+                "type": "string",
+                "description": (
+                    "Optional running account experiment this plan and every resulting asset test."
+                ),
+            },
         },
         "required": ["objective"],
     },
@@ -628,6 +634,22 @@ def _plan_content_production(args: dict, **kwargs) -> str:
         require_bound=True,
     )
     context = AccountContextRepository().read(user_id=user_id, account_id=account_id)
+    experiment_id = str(args.get("experiment_id") or "").strip()
+    if experiment_id:
+        project_id = str((context.get("lifecycle") or {}).get("project_id") or "")
+        experiment = AccountStrategyRepository().get_experiment(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=project_id,
+            experiment_id=experiment_id,
+        )
+        if experiment["status"] != "running":
+            raise ValueError("content production requires a running experiment")
+        current_system_id = str(
+            (context.get("lifecycle") or {}).get("content_system_id") or ""
+        )
+        if experiment.get("content_system_id") != current_system_id:
+            raise ValueError("experiment does not belong to the current content system")
     evidence_refs = args.get("evidence_refs") or []
     if evidence_refs:
         evidence_refs = [
@@ -646,6 +668,7 @@ def _plan_content_production(args: dict, **kwargs) -> str:
         evidence_refs=evidence_refs,
         constraints=args.get("constraints") or {},
         account_context=context,
+        experiment_id=experiment_id,
     )
     checkpoint = ContentAssetRepository().save_production_plan(
         user_id=user_id,

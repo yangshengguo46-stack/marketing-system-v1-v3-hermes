@@ -137,6 +137,7 @@ class ContentProductionPolicy:
         evidence_refs: list[str] | None = None,
         constraints: dict[str, Any] | None = None,
         account_context: dict[str, Any] | None = None,
+        experiment_id: str = "",
     ) -> dict[str, Any]:
         objective_value = _bounded_text(objective, "objective", 2_000)
         kind_value = infer_content_kind(objective_value, kind=kind, platforms=platforms)
@@ -220,6 +221,7 @@ class ContentProductionPolicy:
                 "content_system_id": lifecycle.get("content_system_id"),
             },
             "operating_mode": "strategy_aligned" if strategy_ready else "exploratory_draft",
+            "experiment_id": str(experiment_id or "").strip() or None,
             "capabilities": {
                 name: SHARED_CAPABILITIES[name] for name in config["capabilities"]
             },

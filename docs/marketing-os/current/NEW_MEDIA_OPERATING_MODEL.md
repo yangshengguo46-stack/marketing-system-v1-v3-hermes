@@ -77,6 +77,8 @@ Marketing OS 不是先替用户“找几个对标、写几个选题”，而是�
 
 未完成或已过期的定位/内容系统不会阻止首日试写，但产物只能标记为 `exploratory_draft`。它可以继续研究、生成和人工打磨，不能进入发布审批。正式经营内容必须绑定当前 `positioning_id`、`content_system_id` 和已连接账号。
 
+实验链必须可从结果反查到行动前假设：`account_experiment → content_production_plan → content_asset → preflight → publish/metric receipt → retro`。计划绑定运行中的 `experiment_id` 后，草稿自动继承并回写实验资产列表；Receipt owner 根据 plan 自动携带同一 experiment，禁止事后靠标题猜测哪条内容属于哪个实验。
+
 ## 四类知识与经营图谱的边界
 
 - 平台知识库：平台规则、分发和表达的“术”。

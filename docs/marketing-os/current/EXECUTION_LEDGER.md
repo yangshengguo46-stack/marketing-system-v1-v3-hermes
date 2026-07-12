@@ -62,6 +62,8 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 
 内容生产已消费经营模型版本：缺少或过期定位/内容系统时，`ContentProductionPolicy` 与 Preflight 进入 `exploratory_draft`，允许用户首日试写和打磨，但 `publish_eligible=false`；`PublishingRepository` 在原生 owner 内拒绝把探索草稿送入发布审批。只有已连接账号、当前定位和当前内容系统同时成立，正式发布闭环才可继续。
 
+实验 ID 链已贯通原生经营事实：运行中 `account_experiment` 可绑定生产计划，所有草稿自动继承 `experiment_id` 并回写实验的 `asset_ids`；发布回执和指标回执由 Receipt owner 根据 plan 自动携带 experiment。后续 Retro 可以从真实结果稳定反查行动前假设，不再依赖标题、时间或模型猜测。
+
 开发机真实 `state.db` 此前已完成知识 schema 升级并种入 2 条平台 stylebook、8 条内容原理、0 条账号知识；账号库为 0 证明系统没有把用户陈述或模型推断伪装成账号经验。新增赛道库和经营世界模型本轮已完成自动化临时库迁移验证，真实长期数据仍不得在未备份前批量改写。
 
 ### LOOP-01 真实发布回执进入三核闭环（底层完成，真人验收冻结）

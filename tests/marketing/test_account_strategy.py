@@ -8,8 +8,11 @@ from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import (
     AccountLifecycleRepository,
     AccountStrategyRepository,
+    ContentAssetRepository,
+    ContentProductionPolicy,
     EvidenceRepository,
 )
+from agent.marketing.intelligence import OperatingLoopRepository
 from hermes_state import SessionDB
 
 
@@ -219,6 +222,50 @@ def test_full_operating_model_is_versioned_evidence_backed_and_restart_safe(tmp_
         user_id="default", account_id="acct-1", project_id=project["id"],
         experiment_id=experiment["id"], confirmed_by_user=True,
     )
+    plan = ContentProductionPolicy().plan(
+        objective="做一条结果先行的 AI 工作流短视频",
+        kind="faceless_video",
+        platforms=["douyin"],
+        audience="需要完成真实工作的职场人",
+        evidence_refs=[evidence_id],
+        experiment_id=experiment["id"],
+        account_context={
+            "account_id": "acct-1",
+            "connected": True,
+            "lifecycle": {
+                "positioning_id": positioning["id"],
+                "positioning": _positioning(),
+                "content_system_id": system["id"],
+                "content_system": {"id": system["id"]},
+                "strategy_alignment": {
+                    "positioning_current": True,
+                    "content_system_current": True,
+                },
+            },
+        },
+    )
+    assets = ContentAssetRepository(paths)
+    saved_plan = assets.save_production_plan(
+        user_id="default", account_id="acct-1", plan=plan
+    )
+    asset = assets.create_draft(
+        user_id="default", account_id="acct-1", title="AI 工作流实测",
+        plan_id=saved_plan["plan_id"], asset_type="video", platform="douyin",
+        production_kind="faceless_video", content={"script": "展示结果，再还原步骤"},
+        evidence_refs=[evidence_id],
+    )
+    linked_experiment = strategy.get_experiment(
+        user_id="default", account_id="acct-1", project_id=project["id"],
+        experiment_id=experiment["id"],
+    )
+    receipt = OperatingLoopRepository(paths).create_receipt(
+        source_kind="test:render", source_id="render-1", receipt_type="render_complete",
+        user_id="default", account_id="acct-1", plan_id=saved_plan["plan_id"],
+        summary={"outcome": "rendered"},
+    )
+    assert asset["experiment_id"] == experiment["id"]
+    assert asset["id"] in linked_experiment["asset_ids"]
+    assert receipt["experiment_id"] == experiment["id"]
 
     restarted = AccountStrategyRepository(paths).read_operating_model(
         user_id="default", account_id="acct-1", project_id=project["id"]
@@ -281,6 +328,20 @@ def test_sessiondb_reconciles_old_lifecycle_and_benchmark_tables(tmp_path):
             pains_json TEXT NOT NULL,scenarios_json TEXT NOT NULL,exclusions_json TEXT NOT NULL,
             data_gaps_json TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL)"""
         )
+        db.execute(
+            """CREATE TABLE content_production_plans (
+            id TEXT PRIMARY KEY,user_id TEXT NOT NULL,account_id TEXT NOT NULL,
+            kind TEXT NOT NULL,objective TEXT NOT NULL,platforms_json TEXT NOT NULL,
+            plan_json TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL)"""
+        )
+        db.execute(
+            """CREATE TABLE marketing_receipt_refs (
+            id TEXT PRIMARY KEY,source_kind TEXT NOT NULL,source_id TEXT NOT NULL,
+            receipt_type TEXT NOT NULL,user_id TEXT NOT NULL,account_id TEXT NOT NULL,
+            platform TEXT,plan_id TEXT,preflight_id TEXT,session_id TEXT NOT NULL,
+            summary_json TEXT NOT NULL,created_at TEXT NOT NULL)"""
+        )
         db.commit()
     finally:
         db.close()
@@ -297,6 +358,12 @@ def test_sessiondb_reconciles_old_lifecycle_and_benchmark_tables(tmp_path):
         indexes = {
             row[1] for row in db.execute("PRAGMA index_list(benchmark_accounts)")
         }
+        plan_columns = {
+            row[1] for row in db.execute("PRAGMA table_info(content_production_plans)")
+        }
+        receipt_columns = {
+            row[1] for row in db.execute("PRAGMA table_info(marketing_receipt_refs)")
+        }
     finally:
         db.close()
 
@@ -305,3 +372,5 @@ def test_sessiondb_reconciles_old_lifecycle_and_benchmark_tables(tmp_path):
     )
     assert {"jobs_json", "trust_barriers_json", "behavior_signals_json"} <= audience_columns
     assert "idx_benchmark_account_scope" in indexes
+    assert "experiment_id" in plan_columns
+    assert "experiment_id" in receipt_columns

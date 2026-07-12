@@ -47,6 +47,7 @@ class ContentAssetRepository(MarketingDomainRepository):
             raise ValueError("production plan requires target platforms")
         if any(platform not in VALID_PLATFORMS for platform in platforms):
             raise ValueError("production plan contains unsupported platform")
+        experiment_id = str(plan.get("experiment_id") or "").strip() or None
         fingerprint = json.dumps(
             {
                 "user_id": user_id,
@@ -55,6 +56,7 @@ class ContentAssetRepository(MarketingDomainRepository):
                 "objective": objective,
                 "platforms": platforms,
                 "constraints": plan.get("constraints") or {},
+                "experiment_id": experiment_id,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -67,10 +69,26 @@ class ContentAssetRepository(MarketingDomainRepository):
         encoded = _bounded_json(payload, "production_plan", 500_000)
         now = _now()
         with self._transaction() as db:
+            if experiment_id:
+                experiment = db.execute(
+                    """SELECT content_system_id,status FROM account_experiments
+                    WHERE id=? AND user_id=? AND account_id=?""",
+                    (experiment_id, user_id, account_id),
+                ).fetchone()
+                if experiment is None:
+                    raise KeyError("experiment not found in account scope")
+                if experiment["status"] != "running":
+                    raise ValueError("production plan requires a running experiment")
+                current_system_id = str(
+                    (plan.get("account_scope") or {}).get("content_system_id") or ""
+                )
+                if current_system_id and experiment["content_system_id"] != current_system_id:
+                    raise ValueError("experiment does not belong to the current content system")
             db.execute(
                 """INSERT INTO content_production_plans
-                (id,user_id,account_id,kind,objective,platforms_json,plan_json,status,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,'planned',?,?)
+                (id,user_id,account_id,experiment_id,kind,objective,platforms_json,plan_json,
+                 status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,'planned',?,?)
                 ON CONFLICT(id) DO UPDATE SET
                     plan_json=excluded.plan_json,
                     updated_at=excluded.updated_at""",
@@ -78,6 +96,7 @@ class ContentAssetRepository(MarketingDomainRepository):
                     plan_id,
                     user_id,
                     account_id,
+                    experiment_id,
                     kind,
                     objective,
                     json.dumps(platforms, ensure_ascii=False),
@@ -286,6 +305,8 @@ class ContentAssetRepository(MarketingDomainRepository):
             elif platform not in plan_platforms:
                 raise ValueError("draft platform is outside its production plan")
             payload["_production_plan_id"] = plan_id_value
+            experiment_id = str(plan_row["experiment_id"] or "").strip() or None
+            payload["_experiment_id"] = experiment_id
             plan_payload = json.loads(plan_row["plan_json"])
             sound_plan = payload.get("sound_plan")
             if production_kind in {"faceless_video", "premium_human_video"}:
@@ -323,7 +344,7 @@ class ContentAssetRepository(MarketingDomainRepository):
                 """INSERT INTO content_assets
                 (id,user_id,account_id,platform,title,type,status,parent_id,experiment_id,
                  topic,hook,version,content_json,metrics_json,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,NULL,?,?,?,?,'{}',?,?)""",
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'{}',?,?)""",
                 (
                     asset_id,
                     user_id,
@@ -333,6 +354,7 @@ class ContentAssetRepository(MarketingDomainRepository):
                     asset_type,
                     asset_status,
                     parent_id,
+                    experiment_id,
                     _optional_text(topic, 200),
                     _optional_text(hook, 200),
                     int(asset_version),
@@ -341,6 +363,22 @@ class ContentAssetRepository(MarketingDomainRepository):
                     now,
                 ),
             )
+            if experiment_id:
+                experiment = db.execute(
+                    """SELECT asset_ids_json FROM account_experiments
+                    WHERE id=? AND user_id=? AND account_id=? AND status='running'""",
+                    (experiment_id, user_id, account_id),
+                ).fetchone()
+                if experiment is None:
+                    raise ValueError("running experiment disappeared from account scope")
+                asset_ids = json.loads(experiment["asset_ids_json"] or "[]")
+                if asset_id not in asset_ids:
+                    asset_ids.append(asset_id)
+                    db.execute(
+                        """UPDATE account_experiments SET asset_ids_json=?,updated_at=?
+                        WHERE id=?""",
+                        (json.dumps(asset_ids, ensure_ascii=False), now, experiment_id),
+                    )
             if parent_id:
                 updated = db.execute(
                     """UPDATE content_assets SET status='superseded', updated_at=?
