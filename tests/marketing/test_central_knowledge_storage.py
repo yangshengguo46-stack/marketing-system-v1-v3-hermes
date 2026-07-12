@@ -9,6 +9,9 @@ from marketing_knowledge_protocol import CONTRIBUTION_PROTOCOL
 from services.marketing_knowledge import CentralKnowledgeStore, KnowledgeAggregator
 
 
+OWNER = "a" * 64
+
+
 def _contribution(index: int) -> dict:
     return {
         "protocol": CONTRIBUTION_PROTOCOL,
@@ -30,9 +33,9 @@ def _contribution(index: int) -> dict:
 
 def test_persistent_ingest_is_idempotent_and_rejects_reference_collision(tmp_path):
     store = CentralKnowledgeStore(tmp_path / "central.db")
-    first = store.ingest_contribution(_contribution(1))
+    first = store.ingest_contribution(_contribution(1), deletion_owner_sha256=OWNER)
     repeated = CentralKnowledgeStore(tmp_path / "central.db").ingest_contribution(
-        _contribution(1)
+        _contribution(1), deletion_owner_sha256=OWNER
     )
     collision = _contribution(1)
     collision["outcomes"]["completion_rate"] = 0.99
@@ -41,7 +44,7 @@ def test_persistent_ingest_is_idempotent_and_rejects_reference_collision(tmp_pat
     assert repeated["operation"] == "already_ingested"
     assert repeated["content_sha256"] == first["content_sha256"]
     with pytest.raises(ValueError, match="different content"):
-        store.ingest_contribution(collision)
+        store.ingest_contribution(collision, deletion_owner_sha256=OWNER)
 
 
 def test_central_edge_rejects_nested_identity_and_specific_values(tmp_path):
@@ -54,31 +57,35 @@ def test_central_edge_rejects_nested_identity_and_specific_values(tmp_path):
     del missing_platform["cohort"]["platform"]
 
     with pytest.raises(ValueError, match="forbidden field"):
-        store.ingest_contribution(identity)
+        store.ingest_contribution(identity, deletion_owner_sha256=OWNER)
     with pytest.raises(ValueError, match="identifying data"):
-        store.ingest_contribution(url)
+        store.ingest_contribution(url, deletion_owner_sha256=OWNER)
     with pytest.raises(ValueError, match="safe platform"):
-        store.ingest_contribution(missing_platform)
+        store.ingest_contribution(missing_platform, deletion_owner_sha256=OWNER)
 
 
 def test_deletion_removes_payload_and_blocks_future_replay(tmp_path):
     store = CentralKnowledgeStore(tmp_path / "central.db")
-    store.ingest_contribution(_contribution(1))
+    store.ingest_contribution(_contribution(1), deletion_owner_sha256=OWNER)
 
-    deleted = store.delete_contribution("contrib_0001", deletion_ref="delete_0001")
-    repeated = store.delete_contribution("contrib_0001", deletion_ref="delete_0001")
+    deleted = store.delete_contribution(
+        "contrib_0001", deletion_ref="delete_0001", deletion_owner_sha256=OWNER
+    )
+    repeated = store.delete_contribution(
+        "contrib_0001", deletion_ref="delete_0001", deletion_owner_sha256=OWNER
+    )
 
     assert deleted["operation"] == "deleted"
     assert repeated["operation"] == "already_deleted"
     assert store.list_contributions() == []
     with pytest.raises(ValueError, match="cannot be replayed"):
-        store.ingest_contribution(_contribution(1))
+        store.ingest_contribution(_contribution(1), deletion_owner_sha256=OWNER)
 
 
 def test_builds_and_persists_signed_pack_from_durable_rows(tmp_path):
     store = CentralKnowledgeStore(tmp_path / "central.db")
     for index in range(4):
-        store.ingest_contribution(_contribution(index))
+        store.ingest_contribution(_contribution(index), deletion_owner_sha256=OWNER)
     aggregator = KnowledgeAggregator(
         signing_key=Ed25519PrivateKey.generate(),
         key_id="product-2026-01",
@@ -96,7 +103,9 @@ def test_builds_and_persists_signed_pack_from_durable_rows(tmp_path):
     assert store.get_pack(packs[0]["id"]) == packs[0]
     assert packs[0]["sample_size"] == 4
 
-    store.delete_contribution("contrib_0000", deletion_ref="delete_0000")
+    store.delete_contribution(
+        "contrib_0000", deletion_ref="delete_0000", deletion_owner_sha256=OWNER
+    )
     with pytest.raises(KeyError, match="not found"):
         store.get_pack(packs[0]["id"])
     assert store.build_and_store_packs(

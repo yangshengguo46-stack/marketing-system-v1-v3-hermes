@@ -81,7 +81,9 @@ Hermes `state.db` 是会话、账号、受众、内容、预演、回执、指�
 
 中央知识服务是唯一有充分证据新增的产品边界：多用户聚合不可能由任一用户本机 Hermes 正确拥有。它只接收 `marketing.knowledge-contribution.v1` 匿名 wire envelope，不接收本地 user/account/consent/source candidate。`services/marketing_knowledge` 独立执行最小群组、稀疏类别抑制和时间衰减，并用 Ed25519 签署 `marketing.knowledge-pack.v1`。Hermes 必须使用内置信任公钥独立验签后才能落库；Electron 不参与贡献、上传、聚合、验签或安装。
 
-中央服务的持久 owner 是 `services/marketing_knowledge/storage.py`：它只存匿名 envelope、内容哈希、时间和最小删除 tombstone，不存本地账号身份。引用重试必须内容一致，删除后的引用永不允许复活；任何 corpus 变化都会使旧签名包失效，重聚合与落包共享一个 SQLite 写事务。HTTP 认证、授权和限流属于下一层服务入口，不能反向塞进 Desktop 或本机 Hermes 数据库。
+中央服务的持久 owner 是 `services/marketing_knowledge/storage.py`：它只存匿名 envelope、内容哈希、时间和最小删除 tombstone，不存本地账号身份。引用重试必须内容一致，删除后的引用永不允许复活；任何 corpus 变化都会使旧签名包失效，重聚合与落包共享一个 SQLite 写事务。
+
+网络入口由同一服务边界的 `services/marketing_knowledge/api.py` 拥有。每个产品安装实例使用独立可轮换 token，服务端只存 token 哈希；请求必须带短时效时间戳和一次性 nonce，限流与 nonce 都持久化。贡献表不保存 client ID，而保存按 client 与 contribution 生成的不可关联删除 owner proof；删除 HMAC key-ring 支持轮换，旧 proof 在成功访问后迁移到当前 key。Provisioning 只能走离线运维，不提供公共注册接口。Hermes 后续只作为这个 HTTP 协议的客户端；Desktop/Electron 永不持有中央同步逻辑或全局服务密钥。
 
 ```text
 Hermes local facts
