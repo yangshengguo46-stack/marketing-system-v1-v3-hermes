@@ -220,6 +220,7 @@ class OperatingLoopRepository(MarketingDomainRepository):
         receipt_refs: list[str] | None = None,
         evidence_refs: list[str] | None = None,
         prediction_id: str | None = None,
+        source_key: str | None = None,
     ) -> dict[str, Any]:
         """Record an interpretation candidate without mutating Hermes memory."""
 
@@ -229,7 +230,15 @@ class OperatingLoopRepository(MarketingDomainRepository):
             raise ValueError("confidence must be between 0 and 1")
         refs = list(dict.fromkeys([*(receipt_ids or []), *(receipt_refs or [])]))
         evidence = list(dict.fromkeys(evidence_refs or []))
+        source_value = str(source_key or "").strip() or None
         with self._transaction() as db:
+            if source_value:
+                existing = db.execute(
+                    "SELECT id FROM marketing_learning_candidates WHERE source_key=?",
+                    (source_value,),
+                ).fetchone()
+                if existing is not None:
+                    return self.get_learning_candidate(existing["id"])
             if preflight_id and db.execute(
                 "SELECT id FROM marketing_preflight_records WHERE id=?",
                 (preflight_id,),
@@ -243,12 +252,13 @@ class OperatingLoopRepository(MarketingDomainRepository):
             candidate_id = _id("learn")
             db.execute(
                 """INSERT INTO marketing_learning_candidates
-                (id,candidate_type,user_id,account_id,platform,preflight_id,
+                (id,source_key,candidate_type,user_id,account_id,platform,preflight_id,
                  prediction_id,receipt_refs_json,evidence_refs_json,proposal_json,
                  confidence,status,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending',?)""",
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'pending',?)""",
                 (
                     candidate_id,
+                    source_value,
                     candidate_type,
                     user_id,
                     account_id,
@@ -366,6 +376,7 @@ class OperatingLoopRepository(MarketingDomainRepository):
 
                 CREATE TABLE IF NOT EXISTS marketing_learning_candidates (
                     id TEXT PRIMARY KEY,
+                    source_key TEXT,
                     candidate_type TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     account_id TEXT NOT NULL,
@@ -384,6 +395,16 @@ class OperatingLoopRepository(MarketingDomainRepository):
                 CREATE INDEX IF NOT EXISTS idx_marketing_learning_scope
                     ON marketing_learning_candidates(account_id,platform,status,created_at);
                 """
+            )
+            columns = {
+                row["name"]
+                for row in db.execute("PRAGMA table_info(marketing_learning_candidates)")
+            }
+            if "source_key" not in columns:
+                db.execute("ALTER TABLE marketing_learning_candidates ADD COLUMN source_key TEXT")
+            db.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS idx_marketing_learning_source
+                ON marketing_learning_candidates(source_key) WHERE source_key IS NOT NULL"""
             )
 
 

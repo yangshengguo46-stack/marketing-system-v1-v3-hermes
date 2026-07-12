@@ -22,6 +22,12 @@ from agent.marketing.intelligence.learning_governance import (
 )
 from agent.marketing.intelligence.memory_classification import classify_memory
 from agent.marketing.intelligence.preflight_decision import build_preflight_decision
+from agent.marketing.learning import AccountLearningGovernance
+from agent.marketing.metric_loop import MetricLoopRunner
+from agent.marketing.providers.metrics import (
+    clear_metric_providers,
+    register_metric_provider,
+)
 
 
 def _paths(tmp_path):
@@ -458,6 +464,129 @@ def test_publish_rejects_cross_platform_or_homepage_receipts(tmp_path):
         assert False, "whitespace is not valid inside a stable platform post id"
     except ValueError:
         pass
+
+
+class _ObservedMetricProvider:
+    name = "metric_test"
+
+    def collect_metrics(self, action, checkpoint):
+        return {
+            "state": "observed",
+            "metrics": {"views": 1200, "likes": 30, "comments": 4},
+            "verification_source": "creator_center_metrics",
+            "observed_at": checkpoint["due_at"],
+        }
+
+
+class _NotReadyMetricProvider:
+    name = "metric_not_ready"
+
+    def collect_metrics(self, action, checkpoint):
+        return {
+            "state": "not_ready",
+            "reason": "platform_snapshot_lagging",
+            "retry_after_seconds": 600,
+        }
+
+
+def _published_for_metric_loop(tmp_path, *, provider: str):
+    paths, _plan, _preflight, asset_id = _review_ready_asset(tmp_path)
+    publishing = PublishingRepository(paths)
+    action = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider=provider,
+    )
+    publishing.mark_execution_started(action["id"], approval_ref="approval-once")
+    action = publishing.settle_action(
+        action["id"],
+        outcome="published",
+        provider_result={"published_url": "https://www.zhihu.com/p/metric-loop"},
+        verification_source="works_list_query",
+    )
+    first = publishing.list_metric_checkpoints(action["id"])[0]
+    return paths, publishing, action, first
+
+
+def test_metric_checkpoint_becomes_receipt_pending_learning_and_governed_account_knowledge(tmp_path):
+    clear_metric_providers()
+    register_metric_provider(_ObservedMetricProvider())
+    try:
+        paths, publishing, action, first = _published_for_metric_loop(
+            tmp_path, provider="metric_test"
+        )
+        result = MetricLoopRunner(paths).run_due(as_of=first["due_at"], limit=1)
+        checkpoint = publishing.get_metric_checkpoint(first["id"])
+        loop = OperatingLoopRepository(paths)
+        candidate = loop.get_learning_candidate(result["reconciled"][0]["candidate_id"])
+
+        assert result["collected"] == [first["id"]]
+        assert checkpoint["status"] == "settled"
+        assert candidate["status"] == "pending"
+        assert candidate["proposal"]["metric_labels"]["labels"]["attention"]["value"] == 1200
+        assert "retention" in candidate["proposal"]["metric_labels"]["missing_dimensions"]
+        assert candidate["proposal"]["retro"]["status"] == "prediction_unavailable"
+
+        from agent.marketing.domains.knowledge_bases import KnowledgeBaseRepository
+
+        knowledge = KnowledgeBaseRepository(paths)
+        assert knowledge.retrieve(
+            knowledge_base="account", user_id="default", account_id="acct-1"
+        )["entries"] == []
+        projected = AccountLearningGovernance(paths).accept_and_project(
+            candidate["id"], reason="reviewed real creator-center receipt"
+        )
+        assert projected["candidate"]["status"] == "accepted"
+        assert projected["account_knowledge"]["source_ref"] == candidate["id"]
+        assert len(knowledge.retrieve(
+            knowledge_base="account", user_id="default", account_id="acct-1"
+        )["entries"]) == 1
+
+        replay = MetricLoopRunner(paths).run_due(as_of=first["due_at"], limit=1)
+        assert replay["collected"] == []
+        assert len(loop.list_learning_candidates(account_id="acct-1")) == 1
+        assert action["receipt_id"] in candidate["receipt_refs"]
+    finally:
+        clear_metric_providers()
+
+
+def test_metric_not_ready_is_retried_without_zero_receipt(tmp_path):
+    clear_metric_providers()
+    register_metric_provider(_NotReadyMetricProvider())
+    try:
+        paths, publishing, _action, first = _published_for_metric_loop(
+            tmp_path, provider="metric_not_ready"
+        )
+        result = MetricLoopRunner(paths).run_due(as_of=first["due_at"], limit=1)
+        checkpoint = publishing.get_metric_checkpoint(first["id"])
+
+        assert result["deferred"] == [first["id"]]
+        assert checkpoint["status"] == "pending"
+        assert checkpoint["metric_receipt_id"] is None
+        assert checkpoint["attempt_count"] == 1
+        assert checkpoint["last_error"] == "platform_snapshot_lagging"
+        assert OperatingLoopRepository(paths).list_learning_candidates(account_id="acct-1") == []
+    finally:
+        clear_metric_providers()
+
+
+def test_stale_metric_collection_claim_returns_to_pending_after_restart(tmp_path):
+    paths, publishing, _action, first = _published_for_metric_loop(
+        tmp_path, provider="not_registered_yet"
+    )
+    claimed = publishing.claim_metric_checkpoint(first["id"], as_of=first["due_at"])
+
+    assert claimed is not None
+    assert claimed["status"] == "collecting"
+    assert publishing.recover_stale_metric_claims(
+        stale_before="2099-01-01T00:00:00+00:00",
+        retry_at=first["due_at"],
+    ) == 1
+    recovered = publishing.get_metric_checkpoint(first["id"])
+    assert recovered["status"] == "pending"
+    assert recovered["last_error"] == "stale_collection_claim_recovered"
 
 
 def test_native_publish_result_seam_settles_provider_envelope(tmp_path, monkeypatch):

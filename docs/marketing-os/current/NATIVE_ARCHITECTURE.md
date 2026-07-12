@@ -42,7 +42,7 @@ Memory/Skill     Marketing domain  MCP/Channels
 
 ## 经营领域
 
-当前原生源码落点：
+当前原生源码落点（这是现状地图，不是禁止移动的目录清单）：
 
 ```text
 agent/product.py
@@ -68,7 +68,7 @@ gateway/product_messaging.py
 tools/marketing_tools.py
 ```
 
-这些目录是一个 Agent 内部的职责拆分，不是插件、sidecar 或第二个 Agent。
+这些目录是同一 Hermes 产品 fork 内的职责拆分，不是插件、sidecar 或第二个 Agent。能力必须放在真正 owner 附近：平台采集可进入 Provider/MCP，定时触发进入 Cron，记忆投影进入 Memory；不得为了“都放在 `agent/marketing`”而制造反向依赖或重复状态机。
 
 ## 唯一业务状态库与数据飞轮
 
@@ -150,6 +150,8 @@ User goal
 → replay/user governance
 → Hermes memory / account strategy / Skill
 ```
+
+定时触发与业务执行严格分离：`cron/product_tasks.py` 仅在已注册真实 MetricProvider 时非阻塞唤醒 `metric_loop.py`；Provider 只观察平台，Publishing 只结算 checkpoint，OperatingLoop 只保存 Receipt/Candidate。缺失指标不补 0，未校准预测不制造偏差，pending candidate 不自动进入账号知识。
 
 ## InfluenceOS 在架构中的位置
 

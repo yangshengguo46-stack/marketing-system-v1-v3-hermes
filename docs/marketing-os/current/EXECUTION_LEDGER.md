@@ -1,6 +1,6 @@
 # Marketing OS 当前执行台账
 
-> 日期：2026-07-11
+> 日期：2026-07-12
 > 分支：`codex/marketing-os-product-source`
 > 本文件是唯一任务入口。研究资料、ADR 和 Git 历史不得直接发任务。
 
@@ -8,6 +8,7 @@
 
 1. **默认先改原生 owner；禁止因为怕碰上游，就在外围再加适配层。只有上游确实无法承担、且证据充分时，才允许新增边界。**
 2. **Electron 只负责显示和交互，不参与其它任何东西。** Electron 不拥有账号、Cookie、profile、浏览器、任务、记忆、业务状态、自动化或执行。
+3. **“在 Hermes 里面”不等于固定目录。** 目录服从真正 owner：Cron 触发、Provider/MCP 采集、领域层结算事实、Memory/Knowledge 治理学习；如果目录冲突就移动或重写。
 
 每个纵切、任务和完成口径都必须同时满足这两条；否则任务不得开始。它们优先于局部实现计划、上游同步便利和已经写完的代码。
 
@@ -25,16 +26,16 @@
 | State/data owner | 经营项目、受众、证据、内容、预演、回执和学习表已进入 Hermes `state.db`；旧 `agent_core.db` 一次迁移后只读保留 | dev-runtime | 删除兼容路径、中央匿名知识服务尚未实现 |
 | Short-video sound intelligence | Playwright MCP 原生短视频/BGM 结构化采集；Sound/Observation/Evidence 入 `state.db`；预演、草稿快照和发布回执携带声音身份 | automated | 真人 selector 验收冻结到账号登录 UI 完成后；再做跨日速度与匹配样本归因 |
 | Central knowledge core | 匿名贡献 wire contract、最小群组门槛、稀疏值抑制、时间衰减、Ed25519 签名知识包和 Hermes 验签落库 | automated | 传输认证、服务端持久化、删除传播、运维与真实多用户规模 |
-| Three knowledge bases | Platform/Account/Content 三库进入 Hermes `state.db`；内置 stylebook 与社会注意力原理；账号知识只接收 Receipt-backed accepted learning；用户/模型写入被拒绝 | automated | 海量采集、规则时效巡检、Retro 自动投影、治理 UI |
+| Three knowledge bases | Platform/Account/Content 三库进入 Hermes `state.db`；内置 stylebook 与社会注意力原理；账号知识只接收 Receipt-backed accepted learning；用户/模型写入被拒绝 | automated | 海量采集、规则时效巡检、候选治理 UI |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
 | Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放上下文，删除时清理 profile | dev-runtime | 切换 UI、真人多账号登录/退出 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
 | Content plan/assets | 三 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
 | Preflight | InfluenceOS + 不可变记录 + draft gate | automated | 真实账号历史校准、发布前版本链 |
-| Receipt/Learning store | ReceiptRef、LearningCandidate、PublishAction 合同 | automated | 真实 Provider 与跨天指标尚未接入 |
+| Receipt/Learning store | ReceiptRef、LearningCandidate、PublishAction、MetricCheckpoint 状态机；观察后自动 Retro 和幂等 pending candidate；显式接受后投影 Account KB | automated | 真实平台指标 Provider 与跨天真人数据 |
 | Hermes memory/Skill | 原生能力保留，经营写入规则已加入 | automated | 候选治理后投影、重复成功流程沉淀 |
-| Publishing/metrics | 原生发布 intent、一次性审批、Provider 插槽、unknown 恢复、回执校验、5 段指标 checkpoint | automated | 缺实际 L3 Provider 和真人发布 |
+| Publishing/metrics | 原生发布 intent、一次性审批、Provider 插槽、unknown 恢复、回执校验、5 段 checkpoint；Hermes Cron 原生触发指标 Provider，支持领取、延期、崩溃恢复和 unavailable 回执 | automated | 缺实际 L3 发布/指标 Provider 和真人跨天验收 |
 | Packaging | 自包含 staging 可构建 | automated | 精简依赖、签名、公证、干净机断网首启 |
 | High-end video | 独立项目/合同 | deferred | 不计桌面 v0.1 完成 |
 
@@ -51,6 +52,8 @@
 5. 完成 metric checkpoint → retro → candidate → memory/strategy/skill projection 后，才冻结底层合同进入 UI。
 
 当前落地：匿名 contribution 不含 user/account/consent/source candidate；中央聚合内核已执行 k-anonymity 门槛、类别稀疏抑制和时间衰减；知识包使用 Ed25519 签名，Hermes 验签后写入 `state.db` 并标记为 `global_prior_below_local_receipt`。尚未实现网络传输、服务端持久化和删除传播，不能宣称云端已上线。
+
+LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Hermes Cron 的非阻塞触发；`agent/marketing/providers/metrics.py` 是平台观察 seam；`PublishingRepository` 原子领取、延期、恢复并结算 checkpoint；`metric_loop.py` 把真实观察写为 Receipt、映射标签、执行 Retro 并生成幂等 pending candidate。单次结果永远不能自动改策略；只有 `AccountLearningGovernance.accept_and_project` 的显式治理动作才能进入 Account KB。
 
 三类知识库已按 Git 历史有效合同重建到 Hermes 原生 owner：平台库恢复 source/region/version/valid time 和平台 stylebook；内容库恢复个体注意力、认知负荷、情绪、信任、身份与群体传播的可观察模型；账号库只允许真实 Receipt 支持且已 accepted 的 LearningCandidate 晋升。旧 `memory_classification` 明确降级为“记忆候选分类器”，用户/模型陈述不再具有知识写权限。内容计划与 Preflight 已读取三库覆盖度及 entry IDs，公式升级为 `content-production-preflight-v0.3`。
 
@@ -125,24 +128,30 @@
 - 增加服务端持久化、传输认证、限流、重放保护、删除传播和密钥轮换。
 - 真实部署前用合成多租户数据做隐私攻击与稀疏重识别测试。
 
-### LOOP-02 指标回收
+### LOOP-02 指标回收（底层完成，真实 Provider 待接）
 
 - 到期 checkpoint 由 Hermes cron 扫描。
 - 未知指标留空，不写 0。
 - 原始平台字段保留，另映射 attention/retention/trust/action/fit/risk 标签。
+- checkpoint 使用 `pending → collecting → observed → settled`；暂未出数回到 pending 并设置下一次尝试时间，永久不可用生成事实回执，进程中断的 collecting 可恢复。
+- Cron 只触发，不解析平台和不写业务解释；只有已注册真实 MetricProvider 时才运行产品任务。
 
-### LOOP-03 自动复盘
+### LOOP-03 自动复盘（底层完成）
 
 - `content_retro` 比较发布前 prediction 与真实 metric receipt。
 - 输出偏差、缺失字段、替代解释，不自动宣布因果。
 - 生成 pending memory/strategy/weight/skill candidate。
+- 没有校准预测时明确记录 `prediction_unavailable`，只学习真实标签，禁止把全零范围伪装成预测偏差。
+- `source_key=metric-retro:{checkpoint_id}` 保证崩溃恢复和重放不重复创建候选。
 
-### LOOP-04 学习投影
+### LOOP-04 学习投影（治理合同完成）
 
 - 用户明确偏好进入 USER/MEMORY。
 - 账号策略候选进入版本化 account strategy。
 - 多次成功并有失败恢复的流程进入 Skill candidate。
 - 权重候选必须有至少三个支持样本并通过历史回放。
+- 单次 Retro 只生成 pending candidate；显式接受后才允许投影 Account KB。自动接受、自动改永久权重和把用户陈述写成账号真相仍被禁止。
+- Memory/strategy/Skill 的最终原生投影与用户治理界面仍待后续纵切。
 
 ### LOOP-05 真人闭环
 
@@ -171,8 +180,9 @@
 ## 当前回归基线
 
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
-- 当前营销域、三类知识库、内容生产、短视频声音、数据飞轮与账号 MCP 生命周期组合回归：Python 287 passed；Node 12 passed，包含知识防污染、Receipt-backed 账号晋升、旧库迁移、匿名贡献治理、中央群组抑制/签名知识包、BGM post-tool 证据链与真实浏览器重启恢复。
-- LOOP-01 发布账本、审批、回执门与恢复路径单文件回归：16 passed（后续组合回归必须继续包含）。
+- 当前营销域、三类知识库、内容生产、短视频声音、数据飞轮、指标学习与账号 MCP 生命周期组合回归：Python 130 passed；Node 既有基线 12 passed（本轮未改 Node）。
+- Hermes Cron 调度/作业/产品任务组合回归：302 passed；产品任务无 MetricProvider 时静默，有真实 Provider 时调用指标 owner。
+- LOOP-01/02/03/04 发布账本、审批、指标回执、缺失值、延期、崩溃领取恢复、Retro、候选和账号知识治理单文件回归：19 passed。
 - Desktop runtime staging：5 passed。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。
 - 下一次更新本台账时必须写：代码路径、测试、dev-runtime、packaged、human-loop 和仍未完成的风险。

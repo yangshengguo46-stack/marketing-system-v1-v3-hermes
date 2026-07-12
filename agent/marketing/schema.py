@@ -137,6 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_marketing_receipt_scope
 
 CREATE TABLE IF NOT EXISTS marketing_learning_candidates (
     id TEXT PRIMARY KEY,
+    source_key TEXT,
     candidate_type TEXT NOT NULL,
     user_id TEXT NOT NULL,
     account_id TEXT NOT NULL,
@@ -191,6 +192,10 @@ CREATE TABLE IF NOT EXISTS marketing_metric_checkpoints (
     due_at TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     metric_receipt_id TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    claimed_at TEXT,
+    last_error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(publish_action_id,label)

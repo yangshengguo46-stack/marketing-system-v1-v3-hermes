@@ -2867,6 +2867,17 @@ def tick(verbose: bool = True, adapters=None, loop=None, sync: bool = True) -> i
         return 0
 
     try:
+        # Product-internal due work shares the native Cron trigger but keeps
+        # its state and semantics in the real capability owner.  Dispatch is
+        # non-blocking for the gateway ticker and synchronous for manual/test
+        # ticks.  This is not a second scheduler.
+        try:
+            from cron.product_tasks import run_product_tasks
+
+            run_product_tasks(sync=sync)
+        except Exception as exc:
+            logger.error("Product task dispatch failed: %s", exc, exc_info=True)
+
         due_jobs = get_due_jobs()
 
         if verbose and not due_jobs:

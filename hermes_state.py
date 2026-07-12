@@ -759,6 +759,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_session_key
     ON sessions(session_key, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_gateway_peer
     ON sessions(source, user_id, chat_id, chat_type, thread_id, started_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_marketing_learning_source
+    ON marketing_learning_candidates(source_key) WHERE source_key IS NOT NULL;
 """
 
 FTS_SQL = """

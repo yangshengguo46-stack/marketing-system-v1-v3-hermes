@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -48,6 +49,9 @@ _PLATFORM_HOSTS = {
     "tiktok": ("tiktok.com",),
     "youtube": ("youtube.com", "youtu.be"),
 }
+_SENSITIVE_TEXT = re.compile(
+    r"(?i)(api[_-]?key|authorization|cookie|password|secret|token)\s*[:=]\s*[^\s,;]+"
+)
 
 
 class PublishingRepository(MarketingDomainRepository):
@@ -118,6 +122,10 @@ class PublishingRepository(MarketingDomainRepository):
                 ).hexdigest(),
                 "sound_plan": content.get("sound_plan")
                 if isinstance(content.get("sound_plan"), dict)
+                else None,
+                "content_kind": str(content.get("production_kind") or ""),
+                "prediction": content.get("prediction")
+                if isinstance(content.get("prediction"), dict)
                 else None,
             }
             now = _now()
@@ -352,9 +360,10 @@ class PublishingRepository(MarketingDomainRepository):
         cutoff = _parse_time(as_of or _now()).isoformat()
         query = (
             "SELECT * FROM marketing_metric_checkpoints "
-            "WHERE status='pending' AND due_at<=?"
+            "WHERE status='pending' AND due_at<=? "
+            "AND COALESCE(next_attempt_at,due_at)<=?"
         )
-        params: list[Any] = [cutoff]
+        params: list[Any] = [cutoff, cutoff]
         if user_id is not None:
             query += " AND user_id=?"
             params.append(user_id)
@@ -366,6 +375,145 @@ class PublishingRepository(MarketingDomainRepository):
         with self._connection() as db:
             rows = db.execute(query, params).fetchall()
         return [dict(row) for row in rows]
+
+    def claim_metric_checkpoint(
+        self, checkpoint_id: str, *, as_of: str | None = None
+    ) -> dict[str, Any] | None:
+        """Atomically claim one due checkpoint for a platform Provider."""
+
+        now = _now()
+        cutoff = _parse_time(as_of or now).isoformat()
+        with self._transaction() as db:
+            updated = db.execute(
+                """UPDATE marketing_metric_checkpoints
+                SET status='collecting',claimed_at=?,attempt_count=attempt_count+1,
+                    last_error=NULL,updated_at=?
+                WHERE id=? AND status='pending'
+                  AND due_at<=? AND COALESCE(next_attempt_at,due_at)<=?""",
+                (now, now, checkpoint_id, cutoff, cutoff),
+            ).rowcount
+            if updated != 1:
+                return None
+            row = db.execute(
+                "SELECT * FROM marketing_metric_checkpoints WHERE id=?",
+                (checkpoint_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def defer_metric_checkpoint(
+        self,
+        checkpoint_id: str,
+        *,
+        retry_at: str,
+        error: str,
+    ) -> dict[str, Any]:
+        """Release a failed/not-ready claim without inventing metric values."""
+
+        retry = _parse_time(retry_at).isoformat()
+        with self._transaction() as db:
+            updated = db.execute(
+                """UPDATE marketing_metric_checkpoints
+                SET status='pending',next_attempt_at=?,claimed_at=NULL,last_error=?,updated_at=?
+                WHERE id=? AND status='collecting'""",
+                (retry, _safe_status_text(error), _now(), checkpoint_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("metric checkpoint is not collecting")
+        return self.get_metric_checkpoint(checkpoint_id)
+
+    def mark_metric_observed(
+        self, checkpoint_id: str, *, metric_receipt_id: str
+    ) -> dict[str, Any]:
+        """Bind an immutable observed receipt before interpretation starts."""
+
+        receipt_value = _required(metric_receipt_id, "metric_receipt_id", 200)
+        with self._transaction() as db:
+            updated = db.execute(
+                """UPDATE marketing_metric_checkpoints
+                SET status='observed',metric_receipt_id=?,claimed_at=NULL,
+                    next_attempt_at=NULL,last_error=NULL,updated_at=?
+                WHERE id=? AND status='collecting'""",
+                (receipt_value, _now(), checkpoint_id),
+            ).rowcount
+            if updated != 1:
+                current = db.execute(
+                    "SELECT metric_receipt_id,status FROM marketing_metric_checkpoints WHERE id=?",
+                    (checkpoint_id,),
+                ).fetchone()
+                if current is None:
+                    raise KeyError("metric checkpoint not found")
+                if current["status"] in {"observed", "settled"} and current["metric_receipt_id"] == receipt_value:
+                    return self.get_metric_checkpoint(checkpoint_id)
+                raise ValueError("metric checkpoint is not collecting")
+        return self.get_metric_checkpoint(checkpoint_id)
+
+    def mark_metric_unavailable(
+        self, checkpoint_id: str, *, metric_receipt_id: str
+    ) -> dict[str, Any]:
+        with self._transaction() as db:
+            updated = db.execute(
+                """UPDATE marketing_metric_checkpoints
+                SET status='unavailable',metric_receipt_id=?,claimed_at=NULL,
+                    next_attempt_at=NULL,updated_at=?
+                WHERE id=? AND status='collecting'""",
+                (metric_receipt_id, _now(), checkpoint_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("metric checkpoint is not collecting")
+        return self.get_metric_checkpoint(checkpoint_id)
+
+    def list_observed_metric_checkpoints(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connection() as db:
+            rows = db.execute(
+                """SELECT * FROM marketing_metric_checkpoints
+                WHERE status='observed' ORDER BY updated_at,id LIMIT ?""",
+                (max(1, min(int(limit), 500)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_metric_reconciled(self, checkpoint_id: str) -> dict[str, Any]:
+        with self._transaction() as db:
+            updated = db.execute(
+                """UPDATE marketing_metric_checkpoints SET status='settled',updated_at=?
+                WHERE id=? AND status='observed' AND metric_receipt_id IS NOT NULL""",
+                (_now(), checkpoint_id),
+            ).rowcount
+            if updated != 1:
+                current = db.execute(
+                    "SELECT status FROM marketing_metric_checkpoints WHERE id=?",
+                    (checkpoint_id,),
+                ).fetchone()
+                if current is None:
+                    raise KeyError("metric checkpoint not found")
+                if current["status"] != "settled":
+                    raise ValueError("metric checkpoint is not ready for reconciliation")
+        return self.get_metric_checkpoint(checkpoint_id)
+
+    def get_metric_checkpoint(self, checkpoint_id: str) -> dict[str, Any]:
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT * FROM marketing_metric_checkpoints WHERE id=?",
+                (checkpoint_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError("metric checkpoint not found")
+        return dict(row)
+
+    def recover_stale_metric_claims(
+        self, *, stale_before: str, retry_at: str | None = None
+    ) -> int:
+        """Return process-crash claims to pending for the next Cron tick."""
+
+        cutoff = _parse_time(stale_before).isoformat()
+        retry = _parse_time(retry_at or _now()).isoformat()
+        with self._transaction() as db:
+            return db.execute(
+                """UPDATE marketing_metric_checkpoints
+                SET status='pending',next_attempt_at=?,claimed_at=NULL,
+                    last_error='stale_collection_claim_recovered',updated_at=?
+                WHERE status='collecting' AND claimed_at<?""",
+                (retry, _now(), cutoff),
+            ).rowcount
 
     def _create_metric_checkpoints(self, db, action, *, published_at: datetime) -> None:
         now = _now()
@@ -428,6 +576,10 @@ class PublishingRepository(MarketingDomainRepository):
                     due_at TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
                     metric_receipt_id TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT,
+                    claimed_at TEXT,
+                    last_error TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(publish_action_id,label)
@@ -436,6 +588,21 @@ class PublishingRepository(MarketingDomainRepository):
                     ON marketing_metric_checkpoints(status,due_at);
                 """
             )
+            columns = {
+                row["name"]
+                for row in db.execute("PRAGMA table_info(marketing_metric_checkpoints)")
+            }
+            additions = {
+                "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+                "next_attempt_at": "TEXT",
+                "claimed_at": "TEXT",
+                "last_error": "TEXT",
+            }
+            for column, declaration in additions.items():
+                if column not in columns:
+                    db.execute(
+                        f"ALTER TABLE marketing_metric_checkpoints ADD COLUMN {column} {declaration}"
+                    )
 
 
 def _validate_asset_platform(*, asset_platform: str, platform: str, content: dict[str, Any]) -> None:
@@ -446,6 +613,11 @@ def _validate_asset_platform(*, asset_platform: str, platform: str, content: dic
         return
     if asset_platform != platform:
         raise ValueError("content asset platform does not match publish platform")
+
+
+def _safe_status_text(value: Any) -> str:
+    text = " ".join(str(value or "").split())
+    return _SENSITIVE_TEXT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)[:500]
 
 
 def _idempotency_key(*, account_id: str, asset_id: str, version: int, platform: str) -> str:
