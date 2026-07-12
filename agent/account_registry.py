@@ -169,6 +169,30 @@ class AccountRegistry:
             require_pristine=require_pristine,
         )
 
+    def adopt_prospect(
+        self,
+        prospect_account_id: str,
+        target_account_id: str,
+        *,
+        user_id: str = "default",
+    ) -> dict[str, Any]:
+        """Move pre-login operating facts after the real account authenticated."""
+
+        target = self._require(target_account_id, user_id=user_id)
+        if target.get("status") != "active" or target.get("auth_state") != "authenticated":
+            raise ValueError("target account must be authenticated before prospect adoption")
+        result = self.db.adopt_marketing_prospect_scope(
+            user_id=user_id,
+            prospect_account_id=prospect_account_id,
+            target_account_id=target_account_id,
+        )
+        return {
+            **result,
+            "successor_session_required": True,
+            "successor_account_id": target_account_id,
+            "rule": "existing conversations keep immutable scope; start the successor on target",
+        }
+
     def unbind_session(self, session_id: str, *, require_pristine: bool = True) -> bool:
         return self.db.update_session_marketing_scope(
             session_id,

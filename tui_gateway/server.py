@@ -12953,6 +12953,26 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, {"account": account})
 
 
+@method("marketing.account.prospect.adopt")
+def _(rid, params: dict) -> dict:
+    """Atomically adopt pre-login operating facts into an authenticated account."""
+    from agent.account_registry import AccountRegistry
+
+    params = params if isinstance(params, dict) else {}
+    db = _get_db()
+    if db is None:
+        return _db_unavailable_error(rid, code=5017)
+    try:
+        result = AccountRegistry(db).adopt_prospect(
+            str(params.get("prospect_account_id") or ""),
+            str(params.get("target_account_id") or ""),
+            user_id=str(params.get("user_id") or "default"),
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
+
+
 @method("marketing.account.delete")
 def _(rid, params: dict) -> dict:
     """Soft-delete account truth after the product surface confirms intent."""

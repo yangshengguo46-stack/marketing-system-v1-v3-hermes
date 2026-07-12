@@ -2,10 +2,12 @@ import { createRequire } from 'node:module'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { installAccountAuthTool } from './account-auth.js'
 import { installShortVideoSignalTool } from './short-video-signals.js'
 
 const require = createRequire(import.meta.url)
 const { tools } = require('playwright-core/lib/coreBundle')
+installAccountAuthTool()
 installShortVideoSignalTool()
 
 export function playwrightToolSchemas() {

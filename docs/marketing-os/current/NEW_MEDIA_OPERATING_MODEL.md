@@ -33,6 +33,12 @@ Marketing OS 不是先替用户“找几个对标、写几个选题”，而是�
 
 新会话即使没有登录平台账号，也由 Hermes `SessionDB` 自动绑定稳定的 `prospect_*` 经营作用域，因此自然对话建模、赛道研究和定位不会被登录阻断。登录后只能通过原生账号 owner 在会话仍可安全切换时绑定真实账号；Electron 不创建、保存或解释 prospect。
 
+登录继承不是前端复制对象。目标账号通过真实登录验证且尚无独立经营事实时，`AccountRegistry → SessionDB` 在一个事务内把 prospect 的项目、画像、赛道、受众、对标、定位、内容系统、实验、证据、资产、预演和学习事实迁移到真实账号。已经开始的旧对话仍保留 prospect 作用域，随后创建一个继承历史、从第一条模型调用起就绑定真实账号的 successor session。目标账号已有事实时禁止自动覆盖，必须进入显式合并审查。
+
+Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动发生时的 prospect 标识；SQL 事实作用域和后续经营切到真实账号，`marketing_account_adoptions` 负责可审计映射。继承不能以“清理字段”为理由改写过去。
+
+“登录成功”也不是模型判断或 Electron 状态。只有账号隔离的 `marketing-browser` MCP 能读取其持久 Context，并用平台域名与第一方登录信号给出 secret-free 验证结果；Hermes 收到真实工具结果后才允许 AccountRegistry 进入 `authenticated`。UI 可以引导扫码和显示进度，但无权提交 Cookie、认证布尔值或触发经营事实迁移。
+
 ## 七类原生战略工件
 
 ### 1. 创作者经营画像

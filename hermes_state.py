@@ -26,14 +26,18 @@ import time
 from pathlib import Path
 
 from agent.memory_manager import sanitize_context
-from agent.marketing.schema import LEGACY_MARKETING_TABLES, MARKETING_DOMAIN_SCHEMA_SQL
+from agent.marketing.schema import (
+    LEGACY_MARKETING_TABLES,
+    MARKETING_DOMAIN_SCHEMA_SQL,
+    PROSPECT_SCOPE_COLUMNS,
+)
 from hermes_constants import get_hermes_home
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 logger = logging.getLogger(__name__)
 
 
-def _default_marketing_scope(value: str | None) -> tuple[str, str]:
+def default_marketing_scope(value: str | None) -> tuple[str, str]:
     """Give every new product conversation a stable pre-login operating scope."""
 
     raw = str(value or "default").strip() or "default"
@@ -1657,7 +1661,7 @@ class SessionDB:
                     scope_user_id = parent_scope["marketing_user_id"]
                     scope_account_id = parent_scope["marketing_account_id"]
             if not scope_account_id:
-                scope_user_id, scope_account_id = _default_marketing_scope(
+                scope_user_id, scope_account_id = default_marketing_scope(
                     scope_user_id or user_id
                 )
             conn.execute(
@@ -2051,6 +2055,143 @@ class SessionDB:
             return conn.execute(sql, params).rowcount > 0
 
         return bool(self._execute_write(_do))
+
+    def adopt_marketing_prospect_scope(
+        self,
+        *,
+        user_id: str,
+        prospect_account_id: str,
+        target_account_id: str,
+    ) -> Dict[str, Any]:
+        """Atomically move a fresh prospect's business facts to one real account.
+
+        Existing conversations deliberately keep their original routing scope.
+        The product opens a successor conversation bound to the authenticated
+        account after this transaction completes.
+        """
+
+        user = self._normalize_marketing_account_id(user_id or "default", field="user_id")
+        prospect = self._normalize_marketing_account_id(
+            prospect_account_id, field="prospect_account_id"
+        )
+        target = self._normalize_marketing_account_id(
+            target_account_id, field="target_account_id"
+        )
+        if not prospect.startswith("prospect_"):
+            raise ValueError("prospect_account_id must be a pre-login prospect scope")
+        if prospect == target:
+            raise ValueError("prospect and target account must differ")
+
+        def _do(conn):
+            previous = conn.execute(
+                """SELECT * FROM marketing_account_adoptions
+                WHERE user_id=? AND prospect_account_id=? AND target_account_id=?""",
+                (user, prospect, target),
+            ).fetchone()
+            if previous is not None:
+                return {
+                    **dict(previous),
+                    "moved_counts": json.loads(previous["moved_counts_json"] or "{}"),
+                    "operation": "already_complete",
+                }
+
+            account = conn.execute(
+                """SELECT id,status,auth_state FROM marketing_accounts
+                WHERE id=? AND user_id=? AND deleted_at IS NULL""",
+                (target, user),
+            ).fetchone()
+            if account is None:
+                raise ValueError("target Marketing OS account does not exist")
+            if account["status"] != "active" or account["auth_state"] != "authenticated":
+                raise ValueError("target account must be authenticated before prospect adoption")
+
+            available: list[tuple[str, str]] = []
+            target_counts: dict[str, int] = {}
+            source_counts: dict[str, int] = {}
+            for table, scope_column in PROSPECT_SCOPE_COLUMNS.items():
+                exists = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                ).fetchone()
+                if exists is None:
+                    continue
+                columns = {
+                    str(row["name"])
+                    for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+                }
+                if "user_id" not in columns or scope_column not in columns:
+                    continue
+                available.append((table, scope_column))
+                source_count = int(
+                    conn.execute(
+                        f'SELECT COUNT(*) FROM "{table}" '
+                        f'WHERE user_id=? AND "{scope_column}"=?',
+                        (user, prospect),
+                    ).fetchone()[0]
+                )
+                target_count = int(
+                    conn.execute(
+                        f'SELECT COUNT(*) FROM "{table}" '
+                        f'WHERE user_id=? AND "{scope_column}"=?',
+                        (user, target),
+                    ).fetchone()[0]
+                )
+                if source_count:
+                    source_counts[table] = source_count
+                if target_count:
+                    target_counts[table] = target_count
+
+            if target_counts:
+                names = ", ".join(sorted(target_counts))
+                raise ValueError(
+                    "target account already has operating facts; explicit merge review is required: "
+                    + names
+                )
+
+            moved: dict[str, int] = {}
+            for table, scope_column in available:
+                if not source_counts.get(table):
+                    continue
+                updated = conn.execute(
+                    f'UPDATE "{table}" SET "{scope_column}"=? '
+                    f'WHERE user_id=? AND "{scope_column}"=?',
+                    (target, user, prospect),
+                ).rowcount
+                if updated:
+                    moved[table] = int(updated)
+
+            now = time.time()
+            adoption_id = "adoption_" + hashlib.sha256(
+                f"{user}\0{prospect}\0{target}".encode("utf-8")
+            ).hexdigest()[:28]
+            conn.execute(
+                """INSERT INTO marketing_account_adoptions
+                (id,user_id,prospect_account_id,target_account_id,status,moved_counts_json,
+                 created_at,completed_at)
+                VALUES (?,?,?,?, 'complete',?,?,?)""",
+                (
+                    adoption_id,
+                    user,
+                    prospect,
+                    target,
+                    json.dumps(moved, sort_keys=True, separators=(",", ":")),
+                    now,
+                    now,
+                ),
+            )
+            return {
+                "id": adoption_id,
+                "user_id": user,
+                "prospect_account_id": prospect,
+                "target_account_id": target,
+                "status": "complete",
+                "moved_counts": moved,
+                "created_at": now,
+                "completed_at": now,
+                "operation": "adopted",
+                "sessions_rebound": 0,
+            }
+
+        return dict(self._execute_write(_do))
 
     # =========================================================================
     # Native Marketing OS account registry

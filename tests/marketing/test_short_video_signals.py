@@ -151,7 +151,7 @@ def test_playwright_post_tool_seam_persists_verified_sound_signal(tmp_path, monk
     payload = _payload()
 
     result = enrich_tool_result_with_evidence(
-        tool_name="browser_extract_short_video_signals",
+        tool_name="mcp_marketing_browser_browser_extract_short_video_signals",
         args={},
         result="### Marketing short-video signals\n" + json.dumps(payload),
         task_id="session-1",

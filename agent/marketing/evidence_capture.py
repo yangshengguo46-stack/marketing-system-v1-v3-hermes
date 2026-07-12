@@ -13,6 +13,12 @@ from agent.marketing.domains.short_video_signals import (
 from agent.marketing.session_scope import read_tool_session_scope
 
 
+SHORT_VIDEO_SIGNAL_TOOL_NAMES = {
+    "browser_extract_short_video_signals",
+    "mcp_marketing_browser_browser_extract_short_video_signals",
+}
+
+
 def enrich_tool_result_with_evidence(
     *,
     tool_name: str,
@@ -29,7 +35,7 @@ def enrich_tool_result_with_evidence(
     excerpt cannot enter the verified store through the marketing toolset.
     """
 
-    if tool_name == "browser_extract_short_video_signals":
+    if tool_name in SHORT_VIDEO_SIGNAL_TOOL_NAMES:
         scope = read_tool_session_scope(task_id=task_id, session_id=session_id)
         payload = decode_browser_signal_result(result)
         if not scope or payload is None:

@@ -1216,6 +1216,28 @@ def handle_function_call(
                 _evidence_capture_err,
             )
 
+        # Account authentication is accepted only from the read-only verifier
+        # inside the real account-scoped Playwright MCP. The model cannot submit
+        # cookies, a boolean flag or a hand-written success payload through a
+        # separate product tool.
+        try:
+            from agent.marketing.account_auth_capture import (
+                enrich_tool_result_with_account_auth,
+            )
+
+            result = enrich_tool_result_with_account_auth(
+                tool_name=function_name,
+                result=result,
+                task_id=task_id or "",
+                session_id=session_id or "",
+            )
+        except Exception as _account_auth_err:
+            logger.warning(
+                "native Marketing OS account authentication failed for %s: %s",
+                function_name,
+                _account_auth_err,
+            )
+
         # Publishing uses the same native post-handler seam, but only the
         # trusted marketing_effect_publish tool can settle an action.  There is
         # deliberately no model-facing "record receipt" tool: verified platform

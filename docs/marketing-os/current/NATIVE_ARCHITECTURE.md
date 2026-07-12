@@ -95,6 +95,8 @@ Hermes local facts
 
 `mcp/marketing-browser` 原生增加 `browser_extract_short_video_signals`，从真实账号浏览器页面提取作品指标和平台声音身份。工具结果经 Hermes post-tool seam 固化为 EvidenceRecord、Sound 和 ShortVideoObservation，Electron 不采集、不解析也不保存这些数据。
 
+同一 MCP 原生提供 `browser_verify_account_login`：认证信号只在账号持久 BrowserContext 内解析，Cookie 值和登录 URL 查询参数不会离开浏览器 owner。Hermes 只接受注册名为 `mcp_marketing_browser_browser_verify_account_login` 的真实 post-tool 结果来激活 AccountRegistry、继承 prospect 并切换到后台 profile；Electron 仍只显示扫码、等待与成功状态。
+
 `ShortVideoSignalRepository` 以平台声音 ID 去重，使用真实观察计算覆盖、重复出现、使用规模、新鲜度、目标内容匹配和版权安全。它向预演提供声音先验，向草稿提供受证据约束的 `sound_plan`；发布回执继续携带 `sound_id`，后续只能通过匹配样本或 A/B 变体提高因果归因。
 
 ## 三核数据合同

@@ -29,8 +29,8 @@
 | New-media operating model | 创作者资产、赛道路线、行为受众、七角色对标图谱、定位、内容系统和可证伪实验进入 Hermes 原生领域 owner；关键版本需用户确认 | automated | 真实赛道研究、对标采集、自然对话真人验收 |
 | Four knowledge bases | Platform/Market/Account/Content 四库进入 Hermes `state.db`；赛道库接收真实证据和签名聚合规律；账号知识只接收 Receipt-backed accepted learning；用户/模型写入被拒绝 | automated | 海量采集、规则与市场时效巡检、候选治理 UI |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
-| Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；新会话自动获得稳定 `prospect_*` 作用域，未登录也能自然对话建模；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、prospect 合并与打包浏览器策略 |
-| Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放上下文，删除时清理 profile | dev-runtime | 切换 UI、真人多账号登录/退出 |
+| Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；新会话自动获得稳定 `prospect_*` 作用域；MCP 真实登录验证后原子迁移经营事实，旧 session 不变、successor 从首轮绑定真实账号；`accounts.json` 仅一次迁移 | automated | 真人二维码/验证码校准、successor UI 切换、多账号恢复、冲突合并审查与打包浏览器策略 |
+| Account lifecycle | Hermes AccountRegistry 已拥有注册、真实登录验证、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放登录窗口，后续以同一持久 profile 后台恢复；删除时清理 profile | automated | 真人多平台登录/退出、Cookie 信号随平台变更的巡检 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
 | Content plan/assets | 三 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
 | Preflight | InfluenceOS + 不可变记录 + draft gate | automated | 真实账号历史校准、发布前版本链 |
@@ -39,6 +39,20 @@
 | Publishing/metrics | 原生发布 intent、一次性审批、Provider 插槽、unknown 恢复、回执校验、5 段 checkpoint；Hermes Cron 原生触发指标 Provider，支持领取、延期、崩溃恢复和 unavailable 回执 | automated | 缺实际 L3 发布/指标 Provider 和真人跨天验收 |
 | Packaging | 自包含 staging 可构建 | automated | 精简依赖、签名、公证、干净机断网首启 |
 | High-end video | 独立项目/合同 | deferred | 不计桌面 v0.1 完成 |
+
+## 内容生产当前边界
+
+内容生产按三种主要交付形态组织，但共享同一条 Hermes 原生经营闭环，不建设三套彼此隔离的产品或状态：
+
+| 交付形态 | 当前原生能力 | 主要缺口 | 当前证据 |
+|---|---|---|---|
+| `article_soft` 软文 | 账号/实验绑定、EvidencePack、父稿与平台变体、质量门、版本资产、Preflight 和发布资格约束 | 真实账号调性、主张级多源核验、配图版权与真人审稿 | automated |
+| `faceless_video` 不露脸素材视频 | 账号/实验绑定、内容计划、素材需求、声音计划、特征快照、Preflight 和内容资产协议 | 授权素材下载与排序、TTS/BGM、EDL 实际填充、真实渲染和人工审片 | automated |
+| `premium_human_video` 高级视频 | 独立 `engine/video_core` 合同、火山 adapter/poller、画布、成本 hook、EDL/renderer 命令与 8 角色职责骨架 | 独立 Agent 调度、动态样片审批、真实成片、反馈闭环和真人质量验收 | deferred |
+
+三种形态共同消费账号上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与受治理学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接人工确认，不拥有生产、素材、浏览器、发布或学习事实。
+
+当前不能宣称“内容制作已完成”。软文与不露脸视频停在自动化合同和草稿能力，高级视频停在独立引擎地基与开发机 provider 校准；三者都缺少从真实账号输入到真人认可成品、发布回执和跨天指标学习的 `human-loop` 证据。高级视频的完整历史方案与校准记录只保存在 [`../deferred/high-end-video-volcengine.md`](../deferred/high-end-video-volcengine.md)，恢复开发前必须先在本台账重新排入顺序。
 
 ## 当前唯一主线
 
@@ -63,6 +77,10 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 内容生产已消费经营模型版本：缺少或过期定位/内容系统时，`ContentProductionPolicy` 与 Preflight 进入 `exploratory_draft`，允许用户首日试写和打磨，但 `publish_eligible=false`；`PublishingRepository` 在原生 owner 内拒绝把探索草稿送入发布审批。只有已连接账号、当前定位和当前内容系统同时成立，正式发布闭环才可继续。
 
 实验 ID 链已贯通原生经营事实：运行中 `account_experiment` 可绑定生产计划，所有草稿自动继承 `experiment_id` 并回写实验的 `asset_ids`；发布回执和指标回执由 Receipt owner 根据 plan 自动携带 experiment。后续 Retro 可以从真实结果稳定反查行动前假设，不再依赖标题、时间或模型猜测。
+
+未登录到登录的继承合同已落地：`AccountRegistry.adopt_prospect` 只接受已认证且经营事实为空的目标账号，`SessionDB` 按声明式 scope 表映射在单事务中迁移全部 prospect 事实并写审计记录；重复调用幂等，旧 session 永不重绑。目标账号已有项目、证据、资产或学习事实时立即阻断，禁止静默覆盖。Gateway 已提供 `marketing.account.prospect.adopt`。
+
+真实登录事实也已归回浏览器 owner：改造后的 Playwright MCP 提供只读 `browser_verify_account_login`，直接在当前账号持久 Context 内核验平台域名和第一方登录信号，只返回真假、信号数量和已去掉查询参数/片段的页面位置，Cookie 值永不离开 MCP。Hermes post-tool seam 只信任 `mcp_marketing_browser_browser_verify_account_login` 的真实结果；认证成功后激活 AccountRegistry、尝试安全继承 prospect，并关闭有头登录进程，下一次租约以同一 profile 在后台恢复。目标账号已有经营事实时只标记认证成功、继承进入 `review_required`，绝不覆盖。Desktop 仍只待展示状态和创建 successor 会话。
 
 开发机真实 `state.db` 此前已完成知识 schema 升级并种入 2 条平台 stylebook、8 条内容原理、0 条账号知识；账号库为 0 证明系统没有把用户陈述或模型推断伪装成账号经验。新增赛道库和经营世界模型本轮已完成自动化临时库迁移验证，真实长期数据仍不得在未备份前批量改写。
 
@@ -187,8 +205,9 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 ## 当前回归基线
 
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
-- 当前营销域、经营世界模型、四类知识、内容生产、原生采证与经营闭环组合回归：84 passed。
-- SessionDB、账号上下文与 prospect 默认作用域组合回归：303 passed；TUI/Gateway 会话回归：172 passed。
+- 当前营销域、经营世界模型、四类知识、内容生产、原生采证、prospect 继承、真实登录激活、SessionDB 与经营闭环主组合回归：371 passed。
+- 改造版 Playwright MCP：15 passed；包含账号租约、profile 持久化/清理、浏览器运行时、登录信号、敏感 URL 清洗和 54 项工具 schema。
+- TUI/Gateway 会话既有回归：172 passed；本轮新增 Gateway adoption RPC 已包含在营销组合回归。
 - Hermes Cron 调度/作业/产品任务组合回归：302 passed；产品任务无 MetricProvider 时静默，有真实 Provider 时调用指标 owner。
 - LOOP-01/02/03/04 发布账本、审批、指标回执、缺失值、延期、崩溃领取恢复、Retro、候选和账号知识治理单文件回归：19 passed。
 - Desktop runtime staging：5 passed。

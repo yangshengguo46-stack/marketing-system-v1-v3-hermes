@@ -10,8 +10,10 @@ import {
   purgeAccountDirectories,
 } from './account-lease.js'
 import { resolveBrowserExecutable } from './browser-runtime.js'
+import { installAccountAuthTool } from './account-auth.js'
 import { installShortVideoSignalTool } from './short-video-signals.js'
 
+installAccountAuthTool()
 installShortVideoSignalTool()
 
 if (process.argv.includes('--purge-profile')) {

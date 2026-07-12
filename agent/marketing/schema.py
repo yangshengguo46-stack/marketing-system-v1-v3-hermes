@@ -1,6 +1,18 @@
 """Marketing domain schema owned by Hermes ``state.db``."""
 
 MARKETING_DOMAIN_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS marketing_account_adoptions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    prospect_account_id TEXT NOT NULL,
+    target_account_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'complete',
+    moved_counts_json TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL,
+    completed_at REAL NOT NULL,
+    UNIQUE(user_id,prospect_account_id,target_account_id)
+);
+
 CREATE TABLE IF NOT EXISTS account_strategy_projects (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -434,6 +446,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_marketing_knowledge_identity
     ON marketing_knowledge_entries(knowledge_base,user_id,IFNULL(account_id,''),IFNULL(platform,''),
                                    region,content_kind,topic,version,source_kind,source_ref);
 """
+
+
+# AccountRegistry authorizes adoption; SessionDB applies this declarative map
+# atomically. Sessions are intentionally absent: an existing conversation keeps
+# its immutable prospect scope, while the successor conversation starts bound
+# to the authenticated account.
+PROSPECT_SCOPE_COLUMNS = {
+    "account_strategy_projects": "account_id",
+    "audience_hypotheses": "account_id",
+    "creator_operating_profiles": "account_id",
+    "market_route_hypotheses": "account_id",
+    "benchmark_accounts": "target_account_id",
+    "benchmark_observations": "target_account_id",
+    "positioning_versions": "account_id",
+    "content_system_versions": "account_id",
+    "account_experiments": "account_id",
+    "evidence_records": "account_id",
+    "content_production_plans": "account_id",
+    "content_assets": "account_id",
+    "marketing_preflight_records": "account_id",
+    "marketing_receipt_refs": "account_id",
+    "marketing_learning_candidates": "account_id",
+    "marketing_publish_actions": "account_id",
+    "marketing_metric_checkpoints": "account_id",
+    "marketing_knowledge_contributions": "account_id",
+    "marketing_knowledge_entries": "account_id",
+    "marketing_short_video_observations": "account_id",
+    # Optional compatibility tables may exist in upgraded product databases.
+    "audience_snapshots": "account_id",
+    "memory_candidates": "account_id",
+}
 
 LEGACY_MARKETING_TABLES = (
     "account_strategy_projects",
