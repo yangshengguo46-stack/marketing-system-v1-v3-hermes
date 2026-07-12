@@ -265,6 +265,27 @@ export const selectMessageRunning = (state: MessageRunningStateSlice) =>
   state.thread.isRunning && state.message.status?.type === 'running'
 
 function titleForTool(name: string): string {
+  const marketingTitle = ({
+    marketing_draft_article_create: '保存图文草稿',
+    marketing_draft_content_create: '保存内容草稿',
+    marketing_effect_publish: '执行发布',
+    marketing_plan_content_production: '规划内容生产',
+    marketing_prepare_publish: '准备发布',
+    marketing_publish_query: '核对发布结果',
+    marketing_read_account_context: '读取账号经营上下文',
+    marketing_read_accounts: '读取账号列表',
+    marketing_read_content_assets: '读取内容资产',
+    marketing_read_evidence_pack: '读取证据资料',
+    marketing_read_knowledge: '读取经营知识',
+    marketing_read_publish_state: '读取发布状态',
+    marketing_read_sound_trends: '读取热门声音',
+    marketing_update_account_lifecycle: '更新账号经营模型'
+  } as Record<string, string>)[name]
+
+  if (marketingTitle) {
+    return marketingTitle
+  }
+
   const normalized = name.replace(/^browser_/, '').replace(/^web_/, '')
 
   return (

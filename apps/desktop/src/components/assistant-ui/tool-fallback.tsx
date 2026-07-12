@@ -411,6 +411,15 @@ function ToolEntry({ part }: ToolEntryProps) {
     return null
   }
 
+  // The gateway persists an assistant tool-call part and its following tool
+  // result as separate messages. Once the result row exists, the original
+  // no-result part is stale; rendering both produces two identical tool lines.
+  // Keep it while running for live progress, then let the result row become
+  // the single durable disclosure.
+  if (!isPending && result === undefined && !isError) {
+    return null
+  }
+
   // A completed file edit with no diff to review is a bare, unexpandable row.
   // This is almost always a `write_file` create after a reload: only `patch`
   // persists its diff in the tool result, so creates rehydrate diff-less and

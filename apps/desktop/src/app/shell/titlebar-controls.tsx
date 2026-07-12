@@ -8,17 +8,13 @@ import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { cn } from '@/lib/utils'
-import {
-  $fileBrowserOpen,
-  $panesFlipped,
-  $sidebarOpen,
-  toggleFileBrowserOpen,
-  toggleSidebarOpen
-} from '@/store/layout'
+import { $fileBrowserOpen, $panesFlipped, $sidebarOpen, toggleFileBrowserOpen, toggleSidebarOpen } from '@/store/layout'
 
 import { appViewForPath, isOverlayView } from '../routes'
 
 import { titlebarButtonClass } from './titlebar'
+
+const PRODUCT_RIGHT_RAIL_ENABLED = false
 
 export interface TitlebarTool {
   id: string
@@ -149,7 +145,7 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
           <TitlebarToolButton key={tool.id} navigate={navigate} tool={tool} />
         ))}
         {settingsTool && <TitlebarToolButton navigate={navigate} tool={settingsTool} />}
-        <TitlebarToolButton navigate={navigate} tool={rightSidebarTool} />
+        {PRODUCT_RIGHT_RAIL_ENABLED ? <TitlebarToolButton navigate={navigate} tool={rightSidebarTool} /> : null}
       </div>
     </>
   )

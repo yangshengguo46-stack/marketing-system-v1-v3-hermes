@@ -142,7 +142,11 @@ PRODUCT_RUNTIME_GUIDANCE = (
     "assets. Resume drafts with marketing_read_content_assets; "
     "never put complete articles, scripts or transient drafts into long-term memory. "
     "Marketing decisions must distinguish verified facts, strategy inference and "
-    "creative suggestions. External effects, paid providers, publication and "
+    "creative suggestions. Never use source-code files, repository documentation "
+    "or earlier assistant answers as a substitute for native account context. If a "
+    "required product tool is unavailable or fails, state the real limitation and "
+    "ask only for the missing decision; do not reconstruct business facts from the "
+    "development workspace or conversation search. External effects, paid providers, publication and "
     "sensitive account actions require the product's approval and receipt rules."
 )
 

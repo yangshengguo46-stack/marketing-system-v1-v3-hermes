@@ -716,6 +716,25 @@ def test_load_enabled_toolsets_folds_project_into_focus_posture(monkeypatch):
     assert server._load_enabled_toolsets() == ["coding", "figma", "project"]
 
 
+def test_load_enabled_toolsets_product_runtime_does_not_collapse_to_coding(monkeypatch):
+    monkeypatch.delenv("HERMES_TUI_TOOLSETS", raising=False)
+    monkeypatch.setenv("HERMES_DESKTOP", "1")
+
+    import agent.coding_context as cc
+    import hermes_cli.config as config_mod
+    import hermes_cli.tools_config as tools_config_mod
+
+    monkeypatch.setattr(cc, "coding_selection", lambda **_: ["coding"])
+    monkeypatch.setattr(config_mod, "load_config", lambda: {})
+    monkeypatch.setattr(
+        tools_config_mod,
+        "_get_platform_tools",
+        lambda *_args, **_kwargs: {"marketing", "memory"},
+    )
+
+    assert server._load_enabled_toolsets() == ["marketing", "memory", "project"]
+
+
 def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):
     monkeypatch.setenv("HERMES_TUI_TOOLSETS", "mcp-off")
     monkeypatch.setitem(

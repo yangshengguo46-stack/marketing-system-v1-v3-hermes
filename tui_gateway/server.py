@@ -2389,6 +2389,12 @@ def _load_enabled_toolsets() -> list[str] | None:
     ]
     cfg = None
     fallback_notice = None
+    try:
+        from agent.product import is_product_runtime
+
+        product_runtime = is_product_runtime()
+    except Exception:
+        product_runtime = False
 
     # Coding posture (base Hermes): with no explicit pin, collapse to the
     # coding toolset (+ enabled MCP servers) when sitting in a code workspace.
@@ -2400,13 +2406,21 @@ def _load_enabled_toolsets() -> list[str] | None:
         try:
             from agent.coding_context import coding_selection
 
-            selection = coding_selection(platform="tui")
+            # Marketing OS may itself be launched from the source checkout in
+            # development, but that must not turn every customer conversation
+            # into a coding session and strip the native marketing toolset.
+            # Product sessions use the configured Hermes tool universe below;
+            # explicit HERMES_TUI_TOOLSETS still remains an operator override.
+            selection = None if product_runtime else coding_selection(platform="tui")
             if selection is not None:
                 # Fold in `project` here too: this is a GUI-only resolver, and
                 # the focus-mode coding posture returns before the fallback path
                 # that normally adds it — without this the desktop loses the
                 # project tools exactly when sitting in a repo (see below).
-                return sorted({*selection, "project"})
+                required = {"project"}
+                if product_runtime:
+                    required.add("marketing")
+                return sorted(set(selection) | required)
         except Exception:
             pass
 
@@ -2444,7 +2458,11 @@ def _load_enabled_toolsets() -> list[str] | None:
             return None
 
         if not unresolved:
-            return built_in
+            return (
+                sorted({*built_in, "marketing"})
+                if product_runtime
+                else built_in
+            )
 
         mcp_names: set[str] = set()
         mcp_disabled: set[str] = set()
@@ -2494,7 +2512,11 @@ def _load_enabled_toolsets() -> list[str] | None:
             )
 
         if valid:
-            return valid
+            return (
+                sorted({*valid, "marketing"})
+                if product_runtime
+                else valid
+            )
 
         fallback_notice = (
             "[tui] no valid HERMES_TUI_TOOLSETS entries; using configured CLI toolsets"
@@ -2523,7 +2545,11 @@ def _load_enabled_toolsets() -> list[str] | None:
         # surface them. This resolver runs ONLY in the desktop/TUI gateway, so
         # folding in the `project` toolset here is the gate that exposes them on
         # exactly the surface that can follow a project move.
-        return sorted(enabled | {"project"})
+        # Marketing is a native desktop capability, not an optional plugin.
+        # Keep it in the GUI fallback even when an older config predates the
+        # toolset or an invalid explicit override forced recovery.
+        required = {"marketing", "project"}
+        return sorted(enabled | required)
     except Exception:
         if fallback_notice is not None:
             print(

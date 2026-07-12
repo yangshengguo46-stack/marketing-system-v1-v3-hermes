@@ -158,7 +158,7 @@ describe('refreshOnboarding', () => {
     expect(window.localStorage.getItem('hermes-desktop-onboarded-v1')).toBe('1')
   })
 
-  it('shows a non-blocking notification when preserving configured on fallback', async () => {
+  it('does not alarm the user during a configured startup fallback', async () => {
     const notifySpy = vi.spyOn(notifications, 'notify')
 
     installApiMock(vi.fn())
@@ -173,12 +173,7 @@ describe('refreshOnboarding', () => {
 
     await refreshOnboarding(onboardingContext(fallbackTimeoutGateway()))
 
-    expect(notifySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'runtime-not-ready',
-        kind: 'error'
-      })
-    )
+    expect(notifySpy).not.toHaveBeenCalled()
     expect($desktopOnboarding.get().configured).toBe(true)
   })
 

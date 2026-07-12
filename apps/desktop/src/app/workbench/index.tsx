@@ -24,6 +24,7 @@ import {
   selectMarketingAccount,
   setMarketingAccounts
 } from '@/store/marketing'
+import { $gatewayState } from '@/store/session'
 
 import { AccountConnectDialog, MarketingPlatformAvatar } from './account-connect-dialog'
 
@@ -67,7 +68,7 @@ interface ContentAssetSummary {
 }
 
 interface WorkbenchViewProps {
-  onNewChat: () => void
+  onNewChat: (prefill?: string) => void
   onOpenAccounts: () => void
   onOpenContent: () => void
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
@@ -95,6 +96,7 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [error, setError] = useState('')
   const selectedAccountId = useStore($selectedMarketingAccountId)
+  const gatewayState = useStore($gatewayState)
 
   const selectedAccount = useMemo(
     () => accounts?.accounts.find(account => account.id === selectedAccountId) || accounts?.accounts[0] || null,
@@ -112,6 +114,12 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
   }, [applyAccounts, requestGateway])
 
   useEffect(() => {
+    if (gatewayState !== 'open') {
+      setError('')
+
+      return
+    }
+
     let active = true
 
     void Promise.all([
@@ -135,7 +143,7 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
     return () => {
       active = false
     }
-  }, [applyAccounts, requestGateway])
+  }, [applyAccounts, gatewayState, requestGateway])
 
   useEffect(() => {
     if (!selectedAccount?.id || selectedAccount.auth_state !== 'authenticated') {
@@ -218,11 +226,16 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
   const metrics = [
     { icon: Users, label: '粉丝', value: metric(stats, ['followers', 'fan_count', 'fans']), accent: '#54b99a' },
     { icon: Eye, label: '浏览', value: metric(stats, ['views', 'play_count', 'total_views']), accent: '#ef625c' },
-    { icon: Zap, label: '互动', value: metric(stats, ['likes', 'digg_count', 'engagement']), accent: '#d6a84a' },
+    {
+      icon: Zap,
+      label: '互动',
+      value: metric(stats, ['likes', 'total_likes', 'digg_count', 'engagement', 'interaction']),
+      accent: '#d6a84a'
+    },
     {
       icon: FileText,
       label: '作品',
-      value: metric(stats, ['works', 'video_count', 'content_count']),
+      value: metric(stats, ['works', 'video_count', 'videos_count', 'content_count']),
       accent: '#7894d8'
     }
   ]
@@ -246,7 +259,7 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
             <Button className="rounded-full px-4" onClick={onOpenAccounts} variant="outline">
               管理账号
             </Button>
-            <Button className="rounded-full px-5 shadow-[0_8px_24px_rgba(239,91,85,0.2)]" onClick={onNewChat}>
+            <Button className="rounded-full px-5 shadow-[0_8px_24px_rgba(239,91,85,0.2)]" onClick={() => onNewChat()}>
               <Plus className="mr-1.5 size-4" />
               新对话
             </Button>
@@ -315,7 +328,9 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
                   <span className="text-xs text-(--ui-text-tertiary)">{stageCopy.progress}% 已建立</span>
                   <button
                     className="flex items-center gap-1.5 text-sm font-medium hover:text-(--ui-accent)"
-                    onClick={onNewChat}
+                    onClick={() =>
+                      onNewChat('请读取当前账号经营进度，从下一步开始继续推进；先说明你读取到的账号状态。')
+                    }
                   >
                     让 Agent 继续 <ArrowUpRight className="size-4" />
                   </button>
@@ -371,7 +386,11 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
                   <button
                     className="group flex w-full items-center gap-4 py-4 text-left"
                     key={asset.id}
-                    onClick={onOpenContent}
+                    onClick={() =>
+                      onNewChat(
+                        `请继续推进内容资产 ${asset.id}（${asset.title || asset.topic || '未命名内容'}）。先读取资产、校验状态与证据，再和我确认下一步。`
+                      )
+                    }
                     type="button"
                   >
                     <span className="w-5 text-[0.66rem] font-semibold tabular-nums text-(--ui-text-quaternary)">
@@ -402,7 +421,13 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
             count={pendingDecisions}
             eyebrow="AGENT JUDGEMENT"
             icon={<Brain className="size-4" />}
-            onAction={onNewChat}
+            onAction={() =>
+              onNewChat(
+                pendingDecisions
+                  ? '请打开当前账号待确认的策略学习，逐条说明证据、风险和建议，由我决定是否接受。'
+                  : '请基于当前账号经营模型，告诉我今天最值得推进的一件事；先说明依据，再开始执行。'
+              )
+            }
             title="今天值得你关注"
           >
             <div className="space-y-3 pt-1">

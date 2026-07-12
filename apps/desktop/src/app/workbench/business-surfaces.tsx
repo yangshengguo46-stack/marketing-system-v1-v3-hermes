@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import {
   ArrowUpRight,
   Brain,
@@ -13,6 +14,8 @@ import {
   Lock,
   MonitorPlay,
   Plus,
+  RefreshCw,
+  Trash2,
   Zap
 } from '@/lib/icons'
 import {
@@ -26,7 +29,7 @@ import {
 import { AccountConnectDialog, MarketingPlatformAvatar } from './account-connect-dialog'
 
 interface SurfaceProps {
-  onNewChat: () => void
+  onNewChat: (prefill?: string) => void
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
 
@@ -44,6 +47,7 @@ interface PlatformsEnvelope {
 interface AssetSummary {
   id: string
   platform?: string
+  production_kind?: string
   status?: string
   title?: string
   topic?: string
@@ -77,7 +81,11 @@ export function ContentFactoryView({ onNewChat, requestGateway }: SurfaceProps) 
   return (
     <ProductPage
       action={
-        <Button onClick={onNewChat}>
+        <Button
+          onClick={() =>
+            onNewChat('我想开始创作内容。请先结合当前账号定位和最近真实数据，帮我选择最值得做的内容形态与选题。')
+          }
+        >
           <Plus className="mr-1.5 size-4" />
           开始创作
         </Button>
@@ -89,26 +97,38 @@ export function ContentFactoryView({ onNewChat, requestGateway }: SurfaceProps) 
       <section className="grid gap-4 lg:grid-cols-3">
         <PipelineCard
           accent="coral"
-          count={assets.filter(asset => asset.type === 'article_soft').length}
+          count={assets.filter(asset => contentLane(asset) === 'article').length}
           detail="知乎、公众号与长图文；自动适配平台表达、配图与排版。"
           icon={<FileText className="size-5" />}
-          onClick={onNewChat}
+          onClick={() =>
+            onNewChat(
+              '我要创作一篇知乎或微信公众号图文。请先读取当前账号定位、目标受众和可用证据，再和我确定平台、选题和文章目标。'
+            )
+          }
           title="图文创作"
         />
         <PipelineCard
           accent="gold"
-          count={assets.filter(asset => asset.type === 'faceless_video').length}
+          count={assets.filter(asset => contentLane(asset) === 'faceless').length}
           detail="搜索与生成素材协同，完成不露脸视频的编排、配音与剪辑。"
           icon={<FileImage className="size-5" />}
-          onClick={onNewChat}
+          onClick={() =>
+            onNewChat(
+              '我要制作一条不露脸素材视频。请先读取当前账号定位和目标平台，再给出选题、素材方案、配音与剪辑计划。'
+            )
+          }
           title="素材视频"
         />
         <PipelineCard
           accent="blue"
-          count={assets.filter(asset => asset.type === 'premium_video').length}
+          count={assets.filter(asset => contentLane(asset) === 'premium').length}
           detail="真人、数字人和 AI 影像由独立片场 Agent 预演后生产。"
           icon={<MonitorPlay className="size-5" />}
-          onClick={onNewChat}
+          onClick={() =>
+            onNewChat(
+              '我要筹备一条高质量真人、数字人或 AI 视频。请先建立创作 brief，并让片场预演 Agent 评估方案、成本和风险，不要直接开机生成。'
+            )
+          }
           title="高阶视频"
         />
       </section>
@@ -127,7 +147,11 @@ export function ContentFactoryView({ onNewChat, requestGateway }: SurfaceProps) 
               <button
                 className="group flex w-full items-center gap-5 py-4 text-left"
                 key={asset.id}
-                onClick={onNewChat}
+                onClick={() =>
+                  onNewChat(
+                    `请继续推进内容资产 ${asset.id}（${asset.title || asset.topic || '未命名内容'}）。先读取当前版本、证据和审核状态，再告诉我下一步。`
+                  )
+                }
                 type="button"
               >
                 <span className="w-6 text-[0.66rem] font-semibold text-(--ui-text-quaternary)">
@@ -138,7 +162,7 @@ export function ContentFactoryView({ onNewChat, requestGateway }: SurfaceProps) 
                     {asset.title || asset.topic || '未命名内容'}
                   </strong>
                   <small className="mt-1 block text-xs text-(--ui-text-tertiary)">
-                    {asset.platform || '跨平台'} · {asset.status || 'draft'}
+                    {formatAssetKind(asset)} · {formatAssetStatus(asset.status)}
                   </small>
                 </span>
                 <ChevronRight className="size-4 text-(--ui-text-quaternary) group-hover:text-foreground" />
@@ -163,6 +187,11 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
   const [connectOpen, setConnectOpen] = useState(false)
   const [resumeAccount, setResumeAccount] = useState<MarketingAccountSummary | null>(null)
 
+  const [accountAction, setAccountAction] = useState<{
+    account: MarketingAccountSummary
+    kind: 'delete' | 'disconnect'
+  } | null>(null)
+
   const refresh = useCallback(async () => {
     const [accountResult, platformResult] = await Promise.all([
       requestGateway<AccountsEnvelope>('marketing.accounts.list'),
@@ -186,6 +215,18 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
     }
 
     void refresh().catch(() => undefined)
+  }
+
+  const runAccountAction = async () => {
+    if (!accountAction) {
+      return
+    }
+
+    await requestGateway(
+      accountAction.kind === 'delete' ? 'marketing.account.delete' : 'marketing.account.disconnect',
+      { account_id: accountAction.account.id }
+    )
+    await refresh()
   }
 
   return (
@@ -213,42 +254,102 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
           </span>
         </div>
         {accounts.length ? (
-          <div className="divide-y divide-(--ui-stroke-tertiary)">
+          <div className="space-y-4 pt-5">
             {accounts.map(account => (
-              <div className="flex items-center gap-4 py-5" key={account.id}>
-                <MarketingPlatformAvatar platform={account.platform || ''} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <strong className="truncate text-sm font-medium">
-                      {account.label || account.username || account.id}
-                    </strong>
-                    <span
-                      className={`size-1.5 rounded-full ${account.auth_state === 'authenticated' ? 'bg-emerald-500' : 'bg-amber-400'}`}
-                    />
+              <article className="rounded-[20px] border border-(--ui-stroke-tertiary) p-5" key={account.id}>
+                <div className="flex items-center gap-4">
+                  <MarketingPlatformAvatar platform={account.platform || ''} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <strong className="truncate text-base font-semibold">
+                        {account.label || account.username || account.id}
+                      </strong>
+                      <span
+                        className={`size-1.5 rounded-full ${account.auth_state === 'authenticated' ? 'bg-emerald-500' : 'bg-amber-400'}`}
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-(--ui-text-tertiary)">
+                      {platformLabel(account.platform)} · {authStateLabel(account.auth_state)}
+                    </p>
                   </div>
-                  <p className="mt-1 text-xs text-(--ui-text-tertiary)">
-                    {account.platform || '内容平台'} · 独立账号空间
-                  </p>
+                  <Button
+                    onClick={() => {
+                      if (account.auth_state === 'authenticated') {
+                        selectMarketingAccount(account.id)
+                        onNewChat(
+                          `请进入账号 ${account.id} 的经营上下文，先汇总账号现状、受众、定位和今天最值得推进的任务。`
+                        )
+                      } else {
+                        setResumeAccount(account)
+                        setConnectOpen(true)
+                      }
+                    }}
+                    variant={selectedId === account.id ? 'default' : 'outline'}
+                  >
+                    {account.auth_state === 'authenticated'
+                      ? selectedId === account.id
+                        ? '进入当前账号'
+                        : '进入经营'
+                      : '继续登录'}
+                  </Button>
                 </div>
-                <Button
-                  onClick={() => {
-                    if (account.auth_state === 'authenticated') {
-                      selectMarketingAccount(account.id)
-                      onNewChat()
-                    } else {
-                      setResumeAccount(account)
-                      setConnectOpen(true)
-                    }
-                  }}
-                  variant={selectedId === account.id ? 'default' : 'outline'}
-                >
-                  {account.auth_state === 'authenticated'
-                    ? selectedId === account.id
-                      ? '当前账号'
-                      : '进入经营'
-                    : '继续登录'}
-                </Button>
-              </div>
+                <div className="mt-5 grid grid-cols-2 gap-3 border-y border-(--ui-stroke-tertiary) py-4 sm:grid-cols-4">
+                  <AccountMetric label="粉丝" value={accountMetric(account.stats, ['followers', 'fan_count', 'fans'])} />
+                  <AccountMetric label="浏览" value={accountMetric(account.stats, ['views', 'play_count', 'total_views'])} />
+                  <AccountMetric
+                    label="互动"
+                    value={accountMetric(account.stats, [
+                      'likes',
+                      'total_likes',
+                      'digg_count',
+                      'engagement',
+                      'interaction'
+                    ])}
+                  />
+                  <AccountMetric
+                    label="作品"
+                    value={accountMetric(account.stats, ['works', 'video_count', 'videos_count', 'content_count'])}
+                  />
+                </div>
+                <footer className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-xs text-(--ui-text-tertiary)">
+                    {accountUpdateTime(account)
+                      ? `最近同步 ${formatAccountTime(accountUpdateTime(account)!)}`
+                      : '等待首次账号验证'}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {account.auth_state !== 'authenticated' ? (
+                      <Button
+                        onClick={() => {
+                          setResumeAccount(account)
+                          setConnectOpen(true)
+                        }}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        <RefreshCw className="mr-1.5 size-3.5" />继续验证
+                      </Button>
+                    ) : (
+                      <Button
+                        onClick={() => setAccountAction({ account, kind: 'disconnect' })}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        退出登录
+                      </Button>
+                    )}
+                    <Button
+                      className="text-(--ui-text-tertiary) hover:text-destructive"
+                      onClick={() => setAccountAction({ account, kind: 'delete' })}
+                      size="icon-sm"
+                      title="删除账号"
+                      variant="ghost"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                </footer>
+              </article>
             ))}
           </div>
         ) : (
@@ -265,6 +366,19 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
         platforms={platforms}
         requestGateway={requestGateway}
         resumeAccount={resumeAccount}
+      />
+      <ConfirmDialog
+        confirmLabel={accountAction?.kind === 'delete' ? '删除账号' : '退出登录'}
+        description={
+          accountAction?.kind === 'delete'
+            ? '将删除账号记录并清理该账号独立浏览器环境。已有内容资产和经营记录不会被悄悄迁移到其他账号。'
+            : '将结束当前登录状态并释放浏览器会话。之后可以重新扫码登录，经营数据仍保留。'
+        }
+        destructive
+        onClose={() => setAccountAction(null)}
+        onConfirm={runAccountAction}
+        open={Boolean(accountAction)}
+        title={accountAction?.kind === 'delete' ? '确定删除这个账号？' : '确定退出这个账号？'}
       />
     </ProductPage>
   )
@@ -290,7 +404,11 @@ export function ManagedView({ onNewChat, requestGateway }: SurfaceProps) {
 
   return (
     <ProductPage
-      action={<Button onClick={onNewChat}>和 Agent 配置托管</Button>}
+      action={
+        <Button onClick={() => onNewChat('请为当前账号配置托管目标、授权边界、运行频率和需要人工确认的动作。')}>
+          和 Agent 配置托管
+        </Button>
+      }
       eyebrow="AUTOPILOT"
       subtitle="让 Agent 持续采集、判断和推进；涉及身份、发布与策略改变时仍由你决定。"
       title="托管"
@@ -319,12 +437,142 @@ export function ManagedView({ onNewChat, requestGateway }: SurfaceProps) {
           <p className="mt-3 text-sm leading-7 text-(--ui-text-secondary)">
             Agent 会自行补证据、预演方案和恢复失败任务；发布、账号身份变更和长期策略学习仍遵循你的授权边界。
           </p>
-          <Button className="mt-6" onClick={onNewChat} variant="outline">
+          <Button
+            className="mt-6"
+            onClick={() => onNewChat('请通过自然对话帮我设置当前账号的长期经营目标和托管边界。')}
+            variant="outline"
+          >
             通过自然对话设置目标 <ArrowUpRight className="ml-1.5 size-4" />
           </Button>
         </div>
       </section>
     </ProductPage>
+  )
+}
+
+function contentLane(asset: AssetSummary): 'article' | 'faceless' | 'premium' | 'unknown' {
+  const values = [asset.production_kind, asset.type, asset.platform]
+    .map(value => (value || '').toLowerCase())
+    .filter(Boolean)
+
+  if (values.some(value => ['article', 'article_soft', 'multi_article', 'wechat_article', 'zhihu_article'].includes(value))) {
+    return 'article'
+  }
+
+  if (values.some(value => ['faceless_video', 'material_video', 'remix_video'].includes(value))) {
+    return 'faceless'
+  }
+
+  if (values.some(value => ['premium_human_video', 'premium_video', 'digital_human_video'].includes(value))) {
+    return 'premium'
+  }
+
+  return 'unknown'
+}
+
+function platformLabel(platform?: string): string {
+  return (
+    {
+      bilibili: 'B站',
+      douyin: '抖音',
+      kuaishou: '快手',
+      tiktok: 'TikTok',
+      wechat_channels: '视频号',
+      wechat_official: '微信公众号',
+      xiaohongshu: '小红书',
+      youtube: 'YouTube',
+      zhihu: '知乎'
+    }[platform || ''] || platform || '内容平台'
+  )
+}
+
+function authStateLabel(state?: string): string {
+  return (
+    {
+      authenticated: '登录有效',
+      unauthenticated: '尚未登录',
+      verification_required: '需要重新验证'
+    }[state || ''] || '状态待确认'
+  )
+}
+
+function accountMetric(stats: Record<string, unknown> | undefined, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = Number(stats?.[key])
+
+    if (Number.isFinite(value) && value >= 0) {
+      return value
+    }
+  }
+
+  return null
+}
+
+function compactAccountMetric(value: number): string {
+  if (value >= 100_000_000) {
+    return `${(value / 100_000_000).toFixed(value >= 1_000_000_000 ? 0 : 1)}亿`
+  }
+
+  if (value >= 10_000) {
+    return `${(value / 10_000).toFixed(value >= 100_000 ? 0 : 1)}万`
+  }
+
+  return new Intl.NumberFormat('zh-CN').format(value)
+}
+
+function accountUpdateTime(account: MarketingAccountSummary): number | string | null {
+  if (account.last_verified_at) {
+    return account.last_verified_at
+  }
+
+  const updatedAt = account.stats?.updated_at
+
+  return typeof updatedAt === 'number' || typeof updatedAt === 'string' ? updatedAt : null
+}
+
+function formatAccountTime(value: number | string): string {
+  const numeric = typeof value === 'number' ? value * (value < 10_000_000_000 ? 1000 : 1) : value
+  const date = new Date(numeric)
+
+  if (Number.isNaN(date.getTime())) {
+    return '时间待同步'
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'short'
+  }).format(date)
+}
+
+function AccountMetric({ label, value }: { label: string; value: number | null }) {
+  return (
+    <div>
+      <strong className="block text-lg font-semibold tabular-nums tracking-[-0.03em]">
+        {value === null ? '—' : compactAccountMetric(value)}
+      </strong>
+      <span className="mt-1 block text-xs text-(--ui-text-tertiary)">{label}</span>
+    </div>
+  )
+}
+
+function formatAssetKind(asset: AssetSummary): string {
+  const lane = contentLane(asset)
+
+  return { article: '图文', faceless: '素材视频', premium: '高阶视频', unknown: '内容资产' }[lane]
+}
+
+function formatAssetStatus(status?: string): string {
+  return (
+    {
+      draft: '草稿',
+      needs_revision: '需要修改',
+      ready_for_human_review: '等待确认',
+      review_ready: '等待确认',
+      approved: '已确认',
+      published: '已发布'
+    }[status || ''] || '推进中'
   )
 }
 

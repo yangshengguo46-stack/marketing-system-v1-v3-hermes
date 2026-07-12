@@ -522,18 +522,10 @@ export async function refreshOnboarding(ctx: OnboardingContext) {
   const state = $desktopOnboarding.get()
 
   if (shouldPreserveConfiguredOnFallback(runtime, state)) {
-    // Gateway probes timed out but the user was already configured — don't
-    // downgrade to the blocking onboarding overlay. Surface a non-blocking
-    // notification with a stable id so repeated calls during an outage dedup
-    // instead of stacking toasts.
-    notify({
-      id: 'runtime-not-ready',
-      kind: 'error',
-      title: 'Runtime not ready',
-      message:
-        'Marketing OS could not verify the running backend on startup. Some features may be unavailable until the gateway is reachable.'
-    })
-
+    // A configured install commonly reaches this branch for a few seconds
+    // while the native Gateway is still booting. Keep the verified state and
+    // let live connection surfaces report a persistent outage; a startup toast
+    // here is a false alarm in the normal launch path.
     return false
   }
 

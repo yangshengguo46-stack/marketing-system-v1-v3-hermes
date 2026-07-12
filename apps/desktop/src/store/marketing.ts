@@ -6,7 +6,9 @@ export interface MarketingAccountSummary {
   id: string
   auth_state?: string
   label?: string
+  last_verified_at?: number | string
   platform?: string
+  platform_user_id?: string
   status?: string
   stats?: Record<string, unknown>
   username?: string

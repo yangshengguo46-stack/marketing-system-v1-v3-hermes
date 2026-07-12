@@ -188,6 +188,7 @@ const ManagedView = lazy(async () => ({ default: (await import('./workbench/busi
 // this cadence while the app is open + visible so new runs surface promptly
 // instead of waiting for the next user-triggered refreshSessions().
 const CRON_POLL_INTERVAL_MS = 30_000
+const PRODUCT_DEVELOPER_PANES = false
 // The recents list is local-only: cron rows have their own section, and each
 // messaging platform (telegram, discord, …) is fetched separately into its own
 // self-managed sidebar section (refreshMessagingSessions). Excluding both here
@@ -242,6 +243,7 @@ export function DesktopController() {
   const busyRef = useRef(false)
   const creatingSessionRef = useRef(false)
   const refreshSessionsRequestRef = useRef(0)
+  const pendingMarketingPrefillRef = useRef<string | null>(null)
 
   const gatewayState = useStore($gatewayState)
   const activeSessionId = useStore($activeSessionId)
@@ -775,6 +777,35 @@ export function DesktopController() {
     syncSessionStateToView,
     updateSessionState
   })
+
+  const openMarketingChat = useCallback(
+    (prefill?: string) => {
+      pendingMarketingPrefillRef.current = prefill?.trim() || null
+      startFreshSessionDraft()
+    },
+    [startFreshSessionDraft]
+  )
+
+  useEffect(() => {
+    if (location.pathname !== NEW_CHAT_ROUTE || selectedStoredSessionId || !freshDraftReady) {
+      return
+    }
+
+    const prefill = pendingMarketingPrefillRef.current
+
+    if (!prefill) {
+      return
+    }
+
+    pendingMarketingPrefillRef.current = null
+
+    const timer = window.setTimeout(() => {
+      requestComposerInsert(prefill, { target: 'main' })
+      requestComposerFocus('main')
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [freshDraftReady, location.pathname, selectedStoredSessionId])
 
   // Single global listener for every rebindable hotkey (incl. profile switching)
   // plus the on-screen keybind editor's capture mode.
@@ -1405,7 +1436,7 @@ export function DesktopController() {
             element={
               <Suspense fallback={null}>
                 <WorkbenchView
-                  onNewChat={() => navigate(NEW_CHAT_ROUTE)}
+                  onNewChat={openMarketingChat}
                   onOpenAccounts={() => navigate(ACCOUNT_CENTER_ROUTE)}
                   onOpenContent={() => navigate(CONTENT_FACTORY_ROUTE)}
                   requestGateway={requestGateway}
@@ -1417,7 +1448,10 @@ export function DesktopController() {
           <Route
             element={
               <Suspense fallback={null}>
-                <ContentFactoryView onNewChat={() => navigate(NEW_CHAT_ROUTE)} requestGateway={requestGateway} />
+                <ContentFactoryView
+                  onNewChat={openMarketingChat}
+                  requestGateway={requestGateway}
+                />
               </Suspense>
             }
             path="content"
@@ -1425,7 +1459,7 @@ export function DesktopController() {
           <Route
             element={
               <Suspense fallback={null}>
-                <AccountCenterView onNewChat={() => navigate(NEW_CHAT_ROUTE)} requestGateway={requestGateway} />
+                <AccountCenterView onNewChat={openMarketingChat} requestGateway={requestGateway} />
               </Suspense>
             }
             path="accounts"
@@ -1433,7 +1467,7 @@ export function DesktopController() {
           <Route
             element={
               <Suspense fallback={null}>
-                <ManagedView onNewChat={() => navigate(NEW_CHAT_ROUTE)} requestGateway={requestGateway} />
+                <ManagedView onNewChat={openMarketingChat} requestGateway={requestGateway} />
               </Suspense>
             }
             path="managed"
@@ -1481,10 +1515,14 @@ export function DesktopController() {
         mirror to file-browser | preview | terminal | main so terminal stays
         adjacent to the chat.
       */}
-      {panesFlipped ? fileBrowserPane : terminalPane}
-      {previewPane}
-      {reviewPane}
-      {panesFlipped ? terminalPane : fileBrowserPane}
+      {PRODUCT_DEVELOPER_PANES ? (
+        <>
+          {panesFlipped ? fileBrowserPane : terminalPane}
+          {previewPane}
+          {reviewPane}
+          {panesFlipped ? terminalPane : fileBrowserPane}
+        </>
+      ) : null}
     </AppShell>
   )
 }

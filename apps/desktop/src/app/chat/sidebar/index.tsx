@@ -113,7 +113,13 @@ import {
   setCurrentCwd
 } from '@/store/session'
 
-import { ACCOUNT_CENTER_ROUTE, type AppView, CONTENT_FACTORY_ROUTE, MANAGED_ROUTE, WORKBENCH_ROUTE } from '../../routes'
+import {
+  ACCOUNT_CENTER_ROUTE,
+  type AppView,
+  CONTENT_FACTORY_ROUTE,
+  MANAGED_ROUTE,
+  WORKBENCH_ROUTE
+} from '../../routes'
 import { SidebarPanelLabel } from '../../shell/sidebar-label'
 import type { SidebarNavItem } from '../../types'
 
