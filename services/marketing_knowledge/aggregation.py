@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import math
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -19,6 +20,16 @@ from marketing_knowledge_protocol import (
     pack_checksum,
     unsigned_pack,
 )
+
+
+_FORBIDDEN_FIELD = re.compile(
+    r"(?:account.?id|user.?id|username|cookie|token|password|secret|"
+    r"(?:^|_)url$|raw.?content|raw.?text|message|email|phone)",
+    re.IGNORECASE,
+)
+_PHONE_LIKE = re.compile(r"(?:\+?\d[\s-]?){7,}")
+_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
+_CONTRIBUTION_REF = re.compile(r"^contrib_[A-Za-z0-9_-]{4,128}$")
 
 
 class KnowledgeAggregator:
@@ -53,7 +64,7 @@ class KnowledgeAggregator:
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         unique: dict[str, dict[str, Any]] = {}
         for raw in contributions:
-            contribution = _validate_contribution(raw)
+            contribution = validate_contribution(raw)
             unique[contribution["contribution_ref"]] = contribution
         cohorts: dict[bytes, list[dict[str, Any]]] = defaultdict(list)
         for contribution in unique.values():
@@ -116,7 +127,9 @@ class KnowledgeAggregator:
         return sorted(packs, key=lambda item: item["id"])
 
 
-def _validate_contribution(value: Any) -> dict[str, Any]:
+def validate_contribution(value: Any) -> dict[str, Any]:
+    """Validate the untrusted anonymous wire envelope at the service edge."""
+
     if not isinstance(value, dict) or value.get("protocol") != CONTRIBUTION_PROTOCOL:
         raise ValueError("unsupported contribution protocol")
     allowed = {
@@ -132,13 +145,57 @@ def _validate_contribution(value: Any) -> dict[str, Any]:
     if extra:
         raise ValueError("central contribution contains forbidden fields")
     result = {key: value.get(key) for key in allowed}
-    if not str(result["contribution_ref"] or "").startswith("contrib_"):
+    if not _CONTRIBUTION_REF.fullmatch(str(result["contribution_ref"] or "")):
         raise ValueError("invalid anonymous contribution reference")
+    if not _SAFE_IDENTIFIER.fullmatch(str(result["schema_version"] or "")):
+        raise ValueError("invalid anonymous contribution schema version")
     for key in ("cohort", "features", "outcomes"):
         if not isinstance(result[key], dict):
             raise ValueError(f"{key} must be an object")
+        result[key] = _validate_aggregate_value(result[key], path=key)
+    platform = str(result["cohort"].get("platform") or "")
+    if not _SAFE_IDENTIFIER.fullmatch(platform):
+        raise ValueError("anonymous contribution cohort requires a safe platform")
     _parse_time(result["observed_at"])
     return result
+
+
+def _validate_aggregate_value(value: Any, *, path: str, depth: int = 0) -> Any:
+    if depth > 6:
+        raise ValueError(f"anonymous aggregate at {path} is too deeply nested")
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if not math.isfinite(float(value)):
+            raise ValueError(f"anonymous aggregate at {path} is not finite")
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if len(text) > 64:
+            raise ValueError(f"anonymous aggregate at {path} is too specific")
+        if "://" in text or "@" in text or _PHONE_LIKE.search(text):
+            raise ValueError(f"anonymous aggregate at {path} resembles identifying data")
+        return text
+    if isinstance(value, list):
+        if len(value) > 32:
+            raise ValueError(f"anonymous aggregate list at {path} is too large")
+        return [
+            _validate_aggregate_value(item, path=f"{path}[]", depth=depth + 1)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for raw_key, item in value.items():
+            key = str(raw_key or "").strip()
+            if not key or len(key) > 64 or _FORBIDDEN_FIELD.search(key):
+                raise ValueError(f"anonymous contribution contains forbidden field: {key or '<empty>'}")
+            result[key] = _validate_aggregate_value(
+                item,
+                path=f"{path}.{key}",
+                depth=depth + 1,
+            )
+        return result
+    raise ValueError(f"unsupported anonymous aggregate value at {path}")
 
 
 def _aggregate_object(

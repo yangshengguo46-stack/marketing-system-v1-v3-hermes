@@ -81,6 +81,8 @@ Hermes `state.db` 是会话、账号、受众、内容、预演、回执、指�
 
 中央知识服务是唯一有充分证据新增的产品边界：多用户聚合不可能由任一用户本机 Hermes 正确拥有。它只接收 `marketing.knowledge-contribution.v1` 匿名 wire envelope，不接收本地 user/account/consent/source candidate。`services/marketing_knowledge` 独立执行最小群组、稀疏类别抑制和时间衰减，并用 Ed25519 签署 `marketing.knowledge-pack.v1`。Hermes 必须使用内置信任公钥独立验签后才能落库；Electron 不参与贡献、上传、聚合、验签或安装。
 
+中央服务的持久 owner 是 `services/marketing_knowledge/storage.py`：它只存匿名 envelope、内容哈希、时间和最小删除 tombstone，不存本地账号身份。引用重试必须内容一致，删除后的引用永不允许复活；任何 corpus 变化都会使旧签名包失效，重聚合与落包共享一个 SQLite 写事务。HTTP 认证、授权和限流属于下一层服务入口，不能反向塞进 Desktop 或本机 Hermes 数据库。
+
 ```text
 Hermes local facts
 → governed contribution outbox
