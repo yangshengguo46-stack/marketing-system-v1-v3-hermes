@@ -132,11 +132,9 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - Playwright/MCP 的真实发布动作与作品列表反查 Provider 尚未接入；当前不能宣称能自动发布。
 - 仍需一条开发机真人图文发布和重启恢复证据，证据等级目前停在 `automated`。
 
-真人纵切依赖账号登录 UI，当前冻结。底层架构收口后统一实现第一阶段前端：账号登录/切换、内容审核、发布确认、执行状态和 unknown 恢复；前端不承载业务或执行真相。随后再用平台 Skill 验收知乎与短视频真人流程。
+账号登录第一条原生纵切已进入工作台：平台目录、pending account、启动登录、自动验证和认证后账号切换均由 Hermes Gateway 调用 `marketing-browser-mcp` 完成；Electron 只展示状态和收集点击，不接触 Cookie、BrowserContext 或认证真相。内容审核、发布确认、执行状态和 unknown 恢复 UI 仍待实现，随后再用平台 Skill 验收知乎与短视频真人流程。
 
-浏览器二进制口径：开发机先使用后端检测到的系统 Chrome/Edge 验证链路；产品安装包必须在
-“单独受控 Chromium”与“首次明确授权后下载”之间完成体积、离线和签名验证。禁止为了省掉
-这个决策而复用 Electron 作为自动化宿主，也禁止运行时静默下载。
+浏览器二进制口径已确定为安装包内置单独受控 Chromium，不要求用户安装 Chrome，也不在运行时静默下载。打包后的 Hermes 使用 Electron 可执行文件的 `ELECTRON_RUN_AS_NODE` 模式运行 MCP JavaScript，但 Electron/Chromium 渲染进程不拥有账号、Cookie、自动化或业务状态；真正的浏览器 owner 仍是 `marketing-browser-mcp`。当前自包含 runtime staging 为约 917MB，其中 Chromium 约 394MB、浏览器生产依赖约 46MB；已避免额外打包 Node，并保留 Chrome.app 符号链接避免膨胀到 1.7GB，后续继续精简 Python 依赖并验证签名、公证和压缩安装包体积。
 
 完成口径：
 
@@ -191,19 +189,19 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 
 ### DELIVERY-01 产品交付
 
-- 产品依赖 allowlist。
+- 产品依赖 allowlist；marketing-browser 只复制 npm production dependency closure。
 - macOS 签名、公证。
-- 干净机器无全局 Hermes/Python/Chrome 启动。
+- 自包含 Hermes/Python/Chromium staging 与真实 bundled Chromium headless 启动已 automated；仍缺干净机器安装验收。
 - 断网首启和升级回滚。
 
 ## 暂停项
 
-- 新页面和工作台装饰。
+- 非闭环所需的工作台装饰。
 - 全平台自动发布。
 - 微信/飞书体验扩张。
 - Windows 正式交付。
 - 高阶视频 Provider 和多 Agent 片场。
-- 抖音/B站/小红书 BGM 真人页面 selector 验收（等待账号登录 UI）。
+- 抖音/B站/小红书 BGM 真人页面 selector 验收（账号登录 UI 已具备，等待真人账号纵切）。
 - 未校准的流量、完播、互动和 InfluenceOS 对外承诺。
 
 ## 当前回归基线
@@ -211,10 +209,12 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
 - 当前营销域、经营世界模型、四类知识、中央服务/同步/撤回、内容生产、原生采证、prospect 继承、真实登录激活、SessionDB 与经营闭环主组合回归：391 passed。
 - 中央知识服务专项：15 passed；覆盖嵌套身份拒绝、持久化、内容碰撞、删除失效、认证、过期请求、nonce、限流、客户端 token 轮换/吊销、跨客户端删除拒绝和删除 key-ring 轮换。
-- 改造版 Playwright MCP：15 passed；包含账号租约、profile 持久化/清理、浏览器运行时、登录信号、敏感 URL 清洗和 54 项工具 schema。
+- 改造版 Playwright MCP：16 passed；包含账号租约、profile 持久化/清理、浏览器运行时、平台登录启动、登录信号、敏感 URL 清洗和 55 项工具 schema。
 - TUI/Gateway 会话既有回归：172 passed；本轮新增 Gateway adoption RPC 已包含在营销组合回归。
 - Hermes Cron 调度/作业/产品任务组合回归：302 passed；产品任务无 MetricProvider 时静默，有真实 Provider 时调用指标 owner。
 - LOOP-01/02/03/04 发布账本、审批、指标回执、缺失值、延期、崩溃领取恢复、Retro、候选和账号知识治理单文件回归：19 passed。
-- Desktop runtime staging：5 passed。
+- Desktop 平台/打包回归：262 passed、1 skipped；自包含 runtime staging、MCP 生产依赖闭包、受控 Chromium、Electron-as-Node 与真实 bundled Chromium 启动已验证。
+- 通用媒体素材库：65 项营销域回归通过；上传路径隔离、MIME/版权来源强绑定、敏感元数据脱敏、可信素材幂等、引用删除保护和 32MB Gateway 内联上限已进入 Hermes 原生领域 owner。
+- 工作台账号连接纵切：TypeScript 构建、3 项 UI/store 测试、15 项账号 Gateway/Registry/Auth 回归通过；尚缺本轮真人扫码验收。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。
 - 下一次更新本台账时必须写：代码路径、测试、dev-runtime、packaged、human-loop 和仍未完成的风险。
