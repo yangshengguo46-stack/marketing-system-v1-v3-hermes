@@ -12909,6 +12909,62 @@ def _(rid, _params: dict) -> dict:
     return _ok(rid, AccountContextRepository().list_accounts())
 
 
+@method("marketing.knowledge.contributions.list")
+def _(rid, params: dict) -> dict:
+    """List one account's local consent and central-sync audit records."""
+    from agent.marketing.domains import KnowledgeFlywheelRepository
+
+    params = params if isinstance(params, dict) else {}
+    user_id = str(params.get("user_id") or "default")
+    account_id = str(params.get("account_id") or "").strip()
+    if not account_id:
+        return _err(rid, -32602, "account_id is required")
+    requested = params.get("statuses")
+    statuses = (
+        tuple(str(item) for item in requested)
+        if isinstance(requested, list)
+        else (
+            "pending",
+            "uploading",
+            "submitted",
+            "withheld",
+            "delete_pending",
+            "deleted",
+        )
+    )
+    try:
+        records = KnowledgeFlywheelRepository().list_contributions(
+            statuses=statuses,
+            user_id=user_id,
+            account_id=account_id,
+            limit=int(params.get("limit") or 100),
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"contributions": records, "total": len(records)})
+
+
+@method("marketing.knowledge.contribution.withdraw")
+def _(rid, params: dict) -> dict:
+    """Record explicit consent withdrawal; Cron later executes central deletion."""
+    from agent.marketing.domains import KnowledgeFlywheelRepository
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit user confirmation is required")
+    try:
+        contribution = KnowledgeFlywheelRepository().request_contribution_withdrawal(
+            str(params.get("contribution_id") or ""),
+            user_id=str(params.get("user_id") or "default"),
+            account_id=str(params.get("account_id") or ""),
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"contribution": contribution})
+
+
 @method("marketing.accounts.register")
 def _(rid, params: dict) -> dict:
     """Create a pending account in Hermes before the BrowserContext login flow."""

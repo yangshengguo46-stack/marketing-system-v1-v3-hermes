@@ -21,7 +21,16 @@ _FORBIDDEN_KEY = re.compile(
     r"(?:account.?id|user.?id|username|cookie|token|password|secret|(?:^|_)url$|raw.?content|raw.?text|message|email|phone)",
     re.IGNORECASE,
 )
-_STATUSES = {"pending", "submitted", "accepted", "rejected", "withheld"}
+_STATUSES = {
+    "pending",
+    "uploading",
+    "submitted",
+    "accepted",
+    "rejected",
+    "withheld",
+    "delete_pending",
+    "deleted",
+}
 
 
 def _now() -> str:
@@ -85,6 +94,7 @@ class KnowledgeFlywheelRepository(MarketingDomainRepository):
         canonical = _json(
             {
                 "candidate": source_candidate_id,
+                "consent": consent,
                 "schema": schema_version,
                 "cohort": payloads[0],
                 "features": payloads[1],
@@ -149,17 +159,27 @@ class KnowledgeFlywheelRepository(MarketingDomainRepository):
         *,
         statuses: tuple[str, ...] = ("pending",),
         limit: int = 100,
+        user_id: str | None = None,
+        account_id: str | None = None,
     ) -> list[dict[str, Any]]:
         selected = tuple(dict.fromkeys(str(value or "").strip() for value in statuses))
         if not selected or any(value not in _STATUSES for value in selected):
             raise ValueError("invalid contribution status filter")
         bounded_limit = max(1, min(int(limit), 500))
         placeholders = ",".join("?" for _ in selected)
+        filters = [f"status IN ({placeholders})"]
+        parameters: list[Any] = list(selected)
+        if user_id is not None:
+            filters.append("user_id=?")
+            parameters.append(str(user_id))
+        if account_id is not None:
+            filters.append("account_id=?")
+            parameters.append(str(account_id))
         with self._connection() as db:
             rows = db.execute(
                 f"""SELECT id FROM marketing_knowledge_contributions
-                WHERE status IN ({placeholders}) ORDER BY created_at,id LIMIT ?""",
-                (*selected, bounded_limit),
+                WHERE {' AND '.join(filters)} ORDER BY created_at,id LIMIT ?""",
+                (*parameters, bounded_limit),
             ).fetchall()
         return [self.get_contribution(str(row["id"])) for row in rows]
 
@@ -177,12 +197,144 @@ class KnowledgeFlywheelRepository(MarketingDomainRepository):
                 raise ValueError("only a pending contribution can transition")
         return self.get_contribution(contribution_id)
 
+    def claim_pending_contributions(
+        self,
+        *,
+        limit: int = 100,
+        stale_before: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Claim upload work so withdrawal can safely race an in-flight request."""
+
+        bounded_limit = max(1, min(int(limit), 500))
+        with self._transaction() as db:
+            if stale_before:
+                db.execute(
+                    """UPDATE marketing_knowledge_contributions
+                    SET status='pending',upload_claimed_at=NULL,
+                        last_sync_error='stale_upload_claim_recovered'
+                    WHERE status='uploading' AND upload_claimed_at<?""",
+                    (str(stale_before),),
+                )
+            rows = db.execute(
+                """SELECT id FROM marketing_knowledge_contributions
+                WHERE status='pending' ORDER BY created_at,id LIMIT ?""",
+                (bounded_limit,),
+            ).fetchall()
+            claimed_at = _now()
+            ids = [str(row["id"]) for row in rows]
+            for contribution_id in ids:
+                db.execute(
+                    """UPDATE marketing_knowledge_contributions
+                    SET status='uploading',upload_claimed_at=?,last_sync_error=NULL
+                    WHERE id=? AND status='pending'""",
+                    (claimed_at, contribution_id),
+                )
+        return [self.get_contribution(contribution_id) for contribution_id in ids]
+
+    def settle_contribution_upload(self, contribution_id: str) -> dict[str, Any]:
+        """Settle a server acknowledgement without overriding a concurrent withdrawal."""
+
+        with self._transaction() as db:
+            row = db.execute(
+                "SELECT status FROM marketing_knowledge_contributions WHERE id=?",
+                (contribution_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError("knowledge contribution not found")
+            if row["status"] == "uploading":
+                db.execute(
+                    """UPDATE marketing_knowledge_contributions
+                    SET status='submitted',submitted_at=?,upload_claimed_at=NULL,
+                        last_sync_error=NULL WHERE id=?""",
+                    (_now(), contribution_id),
+                )
+            elif row["status"] != "delete_pending":
+                raise ValueError("only uploading or concurrently withdrawn contribution can settle")
+        return self.get_contribution(contribution_id)
+
+    def release_contribution_upload(
+        self, contribution_id: str, *, error_type: str
+    ) -> dict[str, Any]:
+        with self._transaction() as db:
+            db.execute(
+                """UPDATE marketing_knowledge_contributions
+                SET status='pending',upload_claimed_at=NULL,last_sync_error=?
+                WHERE id=? AND status='uploading'""",
+                (str(error_type or "upload_failed")[:120], contribution_id),
+            )
+        return self.get_contribution(contribution_id)
+
+    def request_contribution_withdrawal(
+        self,
+        contribution_id: str,
+        *,
+        user_id: str,
+        account_id: str,
+    ) -> dict[str, Any]:
+        """Revoke local consent and enqueue central deletion when data may have left."""
+
+        now = _now()
+        with self._transaction() as db:
+            row = db.execute(
+                """SELECT status,deletion_ref FROM marketing_knowledge_contributions
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (contribution_id, user_id, account_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("knowledge contribution not found in account scope")
+            status = str(row["status"])
+            if status in {"withheld", "delete_pending", "deleted"}:
+                pass
+            elif status in {"pending", "rejected"}:
+                db.execute(
+                    """UPDATE marketing_knowledge_contributions
+                    SET status='withheld',withdrawal_requested_at=?,upload_claimed_at=NULL,
+                        cohort_json='{}',features_json='{}',outcomes_json='{}'
+                    WHERE id=?""",
+                    (now, contribution_id),
+                )
+            elif status in {"uploading", "submitted", "accepted"}:
+                deletion_ref = str(row["deletion_ref"] or f"delete_{uuid.uuid4().hex}")
+                db.execute(
+                    """UPDATE marketing_knowledge_contributions
+                    SET status='delete_pending',deletion_ref=?,withdrawal_requested_at=?,
+                        upload_claimed_at=NULL,cohort_json='{}',features_json='{}',
+                        outcomes_json='{}' WHERE id=?""",
+                    (deletion_ref, now, contribution_id),
+                )
+            else:
+                raise ValueError(f"contribution cannot be withdrawn from status: {status}")
+        return self.get_contribution(contribution_id)
+
+    def settle_contribution_deletion(self, contribution_id: str) -> dict[str, Any]:
+        with self._transaction() as db:
+            updated = db.execute(
+                """UPDATE marketing_knowledge_contributions
+                SET status='deleted',deleted_at=?,last_sync_error=NULL
+                WHERE id=? AND status='delete_pending'""",
+                (_now(), contribution_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("only a pending contribution deletion can settle")
+        return self.get_contribution(contribution_id)
+
+    def record_contribution_deletion_error(
+        self, contribution_id: str, *, error_type: str
+    ) -> dict[str, Any]:
+        with self._transaction() as db:
+            db.execute(
+                """UPDATE marketing_knowledge_contributions SET last_sync_error=?
+                WHERE id=? AND status='delete_pending'""",
+                (str(error_type or "delete_failed")[:120], contribution_id),
+            )
+        return self.get_contribution(contribution_id)
+
     def export_contribution(self, contribution_id: str) -> dict[str, Any]:
         """Return the exact anonymous wire envelope; never export local scope or consent data."""
 
         contribution = self.get_contribution(contribution_id)
-        if contribution["status"] not in {"pending", "submitted"}:
-            raise ValueError("only pending or submitted contributions may be exported")
+        if contribution["status"] not in {"pending", "uploading", "submitted"}:
+            raise ValueError("only pending, claimed or submitted contributions may be exported")
         return {
             "protocol": CONTRIBUTION_PROTOCOL,
             "contribution_ref": contribution["id"],
@@ -191,6 +343,17 @@ class KnowledgeFlywheelRepository(MarketingDomainRepository):
             "features": contribution["features"],
             "outcomes": contribution["outcomes"],
             "observed_at": contribution["created_at"],
+        }
+
+    def export_contribution_deletion(self, contribution_id: str) -> dict[str, str]:
+        contribution = self.get_contribution(contribution_id)
+        if contribution["status"] != "delete_pending" or not contribution.get(
+            "deletion_ref"
+        ):
+            raise ValueError("contribution deletion is not pending")
+        return {
+            "contribution_ref": contribution["id"],
+            "deletion_ref": contribution["deletion_ref"],
         }
 
     def install_knowledge_pack(

@@ -350,7 +350,12 @@ CREATE TABLE IF NOT EXISTS marketing_knowledge_contributions (
     outcomes_json TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL,
-    submitted_at TEXT
+    submitted_at TEXT,
+    upload_claimed_at TEXT,
+    deletion_ref TEXT,
+    withdrawal_requested_at TEXT,
+    deleted_at TEXT,
+    last_sync_error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_marketing_contribution_status
     ON marketing_knowledge_contributions(status,created_at);

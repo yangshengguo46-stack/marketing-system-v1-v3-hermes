@@ -139,3 +139,63 @@ def test_export_strips_local_identity_and_verified_pack_installs_as_prior(tmp_pa
     )
     assert installed["status"] == "verified"
     assert installed["authority"] == "global_prior_below_local_receipt"
+
+
+def test_withdrawal_never_uploads_pending_data_and_enqueues_submitted_deletion(tmp_path):
+    pending_repository = _repository(tmp_path / "pending")
+    pending = pending_repository.create_contribution(
+        user_id="default",
+        account_id="acct-1",
+        source_candidate_id="learn-1",
+        consent_ref="consent-pending",
+        schema_version="knowledge.v1",
+        cohort={"platform": "zhihu"},
+        features={"hook_type": "question"},
+        outcomes={"save_rate": 0.04},
+    )
+    withheld = pending_repository.request_contribution_withdrawal(
+        pending["id"], user_id="default", account_id="acct-1"
+    )
+
+    assert withheld["status"] == "withheld"
+    assert withheld["cohort"] == {}
+    assert withheld["features"] == {}
+    assert withheld["outcomes"] == {}
+    assert pending_repository.list_contributions(statuses=("pending",)) == []
+
+    submitted_repository = _repository(tmp_path / "submitted")
+    submitted = submitted_repository.create_contribution(
+        user_id="default",
+        account_id="acct-1",
+        source_candidate_id="learn-1",
+        consent_ref="consent-submitted",
+        schema_version="knowledge.v1",
+        cohort={"platform": "zhihu"},
+        features={"hook_type": "question"},
+        outcomes={"save_rate": 0.04},
+    )
+    submitted_repository.update_contribution_status(submitted["id"], "submitted")
+    deletion = submitted_repository.request_contribution_withdrawal(
+        submitted["id"], user_id="default", account_id="acct-1"
+    )
+
+    assert deletion["status"] == "delete_pending"
+    assert deletion["features"] == {}
+    assert deletion["deletion_ref"].startswith("delete_")
+    assert submitted_repository.export_contribution_deletion(submitted["id"]) == {
+        "contribution_ref": submitted["id"],
+        "deletion_ref": deletion["deletion_ref"],
+    }
+
+    reconsented = submitted_repository.create_contribution(
+        user_id="default",
+        account_id="acct-1",
+        source_candidate_id="learn-1",
+        consent_ref="consent-submitted-new",
+        schema_version="knowledge.v1",
+        cohort={"platform": "zhihu"},
+        features={"hook_type": "question"},
+        outcomes={"save_rate": 0.04},
+    )
+    assert reconsented["id"] != submitted["id"]
+    assert reconsented["status"] == "pending"

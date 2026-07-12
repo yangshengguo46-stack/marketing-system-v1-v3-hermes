@@ -7,6 +7,7 @@ import json
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -61,10 +62,43 @@ class KnowledgeSyncClient:
         }
 
     def sync_once(self, *, upload_limit: int = 100) -> dict[str, Any]:
+        deleted: list[str] = []
+        deletion_errors: list[dict[str, str]] = []
+        for contribution in self.repository.list_contributions(
+            statuses=("delete_pending",), limit=upload_limit
+        ):
+            contribution_id = str(contribution["id"])
+            try:
+                deletion = self.repository.export_contribution_deletion(contribution_id)
+                response = self.http.request(
+                    "DELETE",
+                    f"/v1/contributions/{contribution_id}",
+                    headers=self._headers(),
+                    json={"deletion_ref": deletion["deletion_ref"]},
+                )
+                # 404 is a successful privacy outcome: the central service no
+                # longer has the payload (including a crash-before-upload race).
+                if response.status_code != 404:
+                    response.raise_for_status()
+                self.repository.settle_contribution_deletion(contribution_id)
+                deleted.append(contribution_id)
+            except Exception as exc:
+                error_type = type(exc).__name__
+                self.repository.record_contribution_deletion_error(
+                    contribution_id, error_type=error_type
+                )
+                deletion_errors.append(
+                    {"contribution_ref": contribution_id, "error": error_type}
+                )
+
         uploaded: list[str] = []
         upload_errors: list[dict[str, str]] = []
-        for contribution in self.repository.list_contributions(
-            statuses=("pending",), limit=upload_limit
+        stale_before = (
+            datetime.now(timezone.utc) - timedelta(minutes=10)
+        ).isoformat()
+        for contribution in self.repository.claim_pending_contributions(
+            limit=upload_limit,
+            stale_before=stale_before,
         ):
             contribution_id = str(contribution["id"])
             try:
@@ -74,11 +108,15 @@ class KnowledgeSyncClient:
                     json=self.repository.export_contribution(contribution_id),
                 )
                 response.raise_for_status()
-                self.repository.update_contribution_status(contribution_id, "submitted")
+                self.repository.settle_contribution_upload(contribution_id)
                 uploaded.append(contribution_id)
             except Exception as exc:
+                error_type = type(exc).__name__
+                self.repository.release_contribution_upload(
+                    contribution_id, error_type=error_type
+                )
                 upload_errors.append(
-                    {"contribution_ref": contribution_id, "error": type(exc).__name__}
+                    {"contribution_ref": contribution_id, "error": error_type}
                 )
 
         installed: list[str] = []
@@ -104,8 +142,10 @@ class KnowledgeSyncClient:
             pack_errors.append({"pack_id": "", "error": type(exc).__name__})
 
         return {
+            "deleted": deleted,
             "uploaded": uploaded,
             "installed": installed,
+            "deletion_errors": deletion_errors,
             "upload_errors": upload_errors,
             "pack_errors": pack_errors,
         }

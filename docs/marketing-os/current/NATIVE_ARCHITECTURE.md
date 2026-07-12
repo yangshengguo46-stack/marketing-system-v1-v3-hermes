@@ -87,6 +87,8 @@ Hermes `state.db` 是会话、账号、受众、内容、预演、回执、指�
 
 Hermes 客户端 owner 是 `agent/marketing/providers/knowledge_sync.py`：它只读取 `KnowledgeFlywheelRepository` 的 pending consented outbox，上传成功后结算 submitted；下载结果必须经 Ed25519 信任 key-ring 验证，篡改或未知签名包不能进入本地知识库。`cron/product_tasks.py` 只决定何时调用 provider，不解析 envelope、签名或知识。服务地址、安装级 token 与公钥 ring 通过 `MARKETING_KNOWLEDGE_*` 部署作用域读取，即使 Gateway multiplex 多个用户 profile 也不会借用其中任何人的 credential。Desktop/Electron 永不持有中央同步逻辑或全局服务密钥。
 
+Consent 撤回属于同一 Repository 状态机：未上传记录直接 withheld 并清空 aggregate payload；已上传或上传中的记录生成稳定 deletion_ref，进入 delete_pending，由 Provider 请求中央删除，成功或确认不存在后结算 deleted。上传先 claim 为 uploading，因此用户在 HTTP in-flight 时撤回也不会被随后 submitted 覆盖；崩溃遗留 claim 自动回到 pending。Gateway 只暴露带明确 `confirmed=true` 的本地撤回交互入口，不执行网络删除；Electron 只收集确认和显示审计状态。
+
 ```text
 Hermes local facts
 → governed contribution outbox

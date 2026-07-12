@@ -32,11 +32,19 @@ class _HTTP:
         self.packs = packs
         self.upload_status = upload_status
         self.posts = []
+        self.deletes = []
         self.gets = []
+        self.on_post = None
 
     def post(self, path, *, headers, json):
         self.posts.append((path, headers, json))
+        if self.on_post is not None:
+            self.on_post()
         return _Response({"operation": "ingested"}, status_code=self.upload_status)
+
+    def request(self, method, path, *, headers, json):
+        self.deletes.append((method, path, headers, json))
+        return _Response({"operation": "deleted"})
 
     def get(self, path, *, headers):
         self.gets.append((path, headers))
@@ -166,3 +174,54 @@ def test_installation_sync_credentials_remain_global_in_multiplex_mode(monkeypat
         client.close()
     finally:
         set_multiplex_active(False)
+
+
+def test_sync_executes_submitted_consent_withdrawal(tmp_path):
+    repository, contribution = _repository(tmp_path)
+    repository.update_contribution_status(contribution["id"], "submitted")
+    withdrawal = repository.request_contribution_withdrawal(
+        contribution["id"], user_id="default", account_id="acct-1"
+    )
+    http = _HTTP([])
+    client = KnowledgeSyncClient(
+        base_url="https://knowledge.example",
+        client_id="desktop-install-1",
+        token="token-" + "x" * 40,
+        public_keys={"product-sync-1": b"x" * 32},
+        repository=repository,
+        http_client=http,
+    )
+
+    result = client.sync_once()
+
+    assert result["deleted"] == [contribution["id"]]
+    assert result["deletion_errors"] == []
+    assert repository.get_contribution(contribution["id"])["status"] == "deleted"
+    assert http.deletes[0][1] == f"/v1/contributions/{contribution['id']}"
+    assert http.deletes[0][3]["deletion_ref"] == withdrawal["deletion_ref"]
+
+
+def test_withdrawal_racing_upload_cannot_be_overwritten_by_submit_settlement(tmp_path):
+    repository, contribution = _repository(tmp_path)
+    http = _HTTP([])
+    http.on_post = lambda: repository.request_contribution_withdrawal(
+        contribution["id"], user_id="default", account_id="acct-1"
+    )
+    client = KnowledgeSyncClient(
+        base_url="https://knowledge.example",
+        client_id="desktop-install-1",
+        token="token-" + "x" * 40,
+        public_keys={"product-sync-1": b"x" * 32},
+        repository=repository,
+        http_client=http,
+    )
+
+    first = client.sync_once()
+    after_upload = repository.get_contribution(contribution["id"])
+    http.on_post = None
+    second = client.sync_once()
+
+    assert first["uploaded"] == [contribution["id"]]
+    assert after_upload["status"] == "delete_pending"
+    assert second["deleted"] == [contribution["id"]]
+    assert repository.get_contribution(contribution["id"])["status"] == "deleted"

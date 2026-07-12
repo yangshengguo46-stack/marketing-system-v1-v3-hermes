@@ -25,7 +25,7 @@
 | Hermes 产品本体 | 完整源码已成为主仓库根 | code + automated | 上游吸收 CI、正式签名发布 |
 | State/data owner | 经营项目、受众、证据、内容、预演、回执和学习表已进入 Hermes `state.db`；旧 `agent_core.db` 一次迁移后只读保留 | dev-runtime | 删除旧兼容读取路径；中央服务仍待部署运维 |
 | Short-video sound intelligence | Playwright MCP 原生短视频/BGM 结构化采集；Sound/Observation/Evidence 入 `state.db`；预演、草稿快照和发布回执携带声音身份 | automated | 真人 selector 验收冻结到账号登录 UI 完成后；再做跨日速度与匹配样本归因 |
-| Central knowledge core | 匿名贡献 wire contract、服务端 SQLite、认证 HTTP、防重放/限流/归属删除/密钥轮换、隐私聚合和签名；Hermes 原生 Provider 上传 consented outbox、下载后验签安装，Cron 仅触发 | automated | 本地撤回 outbox、TLS/反向代理、凭据签发运维、签名私钥轮换演练与真实多用户规模 |
+| Central knowledge core | 匿名贡献 wire contract、安全服务与隐私聚合签名；Hermes 原生 Provider 上传 consented outbox、验签安装先验；撤回授权按 pending 本地扣留、submitted 中央删除，处理上传竞态和崩溃恢复 | automated | TLS/反向代理、凭据签发运维、签名私钥轮换演练与真实多用户规模 |
 | New-media operating model | 创作者资产、赛道路线、行为受众、七角色对标图谱、定位、内容系统和可证伪实验进入 Hermes 原生领域 owner；关键版本需用户确认 | automated | 真实赛道研究、对标采集、自然对话真人验收 |
 | Four knowledge bases | Platform/Market/Account/Content 四库进入 Hermes `state.db`；赛道库接收真实证据和签名聚合规律；账号知识只接收 Receipt-backed accepted learning；用户/模型写入被拒绝 | automated | 海量采集、规则与市场时效巡检、候选治理 UI |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
@@ -66,7 +66,7 @@
 4. 全局知识只进入先验层，本地 Receipt、用户明确偏好和账号事实拥有更高权重。
 5. 完成 metric checkpoint → retro → candidate → memory/strategy/skill projection 后，才冻结底层合同进入 UI。
 
-当前落地：匿名 contribution 不含 user/account/consent/source candidate；中央服务边界会再次拒绝嵌套身份字段、URL/邮箱/电话形态和过度具体值。`CentralKnowledgeStore` 已用独立 SQLite 持久化匿名贡献，保证相同引用同内容幂等、相同引用不同内容拒绝；删除后只保留最小 tombstone，原 payload 物理删除且不可重放。贡献新增或删除会立即使全部派生知识包失效，聚合与重签在同一写事务快照内完成，避免并发把旧结论重新放回服务。`services/marketing_knowledge/api.py` 已提供认证 HTTP surface：每个安装实例使用独立高熵 token，服务端只存哈希；时间戳、一次性 request nonce 和 SQLite 窗口计数分别阻断过期重放和突发滥用。贡献归属不保存 client ID，而保存按 `client + contribution` 计算的不可关联 HMAC proof；只有原认证客户端能删除，删除 key-ring 支持新旧密钥平滑轮换并在成功访问时迁移 proof。客户端 token 也可独立轮换或吊销，凭据签发只允许离线管理，不存在公共注册接口。聚合内核继续执行 k-anonymity 门槛、类别稀疏抑制和时间衰减；知识包使用 Ed25519 签名。`agent/marketing/providers/knowledge_sync.py` 现在作为 Hermes 原生同步 owner：只导出 accepted learning + 显式 consent 生成的 pending outbox；服务确认后才标记 submitted，崩溃窗口靠 contribution_ref 幂等恢复；下载 pack 必须先通过内置信任 key-ring 验签才进入 `state.db` 和四库先验。Cron 只非阻塞触发，同步服务 URL、安装级 client token 和公钥 ring 即使在 multiplex 模式也不属于任何用户 profile，Electron 不读取。尚未实现本机 consent 撤回 outbox、TLS 部署、凭据签发服务和真实多租户压测，不能宣称云端已上线。
+当前落地：匿名 contribution 不含 user/account/consent/source candidate；中央服务边界会再次拒绝嵌套身份字段、URL/邮箱/电话形态和过度具体值。`CentralKnowledgeStore` 已用独立 SQLite 持久化匿名贡献，保证相同引用同内容幂等、相同引用不同内容拒绝；删除后只保留最小 tombstone，原 payload 物理删除且不可重放。贡献新增或删除会立即使全部派生知识包失效，聚合与重签在同一写事务快照内完成，避免并发把旧结论重新放回服务。`services/marketing_knowledge/api.py` 已提供认证 HTTP surface：每个安装实例使用独立高熵 token，服务端只存哈希；时间戳、一次性 request nonce 和 SQLite 窗口计数分别阻断过期重放和突发滥用。贡献归属不保存 client ID，而保存按 `client + contribution` 计算的不可关联 HMAC proof；只有原认证客户端能删除，删除 key-ring 支持新旧密钥平滑轮换并在成功访问时迁移 proof。客户端 token 也可独立轮换或吊销，凭据签发只允许离线管理，不存在公共注册接口。聚合内核继续执行 k-anonymity 门槛、类别稀疏抑制和时间衰减；知识包使用 Ed25519 签名。`agent/marketing/providers/knowledge_sync.py` 作为 Hermes 原生同步 owner：只导出 accepted learning + 显式 consent 生成的 outbox；上传采用 `pending → uploading → submitted` claim，陈旧 claim 可恢复，服务已收件但本地崩溃靠 contribution_ref 幂等补结算；下载 pack 必须先通过内置信任 key-ring 验签才进入 `state.db` 和四库先验。用户撤回未上传贡献时立即 `withheld` 且清空本地 aggregate payload；已经或可能上传的贡献进入 `delete_pending`，中央返回删除成功或 404 后才结算 `deleted`。撤回与 in-flight upload 并发时，submit settlement 不得覆盖 delete_pending；新 consent_ref 会创建新贡献而非复活旧记录。Gateway 只在 `confirmed=true` 时调用 owner，Electron 未来只展示并收集确认。Cron 只非阻塞触发，同步服务 URL、安装级 client token 和公钥 ring 即使在 multiplex 模式也不属于任何用户 profile。尚未完成 TLS 部署、凭据签发服务和真实多租户压测，不能宣称云端已上线。
 
 LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Hermes Cron 的非阻塞触发；`agent/marketing/providers/metrics.py` 是平台观察 seam；`PublishingRepository` 原子领取、延期、恢复并结算 checkpoint；`metric_loop.py` 把真实观察写为 Receipt、映射标签、执行 Retro 并生成幂等 pending candidate。单次结果永远不能自动改策略；只有 `AccountLearningGovernance.accept_and_project` 的显式治理动作才能进入 Account KB。
 
@@ -149,8 +149,8 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 
 ### FLYWHEEL-02 中央服务工程化
 
-- 聚合签名、持久化、安全 HTTP 与 Hermes 原生同步 Provider 已贯通；Cron 只触发，pending outbox 成功后 submitted，签名 pack 验签后才安装；服务没有公共 provisioning endpoint。
-- 下一纵切补 consent 撤回/删除 outbox 和真实部署凭据签发；每个安装实例领取独立凭据，不得把一个全局密钥打进客户端安装包。
+- 聚合签名、持久化、安全 HTTP、Hermes 原生同步和 consent 撤回/删除 outbox 已贯通；上传、撤回和崩溃竞态均由本地状态机与中央幂等合同处理；服务没有公共 provisioning endpoint。
+- 架构内下一步只剩真实部署凭据签发、TLS/密钥轮换演练与多租户隐私压测；每个安装实例领取独立凭据，不得把一个全局密钥打进客户端安装包。
 - 真实部署前用合成多租户数据做隐私攻击与稀疏重识别测试。
 
 ### LOOP-02 指标回收（底层完成，真实 Provider 待接）
@@ -205,7 +205,7 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 ## 当前回归基线
 
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
-- 当前营销域、经营世界模型、四类知识、中央服务与 Hermes 同步、内容生产、原生采证、prospect 继承、真实登录激活、SessionDB 与经营闭环主组合回归：387 passed。
+- 当前营销域、经营世界模型、四类知识、中央服务/同步/撤回、内容生产、原生采证、prospect 继承、真实登录激活、SessionDB 与经营闭环主组合回归：391 passed。
 - 中央知识服务专项：15 passed；覆盖嵌套身份拒绝、持久化、内容碰撞、删除失效、认证、过期请求、nonce、限流、客户端 token 轮换/吊销、跨客户端删除拒绝和删除 key-ring 轮换。
 - 改造版 Playwright MCP：15 passed；包含账号租约、profile 持久化/清理、浏览器运行时、登录信号、敏感 URL 清洗和 54 项工具 schema。
 - TUI/Gateway 会话既有回归：172 passed；本轮新增 Gateway adoption RPC 已包含在营销组合回归。
