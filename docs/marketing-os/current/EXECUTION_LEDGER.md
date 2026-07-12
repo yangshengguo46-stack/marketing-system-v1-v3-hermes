@@ -178,7 +178,9 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - 单次 Retro 只生成 pending candidate；显式接受后才允许投影 Account KB。自动接受、自动改永久权重和把用户陈述写成账号真相仍被禁止。
 - 已打通 `memory → Account KB` 与 `weight → 历史回放 → pending strategy → 二次确认 → 版本化 account influence calibration`；校准按账号隔离、幂等、可被后续 Preflight 与指标复盘读取，单次结果不能绕过两层门禁。
 - Gateway 已提供账号作用域的候选列表与显式决策 RPC；Electron 后续只展示候选并收集 `confirmed + reason`，不拥有学习或策略状态。
-- 用户稳定偏好继续由 Hermes 原生 USER/MEMORY owner 管理，不把账号发布结果污染成全局个人记忆；重复成功且包含失败恢复证据的 Skill candidate 原生投影和治理 UI 仍待后续纵切。
+- 用户稳定偏好继续由 Hermes 原生 USER/MEMORY owner 管理，不把账号发布结果污染成全局个人记忆。
+- 发布恢复 Skill 已完成真实证据门：同一平台/Provider 至少三组不同 action 都必须存在 `publish_unknown → 作品列表反查 → verified publish` 双回执，才能生成 pending Skill candidate；用户确认后才由 Hermes 原生 Skill owner 写入或进入原生 write-approval，重复确认幂等且保留 agent-created provenance。其他流程类型仍需各自的失败/恢复事实 owner，禁止拿最终成功行反推过程。
+- 学习候选治理 UI 仍待前端纵切；Electron 只展示候选、证据摘要和最终 Skill diff，并收集确认。
 
 ### LOOP-05 真人闭环
 

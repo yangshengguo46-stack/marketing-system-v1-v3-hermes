@@ -13041,6 +13041,8 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 4044, str(exc))
     except ValueError as exc:
         return _err(rid, -32602, str(exc))
+    except RuntimeError as exc:
+        return _err(rid, 5026, str(exc))
     return _ok(rid, result)
 
 

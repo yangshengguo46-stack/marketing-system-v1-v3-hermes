@@ -22,6 +22,7 @@ from agent.marketing.intelligence.content_retro import reconcile, retro_to_dict
 from agent.marketing.intelligence.content_rubric import OPINION_VIDEO_RUBRIC, score_content
 from agent.marketing.intelligence.learning_governance import (
     decide_weight_candidate_with_replay,
+    propose_publish_recovery_skill_candidate,
     propose_weight_candidate_from_recent_retros,
     summarize_learning_patterns,
 )
@@ -74,7 +75,7 @@ def _saved_plan(tmp_path, *, strategy_ready=True):
     return paths, saved
 
 
-def _review_ready_asset(tmp_path, *, strategy_ready=True):
+def _review_ready_asset(tmp_path, *, strategy_ready=True, suffix="1"):
     paths, plan = _saved_plan(tmp_path, strategy_ready=strategy_ready)
     loop = OperatingLoopRepository(paths)
     preflight = create_content_production_preflight(
@@ -88,7 +89,7 @@ def _review_ready_asset(tmp_path, *, strategy_ready=True):
             "evidence_refs": ["evidence_demo"],
         },
     )
-    asset_id = "asset-publish-1"
+    asset_id = f"asset-publish-{suffix}"
     now = "2026-07-11T00:00:00+00:00"
     content = {
         "_production_plan_id": plan["plan_id"],
@@ -551,6 +552,96 @@ def test_unknown_publish_is_queryable_and_can_recover_without_retry(tmp_path):
         as_of=far_future, user_id="default", account_id="acct-1"
     )
     assert [item["label"] for item in due] == ["1h", "6h", "24h", "3d", "7d"]
+
+
+def test_three_verified_unknown_recoveries_can_become_one_native_skill(
+    tmp_path, monkeypatch
+):
+    hermes_home = tmp_path / "hermes-home"
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    import tools.skill_manager_tool as skill_manager
+
+    monkeypatch.setattr(skill_manager, "SKILLS_DIR", hermes_home / "skills")
+    paths = None
+    for index in range(3):
+        paths, _plan, _preflight, asset_id = _review_ready_asset(
+            tmp_path, suffix=str(index)
+        )
+        publishing = PublishingRepository(paths)
+        action = publishing.prepare_action(
+            user_id="default",
+            account_id="acct-1",
+            asset_id=asset_id,
+            platform="zhihu",
+            provider="playwright_mcp",
+        )
+        publishing.mark_execution_started(
+            action["id"], approval_ref=f"approval-{index}"
+        )
+        publishing.settle_action(
+            action["id"],
+            outcome="unknown",
+            provider_result={"failure_code": "provider_disconnected_after_click"},
+        )
+        publishing.settle_action(
+            action["id"],
+            outcome="published",
+            provider_result={"published_url": f"https://www.zhihu.com/p/recovered-{index}"},
+            verification_source="works_list_recovery_query",
+        )
+        if index == 1:
+            insufficient = propose_publish_recovery_skill_candidate(
+                publishing,
+                OperatingLoopRepository(paths),
+                user_id="default",
+                account_id="acct-1",
+                platform="zhihu",
+                provider="playwright_mcp",
+            )
+            assert insufficient["status"] == "insufficient_recovery_evidence"
+            assert insufficient["skill_candidate_id"] is None
+
+    publishing = PublishingRepository(paths)
+    recoveries = publishing.list_verified_recoveries(
+        user_id="default",
+        account_id="acct-1",
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    proposed = propose_publish_recovery_skill_candidate(
+        publishing,
+        OperatingLoopRepository(paths),
+        user_id="default",
+        account_id="acct-1",
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    candidate = OperatingLoopRepository(paths).get_learning_candidate(
+        proposed["skill_candidate_id"]
+    )
+
+    assert len(recoveries) == 3
+    assert len({item["action_id"] for item in recoveries}) == 3
+    assert all(item["verification_source"] == "works_list_recovery_query" for item in recoveries)
+    assert candidate["candidate_type"] == "skill"
+    assert candidate["status"] == "pending"
+    assert len(candidate["receipt_refs"]) == 6
+    assert not (hermes_home / "skills").exists()
+
+    projected = AccountLearningGovernance(paths).accept_and_project(
+        candidate["id"], reason="reviewed three duplicate-safe recoveries"
+    )
+    skill_name = candidate["proposal"]["skill_name"]
+    skill_file = hermes_home / "skills" / "marketing" / skill_name / "SKILL.md"
+    assert projected["skill_projection"]["success"] is True
+    assert skill_file.exists()
+    assert "Never retry an unknown external side effect" in skill_file.read_text()
+
+    replay = AccountLearningGovernance(paths).accept_and_project(
+        candidate["id"], reason="idempotent repeated confirmation"
+    )
+    assert replay["skill_projection"]["already_projected"] is True
+    assert replay["skill_projection"]["name"] == skill_name
 
 
 def test_publish_rejects_cross_platform_or_homepage_receipts(tmp_path):

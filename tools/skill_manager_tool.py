@@ -700,33 +700,53 @@ def _atomic_write_text(file_path: Path, content: str, encoding: str = "utf-8") -
 # Core actions
 # =============================================================================
 
-def _create_skill(name: str, content: str, category: str = None) -> Dict[str, Any]:
-    """Create a new user skill with SKILL.md content."""
-    # Validate name
+def validate_skill_create(name: str, content: str, category: str = None) -> Dict[str, Any]:
+    """Validate an exact proposed Skill without writing or staging it."""
     err = _validate_name(name)
     if err:
         return {"success": False, "error": err}
-
     err = _validate_category(category)
     if err:
         return {"success": False, "error": err}
-
-    # Validate content
     err = _validate_frontmatter(content)
     if err:
         return {"success": False, "error": err}
-
     err = _validate_content_size(content)
     if err:
         return {"success": False, "error": err}
-
-    # Check for name collisions across all directories
     existing = _find_skill(name)
     if existing:
         return {
             "success": False,
-            "error": f"A skill named '{name}' already exists at {existing['path']}."
+            "error": f"A skill named '{name}' already exists at {existing['path']}.",
         }
+    if _GUARD_AVAILABLE and _guard_agent_created_enabled():
+        with tempfile.TemporaryDirectory(prefix="hermes-skill-review-") as temp_root:
+            review_dir = Path(temp_root) / name
+            review_dir.mkdir()
+            (review_dir / "SKILL.md").write_text(content, encoding="utf-8")
+            scan_error = _security_scan_skill(review_dir)
+        if scan_error:
+            return {"success": False, "error": scan_error}
+    return {"success": True}
+
+
+def skill_matches(name: str, content: str) -> bool:
+    """Return whether an installed Skill has exactly the reviewed definition."""
+    existing = _find_skill(name)
+    if not existing:
+        return False
+    try:
+        return (existing["path"] / "SKILL.md").read_text(encoding="utf-8") == content
+    except OSError:
+        return False
+
+
+def _create_skill(name: str, content: str, category: str = None) -> Dict[str, Any]:
+    """Create a new user skill with SKILL.md content."""
+    validation = validate_skill_create(name, content, category)
+    if not validation.get("success"):
+        return validation
 
     # Create the skill directory
     skill_dir = _resolve_skill_dir(name, category)
@@ -1192,6 +1212,7 @@ def apply_skill_pending(payload: Dict[str, Any]) -> str:
             new_string=payload.get("new_string"),
             replace_all=payload.get("replace_all", False),
             absorbed_into=payload.get("absorbed_into"),
+            agent_created=payload.get("agent_created") is True,
         )
     finally:
         _skill_gate_bypass.reset(token)
@@ -1208,6 +1229,7 @@ def skill_manage(
     new_string: str = None,
     replace_all: bool = False,
     absorbed_into: str = None,
+    agent_created: bool = False,
 ) -> str:
     """
     Manage user-created skills. Dispatches to the appropriate action handler.
@@ -1227,6 +1249,7 @@ def skill_manage(
         file_path=file_path, file_content=file_content,
         old_string=old_string, new_string=new_string,
         replace_all=replace_all, absorbed_into=absorbed_into,
+        agent_created=agent_created,
     )
     if gate_result is not None:
         return gate_result
@@ -1282,7 +1305,7 @@ def skill_manage(
             from tools.skill_usage import bump_patch, forget, mark_agent_created
             from tools.skill_provenance import is_background_review
             if action == "create":
-                if is_background_review():
+                if is_background_review() or agent_created:
                     mark_agent_created(name)
             elif action in {"patch", "edit", "write_file", "remove_file"}:
                 bump_patch(name)

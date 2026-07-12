@@ -8,6 +8,8 @@ review path accepts/rejects them.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections import Counter
 from typing import Any
 
@@ -447,6 +449,109 @@ def propose_weight_candidate_from_recent_retros(
         "status": "candidate_created",
         "weight_candidate_id": candidate["id"],
         "candidate_status": candidate["status"],
+    }
+
+
+def propose_publish_recovery_skill_candidate(
+    publishing: Any,
+    store: Any,
+    *,
+    user_id: str,
+    account_id: str,
+    platform: str,
+    provider: str,
+    content_kind: str | None = None,
+    min_support: int = 3,
+) -> dict[str, Any]:
+    """Propose a procedural Skill only from repeated verified recoveries."""
+
+    required = max(3, min(int(min_support), 20))
+    recoveries = publishing.list_verified_recoveries(
+        user_id=user_id,
+        account_id=account_id,
+        platform=platform,
+        provider=provider,
+        content_kind=content_kind,
+        limit=100,
+    )
+    if len(recoveries) < required:
+        return {
+            "status": "insufficient_recovery_evidence",
+            "support_count": len(recoveries),
+            "required_support": required,
+            "skill_candidate_id": None,
+            "guardrail": "final success rows alone cannot become procedural memory",
+        }
+    selected = recoveries[:required]
+    resolved_kind = str(content_kind or selected[0].get("content_kind") or "content")
+    identity = f"{user_id}:{platform}:{provider}:{resolved_kind}:publish-unknown-recovery-v1"
+    slug_source = f"marketing-{platform}-{provider}-{resolved_kind}-publish-recovery".lower()
+    slug = re.sub(r"[^a-z0-9._-]+", "-", slug_source).strip("-._")
+    if len(slug) > 64:
+        slug = f"{slug[:51].rstrip('-._')}-{hashlib.sha256(identity.encode()).hexdigest()[:10]}"
+    steps = [
+        "Reuse the original pre-logged publish action and idempotency key.",
+        "Treat a disconnected or timed-out provider result as unknown, never as failed or successful.",
+        "Query the platform creator-center works list before considering any retry.",
+        "Match the intended asset using the target platform, content fingerprint, title and time window.",
+        "Settle the original action only with a verified platform post id or stable work URL.",
+        "If no matching work is found, keep the action unknown and ask for inspection instead of publishing again.",
+        "After verified recovery, resume metric checkpoints on the original action.",
+    ]
+    receipt_refs = list(dict.fromkeys(
+        str(item[key])
+        for item in selected
+        for key in ("unknown_receipt_id", "published_receipt_id")
+    ))
+    candidate = store.create_learning_candidate(
+        candidate_type="skill",
+        user_id=user_id,
+        account_id=account_id,
+        platform=platform,
+        receipt_refs=receipt_refs,
+        evidence_refs=[f"publish_action:{item['action_id']}" for item in selected],
+        proposal={
+            "kind": "publish_unknown_recovery_workflow",
+            "version": GOVERNANCE_VERSION,
+            "skill_name": slug,
+            "description": (
+                f"Recover uncertain {platform} publishing through {provider} without duplicate posts."
+            ),
+            "trigger": (
+                "Use when a publish provider disconnects, times out, or returns unknown after the "
+                "external action may already have happened."
+            ),
+            "steps": steps,
+            "platform": platform,
+            "provider": provider,
+            "content_kind": resolved_kind,
+            "support_count": len(selected),
+            "required_support": required,
+            "recovery_pairs": [
+                {
+                    "action_id": item["action_id"],
+                    "unknown_receipt_id": item["unknown_receipt_id"],
+                    "published_receipt_id": item["published_receipt_id"],
+                    "failure_code": item.get("failure_code"),
+                    "verification_source": item.get("verification_source"),
+                }
+                for item in selected
+            ],
+            "guardrail": (
+                "pending Skill candidate only; user must review the exact deterministic workflow "
+                "before Hermes creates procedural memory"
+            ),
+        },
+        confidence=min(0.92, 0.62 + len(selected) * 0.08),
+        source_key=f"publish-recovery-skill:{hashlib.sha256(identity.encode()).hexdigest()}",
+    )
+    return {
+        "status": "candidate_ready",
+        "support_count": len(selected),
+        "required_support": required,
+        "skill_candidate_id": candidate["id"],
+        "candidate_status": candidate["status"],
+        "guardrail": "no Skill was written; explicit candidate review is required",
     }
 
 

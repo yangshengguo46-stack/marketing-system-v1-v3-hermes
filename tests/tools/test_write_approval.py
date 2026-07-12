@@ -211,6 +211,30 @@ def test_skill_gate_on_then_apply_writes_file(hermes_home):
     assert smt._find_skill("applied-skill") is not None
 
 
+def test_approved_learned_skill_keeps_agent_created_provenance(hermes_home):
+    import importlib
+    import tools.skill_manager_tool as smt
+    importlib.reload(smt)
+    from tools import write_approval as wa
+    from tools.skill_usage import list_agent_created_skill_names
+
+    _set_approval("skills", True)
+    staged = json.loads(
+        smt.skill_manage(
+            "create",
+            "learned-recovery",
+            content=_SKILL.replace("test-skill", "learned-recovery"),
+            agent_created=True,
+        )
+    )
+    record = wa.get_pending("skills", staged["pending_id"])
+    assert record["payload"]["agent_created"] is True
+
+    applied = json.loads(smt.apply_skill_pending(record["payload"]))
+    assert applied["success"] is True
+    assert "learned-recovery" in list_agent_created_skill_names()
+
+
 def test_skill_create_diff_is_full_content(hermes_home):
     from tools.skill_manager_tool import skill_manage
     from tools import write_approval as wa

@@ -345,6 +345,73 @@ class PublishingRepository(MarketingDomainRepository):
             rows = db.execute(query, params).fetchall()
         return [self.get_action(row["id"]) for row in rows]
 
+    def list_verified_recoveries(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        platform: str | None = None,
+        provider: str | None = None,
+        content_kind: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return publish actions proven to recover from ``unknown`` to success.
+
+        This is the evidence owner for procedural learning.  It joins the
+        immutable unknown receipt to the later verified published receipt;
+        callers cannot turn a final success row alone into recovery evidence.
+        """
+
+        account_value = _required(account_id, "account_id", 200)
+        query = """SELECT action.*, unknown.id AS unknown_receipt_id,
+            unknown.summary_json AS unknown_summary_json,
+            published.id AS published_receipt_id,
+            published.summary_json AS published_summary_json
+        FROM marketing_publish_actions AS action
+        JOIN marketing_receipt_refs AS unknown
+          ON unknown.source_id=action.id
+         AND unknown.receipt_type='publish_unknown'
+         AND unknown.source_kind=('publish:' || action.platform || ':' || action.provider)
+        JOIN marketing_receipt_refs AS published
+          ON published.id=action.receipt_id
+         AND published.receipt_type='publish_published'
+        WHERE action.user_id=? AND action.account_id=? AND action.status='published'"""
+        params: list[Any] = [str(user_id or "default"), account_value]
+        if platform:
+            query += " AND action.platform=?"
+            params.append(_platform(platform))
+        if provider:
+            query += " AND action.provider=?"
+            params.append(_required(provider, "provider", 120))
+        query += " ORDER BY action.settled_at DESC,action.id DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 500)))
+        with self._connection() as db:
+            rows = db.execute(query, params).fetchall()
+        recoveries: list[dict[str, Any]] = []
+        for row in rows:
+            request = _object(row["request_json"], "publish request")
+            kind = str(request.get("content_kind") or request.get("asset_type") or "").strip()
+            if content_kind and kind != str(content_kind).strip():
+                continue
+            unknown = _object(row["unknown_summary_json"], "unknown receipt")
+            published = _object(row["published_summary_json"], "published receipt")
+            if not published.get("verification_source"):
+                continue
+            recoveries.append(
+                {
+                    "action_id": row["id"],
+                    "platform": row["platform"],
+                    "provider": row["provider"],
+                    "content_kind": kind,
+                    "unknown_receipt_id": row["unknown_receipt_id"],
+                    "published_receipt_id": row["published_receipt_id"],
+                    "failure_code": unknown.get("failure_code"),
+                    "verification_source": published.get("verification_source"),
+                    "settled_at": row["settled_at"],
+                }
+            )
+        return recoveries[: max(1, min(int(limit), 500))]
+
     def list_metric_checkpoints(self, action_id: str) -> list[dict[str, Any]]:
         with self._connection() as db:
             rows = db.execute(

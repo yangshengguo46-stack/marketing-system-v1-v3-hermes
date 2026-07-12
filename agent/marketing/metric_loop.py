@@ -18,6 +18,7 @@ from agent.marketing.domains.publishing import PublishingRepository
 from agent.marketing.intelligence.content_retro import reconcile, retro_to_dict
 from agent.marketing.intelligence.influence_score import build_influence_score
 from agent.marketing.intelligence.learning_governance import (
+    propose_publish_recovery_skill_candidate,
     propose_weight_candidate_from_recent_retros,
 )
 from agent.marketing.intelligence.metric_labels import build_metric_labels
@@ -308,12 +309,23 @@ class MetricLoopRunner:
                 account_id=action["account_id"],
                 platform=action["platform"],
             )
+            recovery_skill = propose_publish_recovery_skill_candidate(
+                self.publishing,
+                self.loop,
+                user_id=action["user_id"],
+                account_id=action["account_id"],
+                platform=action["platform"],
+                provider=action["provider"],
+                content_kind=str((action.get("request") or {}).get("content_kind") or "") or None,
+            )
             self.publishing.mark_metric_reconciled(checkpoint["id"])
             reconciled.append(
                 {
                     "checkpoint_id": checkpoint["id"],
                     "candidate_id": candidate["id"],
                     "weight_candidate_id": weight.get("weight_candidate_id"),
+                    "skill_candidate_id": recovery_skill.get("skill_candidate_id"),
+                    "skill_candidate_status": recovery_skill.get("status"),
                 }
             )
         return reconciled
