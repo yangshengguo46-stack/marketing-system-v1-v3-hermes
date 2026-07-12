@@ -1,6 +1,9 @@
 import type { Locale } from './types'
 
-export const DEFAULT_LOCALE: Locale = 'en'
+// Marketing OS ships for a Chinese-first creator market. Users can still
+// switch languages explicitly, but a fresh install must not expose the
+// upstream developer UI in English before onboarding has even started.
+export const DEFAULT_LOCALE: Locale = 'zh'
 
 export const LOCALE_OPTIONS = [
   {

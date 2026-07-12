@@ -42,6 +42,7 @@ interface AppShellProps {
   // force-collapse to hover-reveal overlays — so they cover the top-left traffic
   // lights (and zero the titlebar inset) even below the collapse breakpoint.
   previewPaneOpen?: boolean
+  showStatusbar?: boolean
   statusbarItems?: readonly StatusbarItem[]
   terminalPaneOpen?: boolean
   titlebarTools?: readonly TitlebarTool[]
@@ -70,6 +71,7 @@ export function AppShell({
   onOpenSettings,
   overlays,
   previewPaneOpen = false,
+  showStatusbar = true,
   statusbarItems,
   terminalPaneOpen = false,
   titlebarTools
@@ -217,7 +219,9 @@ export function AppShell({
 
         {/* The compact pop-out drops the statusbar — it's a scratch window, not
             the full shell. */}
-        {!isSecondaryWindow() && <StatusbarControls items={statusbarItems} leftItems={leftStatusbarItems} />}
+        {!isSecondaryWindow() && showStatusbar && (
+          <StatusbarControls items={statusbarItems} leftItems={leftStatusbarItems} />
+        )}
       </main>
 
       {overlays}

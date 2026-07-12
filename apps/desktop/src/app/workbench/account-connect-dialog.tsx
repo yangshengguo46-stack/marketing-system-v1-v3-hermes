@@ -7,15 +7,7 @@ import {
   SiYoutube,
   SiZhihu
 } from '@icons-pack/react-simple-icons'
-import {
-  type ComponentType,
-  type ReactNode,
-  type SVGProps,
-  useCallback,
-  useEffect,
-  useRef,
-  useState
-} from 'react'
+import { type ComponentType, type ReactNode, type SVGProps, useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -76,7 +68,9 @@ export function AccountConnectDialog({
   }, [open, resumeAccount])
 
   const verifyLogin = useCallback(async () => {
-    if (!account || verifyInFlight.current || stage !== 'waiting') {return}
+    if (!account || verifyInFlight.current || stage !== 'waiting') {
+      return
+    }
     verifyInFlight.current = true
 
     try {
@@ -101,7 +95,9 @@ export function AccountConnectDialog({
   }, [account, onAccountChanged, requestGateway, stage])
 
   useEffect(() => {
-    if (!open || stage !== 'waiting') {return}
+    if (!open || stage !== 'waiting') {
+      return
+    }
     const first = window.setTimeout(() => void verifyLogin(), 1800)
     const interval = window.setInterval(() => void verifyLogin(), 3000)
 
@@ -119,7 +115,9 @@ export function AccountConnectDialog({
       let target = account
 
       if (!target) {
-        if (!platform) {throw new Error('请选择平台')}
+        if (!platform) {
+          throw new Error('请选择平台')
+        }
 
         const created = await requestGateway<AccountEnvelope>('marketing.accounts.register', {
           label: `${platform.label}账号`,
@@ -258,20 +256,18 @@ function ConnectStatus({
   )
 }
 
-const PLATFORM_ICONS: Record<
-  string,
-  { color: string; Icon?: ComponentType<SVGProps<SVGSVGElement>>; text?: string }
-> = {
-  bilibili: { color: '#00AEEC', Icon: SiBilibili },
-  douyin: { color: '#FE2C55', Icon: SiTiktok },
-  kuaishou: { color: '#FF4906', Icon: SiKuaishou },
-  tiktok: { color: '#FE2C55', Icon: SiTiktok },
-  wechat_channels: { color: '#FA9D3B', text: '∞' },
-  wechat_official: { color: '#07C160', Icon: SiWechat },
-  xiaohongshu: { color: '#FF2442', Icon: SiXiaohongshu },
-  youtube: { color: '#FF0000', Icon: SiYoutube },
-  zhihu: { color: '#0084FF', Icon: SiZhihu }
-}
+const PLATFORM_ICONS: Record<string, { color: string; Icon?: ComponentType<SVGProps<SVGSVGElement>>; text?: string }> =
+  {
+    bilibili: { color: '#00AEEC', Icon: SiBilibili },
+    douyin: { color: '#FE2C55', Icon: SiTiktok },
+    kuaishou: { color: '#FF4906', Icon: SiKuaishou },
+    tiktok: { color: '#FE2C55', Icon: SiTiktok },
+    wechat_channels: { color: '#FA9D3B', text: '∞' },
+    wechat_official: { color: '#07C160', Icon: SiWechat },
+    xiaohongshu: { color: '#FF2442', Icon: SiXiaohongshu },
+    youtube: { color: '#FF0000', Icon: SiYoutube },
+    zhihu: { color: '#0084FF', Icon: SiZhihu }
+  }
 
 export function MarketingPlatformAvatar({ platform }: { platform: string }) {
   const spec = PLATFORM_ICONS[platform] || { color: '#64748B', text: '?' }

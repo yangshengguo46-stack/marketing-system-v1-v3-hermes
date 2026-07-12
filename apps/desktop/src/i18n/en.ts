@@ -1274,10 +1274,13 @@ export const en: Translations = {
   sidebar: {
     nav: {
       workbench: 'Workbench',
-      'new-session': 'New session',
-      skills: 'Skills & Tools',
-      messaging: 'Messaging',
-      artifacts: 'Artifacts'
+      'new-session': 'New conversation',
+      content: 'Content studio',
+      accounts: 'Accounts',
+      managed: 'Autopilot',
+      skills: 'Capabilities',
+      messaging: 'Mobile assistant',
+      artifacts: 'Content assets'
     },
     searchAria: 'Search sessions',
     searchPlaceholder: 'Search sessions…',
@@ -1329,7 +1332,8 @@ export const en: Translations = {
       copyPath: 'Copy path',
       removeFromSidebar: 'Hide from sidebar',
       createFailed: 'Could not create project',
-      deleteConfirm: 'This removes the saved project from Marketing OS. Files, git repos, and worktrees stay untouched.',
+      deleteConfirm:
+        'This removes the saved project from Marketing OS. Files, git repos, and worktrees stay untouched.',
       startWork: 'New worktree',
       newWorktreeTitle: 'New worktree',
       newWorktreeDesc: 'Name the branch for this worktree.',
@@ -1608,7 +1612,8 @@ export const en: Translations = {
     maybeLater: 'Maybe later',
     moreChanges: count => `+ ${count} more change${count === 1 ? '' : 's'} included.`,
     manualTitle: 'Update from your terminal',
-    manualBody: 'You installed Marketing OS from the command line, so updates run there too. Paste this into your terminal:',
+    manualBody:
+      'You installed Marketing OS from the command line, so updates run there too. Paste this into your terminal:',
     manualPickedUp: 'Marketing OS will pick up the new version next time you launch it.',
     guiSkewTitle: 'Update the desktop app',
     guiSkewBody:
@@ -1697,7 +1702,8 @@ export const en: Translations = {
       xai: { short: 'Grok models', description: 'Direct access to xAI Grok models.' },
       local: {
         short: 'self-hosted',
-        description: 'Point Marketing OS at a local or self-hosted OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, etc).'
+        description:
+          'Point Marketing OS at a local or self-hosted OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, etc).'
       }
     },
     backToSignIn: 'Back to sign in',
@@ -1967,7 +1973,8 @@ export const en: Translations = {
       showConsole: 'Show preview console',
       hideDevTools: 'Hide preview DevTools',
       openDevTools: 'Open preview DevTools',
-      finishedRestarting: message => `Marketing OS finished restarting the preview server${message ? `: ${message}` : ''}`,
+      finishedRestarting: message =>
+        `Marketing OS finished restarting the preview server${message ? `: ${message}` : ''}`,
       failedRestarting: message => `Server restart failed: ${message}`,
       unknownError: 'unknown error',
       restartedTitle: 'Preview server restarted',

@@ -131,7 +131,15 @@ import { $terminalTakeover } from './right-sidebar/store'
 import { TerminalPaneChrome } from './right-sidebar/terminal/chrome'
 import { PersistentTerminal } from './right-sidebar/terminal/persistent'
 import { closeActiveTerminal } from './right-sidebar/terminal/terminals'
-import { CRON_ROUTE, NEW_CHAT_ROUTE, routeSessionId, sessionRoute, SETTINGS_ROUTE } from './routes'
+import {
+  ACCOUNT_CENTER_ROUTE,
+  CONTENT_FACTORY_ROUTE,
+  CRON_ROUTE,
+  NEW_CHAT_ROUTE,
+  routeSessionId,
+  sessionRoute,
+  SETTINGS_ROUTE
+} from './routes'
 import { SessionPickerOverlay } from './session-picker-overlay'
 import { SessionSwitcher } from './session-switcher'
 import { useContextSuggestions } from './session/hooks/use-context-suggestions'
@@ -163,6 +171,16 @@ const ProfilesView = lazy(async () => ({ default: (await import('./profiles')).P
 const SettingsView = lazy(async () => ({ default: (await import('./settings')).SettingsView }))
 const SkillsView = lazy(async () => ({ default: (await import('./skills')).SkillsView }))
 const WorkbenchView = lazy(async () => ({ default: (await import('./workbench')).WorkbenchView }))
+
+const AccountCenterView = lazy(async () => ({
+  default: (await import('./workbench/business-surfaces')).AccountCenterView
+}))
+
+const ContentFactoryView = lazy(async () => ({
+  default: (await import('./workbench/business-surfaces')).ContentFactoryView
+}))
+
+const ManagedView = lazy(async () => ({ default: (await import('./workbench/business-surfaces')).ManagedView }))
 
 // Latest cron-job sessions surfaced in the collapsed "Cron jobs" section. The
 // Cron sessions are written by a background scheduler tick (the desktop
@@ -1118,9 +1136,7 @@ export function DesktopController() {
   // layer) so pane resize handles still paint above it. Terminals own their state
   // (incl. a snapshotted cwd) independent of the session, so switching sessions
   // never rebuilds or closes them; toggling the pane never rebuilds the shells.
-  const mainOverlays = (
-    <PersistentTerminal onAddSelectionToChat={composer.addTerminalSelectionAttachment} />
-  )
+  const mainOverlays = <PersistentTerminal onAddSelectionToChat={composer.addTerminalSelectionAttachment} />
 
   const overlays = (
     <>
@@ -1363,6 +1379,7 @@ export function DesktopController() {
       onOpenSettings={openSettings}
       overlays={overlays}
       previewPaneOpen={chatOpen && Boolean(previewTarget || filePreviewTarget)}
+      showStatusbar={false}
       statusbarItems={statusbarItems}
       terminalPaneOpen={terminalSidebarOpen}
       titlebarTools={titlebarToolGroups.flat.right}
@@ -1387,10 +1404,39 @@ export function DesktopController() {
           <Route
             element={
               <Suspense fallback={null}>
-                <WorkbenchView onNewChat={() => navigate(NEW_CHAT_ROUTE)} requestGateway={requestGateway} />
+                <WorkbenchView
+                  onNewChat={() => navigate(NEW_CHAT_ROUTE)}
+                  onOpenAccounts={() => navigate(ACCOUNT_CENTER_ROUTE)}
+                  onOpenContent={() => navigate(CONTENT_FACTORY_ROUTE)}
+                  requestGateway={requestGateway}
+                />
               </Suspense>
             }
             index
+          />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <ContentFactoryView onNewChat={() => navigate(NEW_CHAT_ROUTE)} requestGateway={requestGateway} />
+              </Suspense>
+            }
+            path="content"
+          />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <AccountCenterView onNewChat={() => navigate(NEW_CHAT_ROUTE)} requestGateway={requestGateway} />
+              </Suspense>
+            }
+            path="accounts"
+          />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <ManagedView onNewChat={() => navigate(NEW_CHAT_ROUTE)} requestGateway={requestGateway} />
+              </Suspense>
+            }
+            path="managed"
           />
           <Route element={chatView} path="chat" />
           <Route element={chatView} path="chat/:sessionId" />

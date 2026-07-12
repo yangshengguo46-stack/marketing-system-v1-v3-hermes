@@ -396,7 +396,8 @@ export const zh: Translations = {
         title: '宠物',
         intro:
           '领养一只悬浮在应用上的 petdex 动画宠物，它会根据 Marketing OS 的状态做出反应——工具执行时奔跑、成功时欢呼、出错时沮丧。',
-        restartHint: '宠物功能需要重启——当前运行的应用在此功能加入前启动。请退出并重新打开 Marketing OS，然后回到此处。',
+        restartHint:
+          '宠物功能需要重启——当前运行的应用在此功能加入前启动。请退出并重新打开 Marketing OS，然后回到此处。',
         scaleTitle: '大小',
         scaleDesc: '调整悬浮宠物的大小，所有界面即时生效。',
         on: '开启',
@@ -1454,18 +1455,21 @@ export const zh: Translations = {
   sidebar: {
     nav: {
       workbench: '工作台',
-      'new-session': '新建会话',
-      skills: '技能与工具',
-      messaging: '消息平台',
-      artifacts: '产物'
+      'new-session': '新对话',
+      content: '内容工厂',
+      accounts: '账号管理',
+      managed: '托管',
+      skills: '能力中心',
+      messaging: '随身助手',
+      artifacts: '内容资产'
     },
     searchAria: '搜索会话',
     searchPlaceholder: '搜索会话…',
     clearSearch: '清除搜索',
     noMatch: query => `没有会话匹配"${query}"。`,
     results: '结果',
-    pinned: '已置顶',
-    sessions: '会话',
+    pinned: '重要对话',
+    sessions: '历史对话',
     cronJobs: '定时任务',
     groupAriaGrouped: '以单一列表显示会话',
     groupAriaUngrouped: '按工作区分组会话',
@@ -1899,7 +1903,8 @@ export const zh: Translations = {
     copyAuthCode: '复制授权码并粘贴到下面。',
     pasteAuthCode: '粘贴授权码',
     reopenAuthPage: '重新打开授权页面',
-    autoBrowser: provider => `已在浏览器中打开 ${provider}。请在那里授权 Marketing OS，连接会自动完成，无需复制或粘贴。`,
+    autoBrowser: provider =>
+      `已在浏览器中打开 ${provider}。请在那里授权 Marketing OS，连接会自动完成，无需复制或粘贴。`,
     reopenSignInPage: '重新打开登录页面',
     waitingAuthorize: '等待你授权...',
     externalPending: provider => `${provider} 通过自己的 CLI 登录。请在终端运行此命令，然后回来选择“我已登录”：`,

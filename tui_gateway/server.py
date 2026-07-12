@@ -12909,6 +12909,25 @@ def _(rid, _params: dict) -> dict:
     return _ok(rid, AccountContextRepository().list_accounts())
 
 
+@method("marketing.account.context")
+def _(rid, params: dict) -> dict:
+    """Return the native account operating model used by product surfaces."""
+    from agent.marketing.domains import AccountContextRepository
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    if not account_id:
+        return _err(rid, -32602, "account_id is required")
+    try:
+        context = AccountContextRepository().read(
+            user_id=str(params.get("user_id") or "default"),
+            account_id=account_id,
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, context)
+
+
 @method("marketing.accounts.platforms")
 def _(rid, _params: dict) -> dict:
     """Return the account platform catalog owned by Hermes."""

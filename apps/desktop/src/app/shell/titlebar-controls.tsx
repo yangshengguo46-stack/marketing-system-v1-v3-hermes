@@ -8,14 +8,11 @@ import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { cn } from '@/lib/utils'
-import { $hapticsMuted, toggleHapticsMuted } from '@/store/haptics'
-import { toggleKeybindPanel } from '@/store/keybinds'
 import {
   $fileBrowserOpen,
   $panesFlipped,
   $sidebarOpen,
   toggleFileBrowserOpen,
-  togglePanesFlipped,
   toggleSidebarOpen
 } from '@/store/layout'
 
@@ -50,22 +47,9 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   const { t } = useI18n()
   const navigate = useNavigate()
   const location = useLocation()
-  const hapticsMuted = useStore($hapticsMuted)
   const fileBrowserOpen = useStore($fileBrowserOpen)
   const sidebarOpen = useStore($sidebarOpen)
   const panesFlipped = useStore($panesFlipped)
-
-  const toggleHaptics = () => {
-    if (!hapticsMuted) {
-      triggerHaptic('tap')
-    }
-
-    toggleHapticsMuted()
-
-    if (hapticsMuted) {
-      window.requestAnimationFrame(() => triggerHaptic('success'))
-    }
-  }
 
   // Each titlebar button controls the pane physically on its side, so a flip
   // swaps which pane each one toggles. Default: sessions left, file browser
@@ -86,16 +70,6 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
         leftEdge.toggle()
       }
     },
-    {
-      icon: <Codicon name="arrow-swap" />,
-      id: 'flip-panes',
-      label: t.titlebar.swapSidebarSides,
-      onSelect: () => {
-        triggerHaptic('tap')
-        togglePanesFlipped()
-      },
-      title: t.titlebar.swapSidebarSidesTitle
-    },
     ...leftTools
   ]
 
@@ -111,22 +85,6 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
 
   // Static system tools — always pinned to the screen's right edge.
   const systemTools: TitlebarTool[] = [
-    {
-      active: hapticsMuted,
-      icon: <Codicon name={hapticsMuted ? 'mute' : 'unmute'} />,
-      id: 'haptics',
-      label: hapticsMuted ? t.titlebar.unmuteHaptics : t.titlebar.muteHaptics,
-      onSelect: toggleHaptics
-    },
-    {
-      icon: <Codicon name="keyboard" />,
-      id: 'keybinds',
-      label: t.titlebar.openKeybinds,
-      onSelect: () => {
-        triggerHaptic('open')
-        toggleKeybindPanel()
-      }
-    },
     {
       icon: <Codicon name="settings-gear" />,
       id: 'settings',

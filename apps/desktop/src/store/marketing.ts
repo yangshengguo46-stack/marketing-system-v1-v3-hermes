@@ -8,6 +8,7 @@ export interface MarketingAccountSummary {
   label?: string
   platform?: string
   status?: string
+  stats?: Record<string, unknown>
   username?: string
 }
 

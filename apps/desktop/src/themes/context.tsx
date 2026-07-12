@@ -159,6 +159,7 @@ function renderedModeFor(colors: DesktopThemeColors, mode: 'light' | 'dark'): 'l
 // the boot-time paint.
 // styles.css --theme-neutral-chrome — keep in sync.
 const NEUTRAL_CHROME = { light: '#f3f3f3', dark: '#0d0d0e' } as const
+const PRODUCT_ACCENT = '#ef5b55'
 
 const chromeBackground = (background: string, isDark: boolean) =>
   mix(background, NEUTRAL_CHROME[isDark ? 'dark' : 'light'], isDark ? 0.26 : 0.08)
@@ -181,7 +182,7 @@ function applyTheme(theme: DesktopTheme, mode: 'light' | 'dark') {
   const typo = { ...DEFAULT_TYPOGRAPHY, ...nousTheme.typography, ...theme.typography }
   const rendered = renderedModeFor(c, mode)
   const isDark = rendered === 'dark'
-  const midground = c.midground ?? c.ring
+  const midground = PRODUCT_ACCENT
   const skinName = theme.name.endsWith(`-${mode}`) ? theme.name.slice(0, -mode.length - 1) : theme.name
 
   root.style.setProperty('color-scheme', rendered)
@@ -192,11 +193,11 @@ function applyTheme(theme: DesktopTheme, mode: 'light' | 'dark') {
   // Brand seeds feed every glass + shadcn token via `color-mix()` in styles.css.
   const seeds: Record<string, string> = {
     '--theme-foreground': c.foreground,
-    '--theme-primary': c.primary,
-    '--theme-secondary': c.secondary,
-    '--theme-accent-soft': c.accent,
+    '--theme-primary': PRODUCT_ACCENT,
+    '--theme-secondary': mix(c.background, PRODUCT_ACCENT, 0.08),
+    '--theme-accent-soft': mix(c.background, PRODUCT_ACCENT, 0.1),
     '--theme-midground': midground,
-    '--theme-warm': c.primary,
+    '--theme-warm': PRODUCT_ACCENT,
     '--theme-background-seed': c.background,
     '--theme-sidebar-seed': c.sidebarBackground ?? c.background,
     '--theme-card-seed': c.card,
@@ -211,7 +212,7 @@ function applyTheme(theme: DesktopTheme, mode: 'light' | 'dark') {
     '--dt-accent-foreground': c.accentForeground,
     '--dt-border': c.border,
     '--dt-input': c.input,
-    '--dt-ring': c.ring,
+    '--dt-ring': PRODUCT_ACCENT,
     '--dt-muted': c.muted,
     '--dt-midground-foreground': c.midgroundForeground ?? readableOn(midground),
     '--dt-composer-ring': c.composerRing ?? midground,

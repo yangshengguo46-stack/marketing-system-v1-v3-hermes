@@ -60,8 +60,7 @@ describe('AccountConnectDialog', () => {
       throw new Error(`unexpected method: ${method}`)
     })
 
-    const requestGateway = async <T,>(method: string): Promise<T> =>
-      (await requestGatewayMock(method)) as T
+    const requestGateway = async <T,>(method: string): Promise<T> => (await requestGatewayMock(method)) as T
 
     render(
       <AccountConnectDialog

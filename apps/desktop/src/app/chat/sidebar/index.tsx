@@ -18,7 +18,7 @@ import { useStore } from '@nanostores/react'
 import type * as React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { PlatformAvatar } from '@/app/messaging/platform-icon'
+import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { DisclosureCaret } from '@/components/ui/disclosure-caret'
@@ -44,6 +44,7 @@ import { flattenSessionsWithBranches } from '@/lib/session-branch-tree'
 import { sessionMatchesSearch } from '@/lib/session-search'
 import { normalizeSessionSource, sessionSourceLabel } from '@/lib/session-source'
 import { cn } from '@/lib/utils'
+import { PRODUCT_NAME, PRODUCT_TAGLINE } from '@/product'
 import { $cronJobs } from '@/store/cron'
 import {
   $dismissedAutoProjectIds,
@@ -74,7 +75,6 @@ import {
   setSidebarWorkspaceOrderIds,
   setSidebarWorkspaceParentOrderIds,
   SIDEBAR_SESSIONS_PAGE_SIZE,
-  toggleSidebarMessagingOpen,
   unpinSession
 } from '@/store/layout'
 import { $newChatProfile, $profiles, $profileScope, ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
@@ -113,15 +113,14 @@ import {
   setCurrentCwd
 } from '@/store/session'
 
-import { type AppView, ARTIFACTS_ROUTE, MESSAGING_ROUTE, SKILLS_ROUTE, WORKBENCH_ROUTE } from '../../routes'
+import { ACCOUNT_CENTER_ROUTE, type AppView, CONTENT_FACTORY_ROUTE, MANAGED_ROUTE, WORKBENCH_ROUTE } from '../../routes'
 import { SidebarPanelLabel } from '../../shell/sidebar-label'
 import type { SidebarNavItem } from '../../types'
 
-import { countLabel, SidebarCount } from './chrome'
+import { SidebarCount } from './chrome'
 import { SidebarCronJobsSection } from './cron-jobs-section'
 import { SidebarLoadMoreRow } from './load-more-row'
 import { reconcileFreshFirst, resolveManualSessionOrderIds } from './order'
-import { ProfileRail } from './profile-switcher'
 import { ProjectDialog } from './project-dialog'
 import {
   EnteredProjectContent,
@@ -168,14 +167,32 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
     action: 'new-session'
   },
   {
-    id: 'skills',
+    id: 'content',
     label: '',
-    icon: props => <Codicon name="symbol-misc" {...props} />,
-    route: SKILLS_ROUTE
+    icon: props => <Codicon name="edit" {...props} />,
+    route: CONTENT_FACTORY_ROUTE
   },
-  { id: 'messaging', label: '', icon: props => <Codicon name="comment" {...props} />, route: MESSAGING_ROUTE },
-  { id: 'artifacts', label: '', icon: props => <Codicon name="files" {...props} />, route: ARTIFACTS_ROUTE }
+  {
+    id: 'accounts',
+    label: '',
+    icon: props => <Codicon name="account" {...props} />,
+    route: ACCOUNT_CENTER_ROUTE
+  },
+  {
+    id: 'managed',
+    label: '',
+    icon: props => <Codicon name="run-all" {...props} />,
+    route: MANAGED_ROUTE
+  }
 ]
+
+const INTERNAL_SESSION_MARKERS = ['<marketing-turn-context', '<marketing_turn_context', '<system-context']
+
+function isProductConversation(session: SessionInfo): boolean {
+  const visibleText = `${session.title || ''}\n${session.preview || ''}`.trim().toLowerCase()
+
+  return !INTERNAL_SESSION_MARKERS.some(marker => visibleText.startsWith(marker))
+}
 
 // Two modes via the `compact` height variant (styles.css):
 //   tall    → each section is shrink-0, capped, its own scroller; Sessions is flex-1.
@@ -478,7 +495,10 @@ export function ChatSidebar({
   // profile in, grouped by profile below. Single-profile users land here with
   // scope === their only profile, so nothing is filtered out.
   const visibleSessions = useMemo(
-    () => (showAllProfiles ? sessions : sessions.filter(s => normalizeProfileKey(s.profile) === profileScope)),
+    () =>
+      (showAllProfiles ? sessions : sessions.filter(s => normalizeProfileKey(s.profile) === profileScope)).filter(
+        isProductConversation
+      ),
     [sessions, showAllProfiles, profileScope]
   )
 
@@ -584,7 +604,11 @@ export function ChatSidebar({
       }
 
       const loaded = sessionByAnyId.get(match.session_id)
-      out.set(match.session_id, loaded ?? searchResultToSession(match))
+      const result = loaded ?? searchResultToSession(match)
+
+      if (isProductConversation(result)) {
+        out.set(match.session_id, result)
+      }
     }
 
     return [...out.values()]
@@ -1064,7 +1088,7 @@ export function ChatSidebar({
 
   const hasMoreSessions = knownSessionTotal > loadedSessionCount
 
-  const recentsMeta = countLabel(displayAgentSessions.length, knownSessionTotal)
+  const recentsMeta = String(displayAgentSessions.length)
   const displayRecentsCountRef = useRef(0)
   const loadedRecentsCountRef = useRef(0)
   displayRecentsCountRef.current = displayAgentSessions.length
@@ -1155,8 +1179,7 @@ export function ChatSidebar({
 
   const showSessionSkeletons = sessionsLoading && sortedSessions.length === 0
 
-  const showSessionSections =
-    showSessionSkeletons || sortedSessions.length > 0 || projectModel.length > 0
+  const showSessionSections = showSessionSkeletons || sortedSessions.length > 0 || projectModel.length > 0
 
   // Each reorderable list reports its OWN new id order; persisting is a direct,
   // typed write — no id-prefix sniffing to figure out which level moved.
@@ -1198,15 +1221,26 @@ export function ChatSidebar({
       <SidebarContent className="gap-0 overflow-hidden bg-transparent px-2.5">
         <SidebarGroup className="shrink-0 p-0 pb-2 pt-[calc(var(--titlebar-height)+0.375rem)]">
           <SidebarGroupContent>
+            {contentVisible ? (
+              <div className="mb-3 flex items-center gap-2.5 px-2 py-2">
+                <BrandMark className="size-8 text-[1.6rem] shadow-none" />
+                <span className="min-w-0">
+                  <strong className="block truncate text-sm font-semibold tracking-[-0.02em]">{PRODUCT_NAME}</strong>
+                  <small className="mt-0.5 block truncate text-[0.62rem] text-(--ui-text-tertiary)">
+                    {PRODUCT_TAGLINE}
+                  </small>
+                </span>
+              </div>
+            ) : null}
             <SidebarMenu className="gap-px">
               {SIDEBAR_NAV.map(item => {
                 const isInteractive = Boolean(item.action) || Boolean(item.route)
 
                 const active =
                   (item.id === 'workbench' && currentView === 'workbench') ||
-                  (item.id === 'skills' && currentView === 'skills') ||
-                  (item.id === 'messaging' && currentView === 'messaging') ||
-                  (item.id === 'artifacts' && currentView === 'artifacts')
+                  (item.id === 'content' && currentView === 'content') ||
+                  (item.id === 'accounts' && currentView === 'accounts') ||
+                  (item.id === 'managed' && currentView === 'managed')
 
                 const isNewSession = item.id === 'new-session'
 
@@ -1306,7 +1340,7 @@ export function ChatSidebar({
               />
             )}
 
-            {!trimmedQuery && (
+            {!trimmedQuery && pinnedSessions.length > 0 && (
               <SidebarSessionsSection
                 activeSessionId={activeSidebarSessionId}
                 contentClassName={cn('flex max-h-44 flex-col gap-px rounded-lg pb-2 pt-1', GROUP_BODY)}
@@ -1333,7 +1367,7 @@ export function ChatSidebar({
               <SidebarSessionsSection
                 activeProjectId={activeProjectId}
                 activeSessionId={activeSidebarSessionId}
-                collapsible={!inProject}
+                collapsible={false}
                 contentClassName={cn(
                   'flex min-h-0 flex-1 flex-col pb-1.75',
                   SCROLL_Y,
@@ -1461,9 +1495,9 @@ export function ChatSidebar({
                 onReorderProjects={showAllProfiles ? undefined : reorderProjects}
                 onReorderSessions={showAllProfiles ? undefined : reorderSessions}
                 onResumeSession={onResumeSession}
-                onToggle={() => setSidebarRecentsOpen(!agentsOpen)}
+                onToggle={() => undefined}
                 onTogglePin={pinSession}
-                open={agentsOpen}
+                open
                 pinned={false}
                 projectBackRow={
                   inProject ? <ProjectBackRow label={s.projects.back} onClick={exitProjectScope} /> : undefined
@@ -1484,53 +1518,6 @@ export function ChatSidebar({
               />
             )}
 
-            {!trimmedQuery &&
-              !worktreeGroupingActive &&
-              messagingGroups.map(group => {
-                const visible = messagingVisible[group.sourceId] ?? NON_SESSION_INITIAL_ROWS
-                const shownSessions = group.sessions.slice(0, visible)
-                // More to show if rows are hidden behind the cap, or the backend
-                // still has older threads on disk.
-                const canRevealMore = visible < group.sessions.length || group.hasMore
-
-                return (
-                  <SidebarSessionsSection
-                    activeSessionId={activeSidebarSessionId}
-                    contentClassName={cn('flex max-h-56 flex-col gap-px pb-1.75', GROUP_BODY)}
-                    emptyState={null}
-                    footer={
-                      canRevealMore ? (
-                        <SidebarLoadMoreRow
-                          loading={Boolean(messagingLoadMorePending[group.sourceId])}
-                          onClick={() => revealMoreMessaging(group.sourceId, group.sessions.length, group.hasMore)}
-                          step={Math.min(NON_SESSION_LOAD_STEP, Math.max(0, group.total - shownSessions.length))}
-                        />
-                      ) : null
-                    }
-                    key={group.sourceId}
-                    label={group.label}
-                    labelIcon={
-                      <PlatformAvatar
-                        className="size-4 rounded-[4px] text-[0.5625rem] [&_svg]:size-3"
-                        platformId={group.sourceId}
-                        platformName={group.label}
-                      />
-                    }
-                    labelMeta={countLabel(group.sessions.length, group.total)}
-                    onArchiveSession={onArchiveSession}
-                    onDeleteSession={onDeleteSession}
-                    onResumeSession={onResumeSession}
-                    onToggle={() => toggleSidebarMessagingOpen(group.sourceId)}
-                    onTogglePin={pinSession}
-                    open={messagingOpenIds.includes(group.sourceId)}
-                    pinned={false}
-                    rootClassName="shrink-0 p-0"
-                    sessions={shownSessions}
-                    workingSessionIdSet={workingSessionIdSet}
-                  />
-                )
-              })}
-
             {!trimmedQuery && !worktreeGroupingActive && cronJobs.length > 0 && (
               <SidebarCronJobsSection
                 jobs={cronJobs}
@@ -1547,11 +1534,6 @@ export function ChatSidebar({
 
         {contentVisible && !showSessionSections && <SidebarBlankState onNewProject={openProjectCreate} />}
 
-        {contentVisible && (
-          <div className="shrink-0 px-0.5 pb-1 pt-0.5">
-            <ProfileRail />
-          </div>
-        )}
       </SidebarContent>
       <ProjectDialog />
     </Sidebar>
@@ -1635,12 +1617,7 @@ function SidebarBlankState({ onNewProject }: { onNewProject: () => void }) {
       <div className="flex flex-col items-center gap-2">
         <Codicon className="text-(--ui-text-quaternary)" name="root-folder" size="1.25rem" />
         <p className="text-xs text-(--ui-text-tertiary)">{s.noSessions}</p>
-        <Button
-          className="mt-0.5 text-(--ui-text-secondary)"
-          onClick={onNewProject}
-          size="sm"
-          variant="ghost"
-        >
+        <Button className="mt-0.5 text-(--ui-text-secondary)" onClick={onNewProject} size="sm" variant="ghost">
           <Codicon name="add" size="0.75rem" />
           {s.projects.newButton}
         </Button>
