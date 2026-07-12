@@ -254,6 +254,43 @@ CREATE INDEX IF NOT EXISTS idx_content_assets_account ON content_assets(account_
 CREATE INDEX IF NOT EXISTS idx_content_assets_scope
     ON content_assets(user_id, account_id, updated_at);
 
+CREATE TABLE IF NOT EXISTS media_asset_library (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    account_id TEXT,
+    name TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    role TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    provider_asset_id TEXT NOT NULL DEFAULT '',
+    local_path TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    sha256 TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    rights_status TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    receipt_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_media_asset_library_scope
+    ON media_asset_library(user_id, account_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS media_asset_references (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES media_asset_library(id),
+    owner_kind TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(asset_id, owner_kind, owner_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_media_asset_references_asset
+    ON media_asset_references(asset_id, created_at);
+
 CREATE TABLE IF NOT EXISTS marketing_preflight_records (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

@@ -12909,6 +12909,103 @@ def _(rid, _params: dict) -> dict:
     return _ok(rid, AccountContextRepository().list_accounts())
 
 
+@method("marketing.assets.list")
+def _(rid, params: dict) -> dict:
+    """List user-owned media assets visible to the selected account."""
+    from agent.marketing.domains import MediaAssetRepository
+
+    params = params if isinstance(params, dict) else {}
+    return _ok(
+        rid,
+        MediaAssetRepository().list(
+            user_id=str(params.get("user_id") or "default"),
+            account_id=str(params.get("account_id") or "").strip() or None,
+        ),
+    )
+
+
+@method("marketing.assets.upload")
+def _(rid, params: dict) -> dict:
+    """Persist a user-confirmed image/audio/video in the native asset library."""
+    import re as _re
+
+    from agent.marketing.domains import MediaAssetRepository
+    from agent.marketing.domains.media_assets import MAX_INLINE_UPLOAD_BYTES
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("rights_confirmed") is not True:
+        return _err(rid, 4095, "the user must confirm they may use this asset")
+    data_url = str(params.get("data_url") or "").strip()
+    match = _re.match(r"^data:([^;,]+);base64,", data_url, _re.I)
+    if not match:
+        return _err(rid, -32602, "data_url with a media MIME type is required")
+    if len(data_url) > (MAX_INLINE_UPLOAD_BYTES * 4 // 3) + 1024:
+        return _err(
+            rid,
+            4130,
+            "inline asset exceeds 32 MB; use the native file transfer path",
+        )
+    try:
+        payload = _decode_attachment_data_url(data_url)
+        asset = MediaAssetRepository().import_bytes(
+            user_id=str(params.get("user_id") or "default"),
+            account_id=str(params.get("account_id") or "").strip() or None,
+            name=str(params.get("name") or params.get("filename") or "未命名素材"),
+            media_type=str(params.get("media_type") or ""),
+            role=str(params.get("role") or "other"),
+            source_type="user_upload",
+            rights_status="user_confirmed",
+            payload=payload,
+            filename=str(params.get("filename") or "asset.bin"),
+            mime_type=match.group(1).lower(),
+            metadata=(params.get("metadata") if isinstance(params.get("metadata"), dict) else {}),
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"asset": asset})
+
+
+@method("marketing.assets.trusted.register")
+def _(rid, params: dict) -> dict:
+    """Register an already-authorized Ark trusted portrait asset URI."""
+    from agent.marketing.domains import MediaAssetRepository
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit trusted-asset confirmation is required")
+    try:
+        asset = MediaAssetRepository().register_volcengine_trusted_asset(
+            user_id=str(params.get("user_id") or "default"),
+            account_id=str(params.get("account_id") or "").strip() or None,
+            name=str(params.get("name") or "方舟可信人像"),
+            provider_asset_id=str(params.get("provider_asset_id") or ""),
+            media_type=str(params.get("media_type") or "image"),
+            metadata=(params.get("metadata") if isinstance(params.get("metadata"), dict) else {}),
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"asset": asset})
+
+
+@method("marketing.assets.delete")
+def _(rid, params: dict) -> dict:
+    """Delete an unreferenced asset after explicit user confirmation."""
+    from agent.marketing.domains import MediaAssetRepository
+
+    params = params if isinstance(params, dict) else {}
+    try:
+        result = MediaAssetRepository().delete(
+            asset_id=str(params.get("asset_id") or ""),
+            user_id=str(params.get("user_id") or "default"),
+            confirmed=params.get("confirmed") is True,
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
+
+
 @method("marketing.knowledge.contributions.list")
 def _(rid, params: dict) -> dict:
     """List one account's local consent and central-sync audit records."""
