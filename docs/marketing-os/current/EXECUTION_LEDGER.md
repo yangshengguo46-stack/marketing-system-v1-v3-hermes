@@ -216,5 +216,6 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - Desktop 平台/打包回归：262 passed、1 skipped；自包含 runtime staging、MCP 生产依赖闭包、受控 Chromium、Electron-as-Node 与真实 bundled Chromium 启动已验证。
 - 通用媒体素材库：65 项营销域回归通过；上传路径隔离、MIME/版权来源强绑定、敏感元数据脱敏、可信素材幂等、引用删除保护和 32MB Gateway 内联上限已进入 Hermes 原生领域 owner。
 - 工作台账号连接纵切：TypeScript 构建、3 项 UI/store 测试、15 项账号 Gateway/Registry/Auth 回归通过；尚缺本轮真人扫码验收。
+- 内容审核读取纵切：Gateway 已提供账号作用域的 bounded asset summary 与按需全文读取，列表不再一次把多篇完整正文送入 Electron；14 项内容/素材/账号组合回归通过，审核与继续对话 UI 待接。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。
 - 下一次更新本台账时必须写：代码路径、测试、dev-runtime、packaged、human-loop 和仍未完成的风险。
