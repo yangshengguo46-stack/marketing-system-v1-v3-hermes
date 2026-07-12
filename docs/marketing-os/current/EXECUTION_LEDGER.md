@@ -26,9 +26,10 @@
 | State/data owner | 经营项目、受众、证据、内容、预演、回执和学习表已进入 Hermes `state.db`；旧 `agent_core.db` 一次迁移后只读保留 | dev-runtime | 删除兼容路径、中央匿名知识服务尚未实现 |
 | Short-video sound intelligence | Playwright MCP 原生短视频/BGM 结构化采集；Sound/Observation/Evidence 入 `state.db`；预演、草稿快照和发布回执携带声音身份 | automated | 真人 selector 验收冻结到账号登录 UI 完成后；再做跨日速度与匹配样本归因 |
 | Central knowledge core | 匿名贡献 wire contract、最小群组门槛、稀疏值抑制、时间衰减、Ed25519 签名知识包和 Hermes 验签落库 | automated | 传输认证、服务端持久化、删除传播、运维与真实多用户规模 |
-| Three knowledge bases | Platform/Account/Content 三库进入 Hermes `state.db`；内置 stylebook 与社会注意力原理；账号知识只接收 Receipt-backed accepted learning；用户/模型写入被拒绝 | automated | 海量采集、规则时效巡检、候选治理 UI |
+| New-media operating model | 创作者资产、赛道路线、行为受众、七角色对标图谱、定位、内容系统和可证伪实验进入 Hermes 原生领域 owner；关键版本需用户确认 | automated | 真实赛道研究、对标采集、自然对话真人验收 |
+| Four knowledge bases | Platform/Market/Account/Content 四库进入 Hermes `state.db`；赛道库接收真实证据和签名聚合规律；账号知识只接收 Receipt-backed accepted learning；用户/模型写入被拒绝 | automated | 海量采集、规则与市场时效巡检、候选治理 UI |
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
-| Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、打包浏览器策略 |
+| Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；新会话自动获得稳定 `prospect_*` 作用域，未登录也能自然对话建模；`accounts.json` 仅一次迁移 | dev-runtime | 真人登录、多账号恢复、prospect 合并与打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放上下文，删除时清理 profile | dev-runtime | 切换 UI、真人多账号登录/退出 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
 | Content plan/assets | 三 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
@@ -55,9 +56,11 @@
 
 LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Hermes Cron 的非阻塞触发；`agent/marketing/providers/metrics.py` 是平台观察 seam；`PublishingRepository` 原子领取、延期、恢复并结算 checkpoint；`metric_loop.py` 把真实观察写为 Receipt、映射标签、执行 Retro 并生成幂等 pending candidate。单次结果永远不能自动改策略；只有 `AccountLearningGovernance.accept_and_project` 的显式治理动作才能进入 Account KB。
 
-三类知识库已按 Git 历史有效合同重建到 Hermes 原生 owner：平台库恢复 source/region/version/valid time 和平台 stylebook；内容库恢复个体注意力、认知负荷、情绪、信任、身份与群体传播的可观察模型；账号库只允许真实 Receipt 支持且已 accepted 的 LearningCandidate 晋升。旧 `memory_classification` 明确降级为“记忆候选分类器”，用户/模型陈述不再具有知识写权限。内容计划与 Preflight 已读取三库覆盖度及 entry IDs，公式升级为 `content-production-preflight-v0.3`。
+四类知识库已进入 Hermes 原生 owner：平台库维护 source/region/version/valid time 与平台 stylebook；赛道与市场库维护品类、需求、竞争和商业路径的时效规律；内容库维护个体注意力、认知负荷、情绪、信任、身份与群体传播的可观察模型；账号库只允许真实 Receipt 支持且已 accepted 的 LearningCandidate 晋升。`memory_classification` 只是记忆候选分类器，用户/模型陈述不具有知识写权限。内容计划与 Preflight 已读取四库覆盖度及 entry IDs，公式为 `content-production-preflight-v0.4`。
 
-开发机真实 `state.db` 已完成 schema 升级并种入 2 条平台 stylebook、8 条内容原理、0 条账号知识；账号库为 0 证明系统没有把用户陈述或模型推断伪装成账号经验。升级前备份位于 `backups/knowledge-bases-20260712-143602/state.db`。
+账号经营世界模型已按今天定稿重写，不恢复旧 Electron/FastAPI 生命周期：`AccountStrategyRepository` 原生拥有创作者经营画像、赛道路线假设、多角色对标经营图谱、版本化定位、内容系统和可证伪实验；`AccountLifecycleRepository` 维护项目与行为受众版本。顺序固定为创作者资产 → 赛道路线 → 行为受众 → 对标图谱 → 定位 → 内容系统 → 实验 → Receipt/Retro。没有真实市场证据的路线置信度封顶 `0.45`；对标必须保留多维匹配向量和 EvidenceRecord，粉丝数及不透明总分不能解锁定位。
+
+开发机真实 `state.db` 此前已完成知识 schema 升级并种入 2 条平台 stylebook、8 条内容原理、0 条账号知识；账号库为 0 证明系统没有把用户陈述或模型推断伪装成账号经验。新增赛道库和经营世界模型本轮已完成自动化临时库迁移验证，真实长期数据仍不得在未备份前批量改写。
 
 ### LOOP-01 真实发布回执进入三核闭环（底层完成，真人验收冻结）
 
@@ -180,7 +183,8 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 ## 当前回归基线
 
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
-- 当前营销域、三类知识库、内容生产、短视频声音、数据飞轮、指标学习与账号 MCP 生命周期组合回归：Python 130 passed；Node 既有基线 12 passed（本轮未改 Node）。
+- 当前营销域、经营世界模型、四类知识、内容生产、原生采证与经营闭环组合回归：83 passed。
+- SessionDB、账号上下文与 prospect 默认作用域组合回归：303 passed；TUI/Gateway 会话回归：172 passed。
 - Hermes Cron 调度/作业/产品任务组合回归：302 passed；产品任务无 MetricProvider 时静默，有真实 Provider 时调用指标 owner。
 - LOOP-01/02/03/04 发布账本、审批、指标回执、缺失值、延期、崩溃领取恢复、Retro、候选和账号知识治理单文件回归：19 passed。
 - Desktop runtime staging：5 passed。

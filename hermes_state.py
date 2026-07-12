@@ -14,6 +14,7 @@ Key design decisions:
 - Session source tagging ('cli', 'telegram', 'discord', etc.) for filtering
 """
 
+import hashlib
 import json
 import logging
 import random
@@ -30,6 +31,22 @@ from hermes_constants import get_hermes_home
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 logger = logging.getLogger(__name__)
+
+
+def _default_marketing_scope(value: str | None) -> tuple[str, str]:
+    """Give every new product conversation a stable pre-login operating scope."""
+
+    raw = str(value or "default").strip() or "default"
+    if re.fullmatch(r"[A-Za-z0-9_.:@-]{1,160}", raw):
+        user_id = raw
+    else:
+        user_id = "user_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+    account_id = (
+        "prospect_default"
+        if user_id == "default"
+        else "prospect_" + hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:20]
+    )
+    return user_id, account_id
 
 def _delegate_from_json(col: str = "model_config") -> str:
     return f"json_extract(COALESCE({col}, '{{}}'), '$._delegate_from')"
@@ -761,6 +778,30 @@ CREATE INDEX IF NOT EXISTS idx_sessions_gateway_peer
     ON sessions(source, user_id, chat_id, chat_type, thread_id, started_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_marketing_learning_source
     ON marketing_learning_candidates(source_key) WHERE source_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_creator_profile_confirmed
+    ON creator_operating_profiles(project_id) WHERE status='confirmed';
+CREATE INDEX IF NOT EXISTS idx_creator_profile_scope
+    ON creator_operating_profiles(user_id, account_id, project_id, version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_route_selected
+    ON market_route_hypotheses(project_id) WHERE status='selected';
+CREATE INDEX IF NOT EXISTS idx_market_route_scope
+    ON market_route_hypotheses(user_id, account_id, project_id, version);
+CREATE INDEX IF NOT EXISTS idx_benchmark_account_scope
+    ON benchmark_accounts(user_id, target_account_id, project_id, selection_status);
+CREATE INDEX IF NOT EXISTS idx_benchmark_observation_scope
+    ON benchmark_observations(user_id, target_account_id, project_id, benchmark_account_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_positioning_approved
+    ON positioning_versions(project_id) WHERE status='approved';
+CREATE INDEX IF NOT EXISTS idx_positioning_scope
+    ON positioning_versions(user_id, account_id, project_id, version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_content_system_approved
+    ON content_system_versions(project_id) WHERE status='approved';
+CREATE INDEX IF NOT EXISTS idx_content_system_scope
+    ON content_system_versions(user_id, account_id, project_id, version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_experiment_source
+    ON account_experiments(source_key) WHERE source_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_account_experiment_scope
+    ON account_experiments(user_id, account_id, project_id, status);
 """
 
 FTS_SQL = """
@@ -1615,6 +1656,10 @@ class SessionDB:
                 if parent_scope is not None:
                     scope_user_id = parent_scope["marketing_user_id"]
                     scope_account_id = parent_scope["marketing_account_id"]
+            if not scope_account_id:
+                scope_user_id, scope_account_id = _default_marketing_scope(
+                    scope_user_id or user_id
+                )
             conn.execute(
                 """INSERT OR IGNORE INTO sessions (
                    id, source, user_id, session_key, chat_id, chat_type, thread_id,

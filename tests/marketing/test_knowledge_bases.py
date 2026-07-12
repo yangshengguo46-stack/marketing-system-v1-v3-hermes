@@ -18,7 +18,7 @@ def _repository(tmp_path):
     return KnowledgeBaseRepository(paths), state_path
 
 
-def test_three_knowledge_bases_bootstrap_platform_and_content_without_user_opinion(tmp_path):
+def test_four_knowledge_bases_bootstrap_without_user_opinion(tmp_path):
     repository, _ = _repository(tmp_path)
 
     platform = repository.retrieve(
@@ -30,6 +30,7 @@ def test_three_knowledge_bases_bootstrap_platform_and_content_without_user_opini
     account = repository.retrieve(
         knowledge_base="account", user_id="default", account_id="acct-1"
     )
+    market = repository.retrieve(knowledge_base="market")
 
     assert platform["total"] == 1
     assert platform["entries"][0]["source_kind"] == "builtin_curated"
@@ -40,6 +41,7 @@ def test_three_knowledge_bases_bootstrap_platform_and_content_without_user_opini
         "persuasion",
     }
     assert account["total"] == 0
+    assert market["total"] == 0
 
 
 def test_user_or_model_opinion_cannot_write_any_knowledge_truth(tmp_path):
@@ -121,6 +123,38 @@ def test_preflight_projection_keeps_authority_order_explicit(tmp_path):
 
     assert result["platform"]
     assert result["content"]
+    assert result["market"] == []
     assert result["account"] == []
     assert result["authority_order"][0] == "local_receipt_backed_account_knowledge"
     assert result["authority_order"][-1] == "user_preference_memory_is_not_knowledge_truth"
+
+
+def test_signed_category_pattern_enters_market_not_content_knowledge(tmp_path):
+    repository, _ = _repository(tmp_path)
+
+    entry = repository.install_signed_pack(
+        {
+            "id": "pack-market-1",
+            "version": "2026-07-12.v1",
+            "knowledge_type": "category_pattern",
+            "platform": "douyin",
+            "region": "cn",
+            "window_start": "2026-07-01T00:00:00+00:00",
+            "sample_size": 120,
+            "payload": {
+                "cohort": {"content_kind": "faceless_video", "category": "ai_education"},
+                "pattern": {"trust_format": "screen_proof"},
+            },
+        }
+    )
+
+    assert entry["knowledge_base"] == "market"
+    market = repository.retrieve(
+        knowledge_base="market", platform="douyin", content_kind="faceless_video"
+    )
+    content = repository.retrieve(
+        knowledge_base="content", platform="douyin", content_kind="faceless_video",
+        topics=["category_pattern"],
+    )
+    assert [item["id"] for item in market["entries"]] == [entry["id"]]
+    assert content["entries"] == []

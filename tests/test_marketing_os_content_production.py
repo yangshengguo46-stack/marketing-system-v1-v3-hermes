@@ -196,7 +196,7 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     assert planned["account_scope"]["account_id"] == "acct-1"
     assert planned["checkpoint_status"] == "planned"
     assert planned["preflight"]["id"].startswith("preflight_")
-    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.3"
+    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.4"
     assert planned["preflight"]["scores"]["knowledge_support"] > 0
     assert planned["preflight"]["scores"]["knowledge_confidence_factor"] <= 1
     assert knowledge["total"] >= 8

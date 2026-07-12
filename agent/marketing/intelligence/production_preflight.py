@@ -20,7 +20,7 @@ from .influence_score import build_influence_score
 from .preflight_decision import build_preflight_decision
 
 
-CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.3"
+CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.4"
 
 
 def _text(value: Any) -> str:
@@ -128,12 +128,13 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
     knowledge_context = params.get("knowledge_context") if isinstance(params.get("knowledge_context"), dict) else {}
     knowledge_counts = {
         key: len(knowledge_context.get(key) or [])
-        for key in ("platform", "account", "content")
+        for key in ("platform", "market", "account", "content")
         if isinstance(knowledge_context.get(key) or [], list)
     }
     knowledge_support = _clamp(
         min(0.45, knowledge_counts.get("account", 0) * 0.12)
         + min(0.25, knowledge_counts.get("platform", 0) * 0.08)
+        + min(0.2, knowledge_counts.get("market", 0) * 0.05)
         + min(0.15, knowledge_counts.get("content", 0) * 0.03)
     )
 
@@ -277,7 +278,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
             ],
             "knowledge_entry_ids": [
                 str(item.get("id"))
-                for base in ("account", "platform", "content")
+                for base in ("account", "platform", "market", "content")
                 for item in (knowledge_context.get(base) or [])[:20]
                 if isinstance(item, dict) and item.get("id")
             ],

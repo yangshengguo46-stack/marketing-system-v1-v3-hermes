@@ -20,16 +20,6 @@ _ACCOUNT_FIELDS = (
     "id", "platform", "platform_user_id", "username", "label", "status",
     "auth_state", "permissions", "stats", "connected_at", "last_verified_at", "updated_at",
 )
-_NEXT_ACTION_BY_STAGE = {
-    "not_started": "draft_audience_hypothesis",
-    "goal_defined": "draft_audience_hypothesis",
-    "audience_hypothesis_ready": "complete_benchmark_evidence",
-    "benchmark_evidence_ready": "draft_account_positioning",
-    "positioning_approved": "propose_first_content_experiment",
-    "experiment_running": "collect_and_review_evidence",
-}
-
-
 class AccountContextRepository:
     """Produce a bounded, secret-free account context from canonical storage."""
 
@@ -81,7 +71,7 @@ class AccountContextRepository:
             "lifecycle": _empty_lifecycle(),
             "account_dna": {},
             "actual_audience": None,
-            "source": "marketing_store",
+            "source": "hermes_state",
         }
         if not self.paths.agent_db.is_file():
             context["data_state"] = "database_missing"
@@ -98,42 +88,37 @@ class AccountContextRepository:
                 return context
 
             project_id = str(project["id"])
-            audience = _confirmed_audience(
-                db, tables, user_id=user_id, account_id=account_id, project_id=project_id
+            from agent.marketing.domains.account_strategy import AccountStrategyRepository
+
+            operating_model = AccountStrategyRepository(self.paths).read_operating_model(
+                user_id=user_id, account_id=account_id, project_id=project_id
             )
-            positioning = _approved_positioning(
-                db, tables, user_id=user_id, account_id=account_id, project_id=project_id
+            audience = operating_model["audience_hypothesis"]
+            positioning_record = operating_model["positioning"]
+            positioning = (
+                positioning_record.get("positioning") if positioning_record else None
             )
             snapshot = _latest_audience_snapshot(
                 db, tables, user_id=user_id, account_id=account_id, project_id=project_id
-            )
-            benchmark_count = _scoped_count(
-                db,
-                tables,
-                "benchmark_accounts",
-                "user_id=? AND target_account_id=? AND project_id=? AND selection_status='selected'",
-                (user_id, account_id, project_id),
-            )
-            experiment_count = _scoped_count(
-                db,
-                tables,
-                "account_experiments",
-                "user_id=? AND account_id=? AND project_id=?",
-                (user_id, account_id, project_id),
             )
             stage = str(project["stage"] or "goal_defined")
             context["lifecycle"] = {
                 "project_id": project_id,
                 "business_goal": str(project["business_goal"] or ""),
                 "stage": stage,
-                "next_action": _NEXT_ACTION_BY_STAGE.get(stage, "review_account_strategy"),
+                "next_action": _next_action(operating_model),
+                "creator_profile": operating_model["creator_profile"],
+                "market_route": operating_model["market_route"],
                 "audience_hypothesis": audience,
                 "positioning": positioning,
-                "benchmark_count": benchmark_count,
-                "experiment_count": experiment_count,
+                "content_system": operating_model["content_system"],
+                "strategy_alignment": operating_model["strategy_alignment"],
+                "benchmark_readiness": operating_model["benchmark_readiness"],
+                "benchmark_count": operating_model["benchmark_readiness"]["selected_count"],
+                "experiment_count": operating_model["experiment_count"],
                 "data_gaps": list(audience.get("data_gaps", [])) if audience else [],
             }
-            if positioning:
+            if positioning and operating_model["strategy_alignment"]["positioning_current"]:
                 context["account_dna"] = {
                     **context["account_dna"],
                     "persona": positioning.get("persona"),
@@ -153,13 +138,43 @@ def _empty_lifecycle() -> dict[str, Any]:
         "project_id": None,
         "business_goal": "",
         "stage": "not_started",
-        "next_action": "draft_audience_hypothesis",
+        "next_action": "begin_project",
+        "creator_profile": None,
+        "market_route": None,
         "audience_hypothesis": None,
         "positioning": None,
+        "content_system": None,
+        "strategy_alignment": None,
+        "benchmark_readiness": None,
         "benchmark_count": 0,
         "experiment_count": 0,
         "data_gaps": [],
     }
+
+
+def _next_action(model: dict[str, Any]) -> str:
+    stage = str((model.get("project") or {}).get("stage") or "goal_defined")
+    if not model.get("creator_profile"):
+        return "draft_creator_profile"
+    if not model.get("market_route"):
+        return "select_market_route" if stage == "market_routes_ready" else "draft_market_routes"
+    if not model.get("audience_hypothesis"):
+        return "draft_audience_hypothesis"
+    if not (model.get("benchmark_readiness") or {}).get("ready"):
+        return "build_benchmark_operating_graph"
+    if not model.get("positioning"):
+        return "draft_account_positioning"
+    if not (model.get("strategy_alignment") or {}).get("positioning_current"):
+        return "revise_account_positioning"
+    if not model.get("content_system"):
+        return "draft_content_system"
+    if not (model.get("strategy_alignment") or {}).get("content_system_current"):
+        return "revise_content_system"
+    if int(model.get("experiment_count") or 0) == 0:
+        return "propose_first_content_experiment"
+    if stage == "experiment_running":
+        return "collect_and_review_experiment_receipts"
+    return "review_account_operating_model"
 
 
 def _sanitize_account(value: dict[str, Any]) -> dict[str, Any]:
@@ -206,54 +221,6 @@ def _active_project(
     ).fetchone()
 
 
-def _confirmed_audience(
-    db: sqlite3.Connection,
-    tables: set[str],
-    *,
-    user_id: str,
-    account_id: str,
-    project_id: str,
-) -> dict[str, Any] | None:
-    if "audience_hypotheses" not in tables:
-        return None
-    row = db.execute(
-        """SELECT id,version,segments_json,pains_json,scenarios_json,exclusions_json,
-        data_gaps_json,confirmed_at FROM audience_hypotheses WHERE project_id=?
-        AND user_id=? AND account_id=? AND status='confirmed' ORDER BY version DESC LIMIT 1""",
-        (project_id, user_id, account_id),
-    ).fetchone()
-    if row is None:
-        return None
-    return {
-        "id": row["id"],
-        "version": row["version"],
-        "segments": _json_object(row["segments_json"], []),
-        "pains": _json_object(row["pains_json"], []),
-        "scenarios": _json_object(row["scenarios_json"], []),
-        "exclusions": _json_object(row["exclusions_json"], []),
-        "data_gaps": _json_object(row["data_gaps_json"], []),
-        "confirmed_at": row["confirmed_at"],
-    }
-
-
-def _approved_positioning(
-    db: sqlite3.Connection,
-    tables: set[str],
-    *,
-    user_id: str,
-    account_id: str,
-    project_id: str,
-) -> dict[str, Any] | None:
-    if "positioning_versions" not in tables:
-        return None
-    row = db.execute(
-        """SELECT positioning_json FROM positioning_versions WHERE project_id=?
-        AND user_id=? AND account_id=? AND status='approved' ORDER BY version DESC LIMIT 1""",
-        (project_id, user_id, account_id),
-    ).fetchone()
-    return None if row is None else _json_object(row["positioning_json"], {})
-
-
 def _latest_audience_snapshot(
     db: sqlite3.Connection,
     tables: set[str],
@@ -298,15 +265,3 @@ def _memory_account_dna(
         if isinstance(value, dict) and value.get("field"):
             dna[str(value["field"])] = value.get("value")
     return dna
-
-
-def _scoped_count(
-    db: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    where: str,
-    params: tuple[Any, ...],
-) -> int:
-    if table not in tables:
-        return 0
-    return int(db.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params).fetchone()[0])

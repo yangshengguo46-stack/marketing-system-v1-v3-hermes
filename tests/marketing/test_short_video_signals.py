@@ -131,7 +131,7 @@ def test_video_preflight_treats_bgm_as_first_class_signal():
     assert without_sound["scores"]["sound_fit"] == 0
     assert with_sound["scores"]["sound_fit"] == 0.92
     assert with_sound["scores"]["overall"] > without_sound["scores"]["overall"]
-    assert with_sound["formula_version"] == "content-production-preflight-v0.3"
+    assert with_sound["formula_version"] == "content-production-preflight-v0.4"
 
 
 def test_playwright_post_tool_seam_persists_verified_sound_signal(tmp_path, monkeypatch):

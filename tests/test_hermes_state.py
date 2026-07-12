@@ -96,6 +96,18 @@ class TestSessionLifecycle:
     def test_get_nonexistent_session(self, db):
         assert db.get_session("nonexistent") is None
 
+    def test_new_session_gets_stable_prelogin_marketing_scope(self, db):
+        db.create_session(session_id="prospect-1", source="tui")
+        db.create_session(session_id="prospect-2", source="feishu", user_id="feishu-user")
+
+        default_scope = db.get_session("prospect-1")
+        user_scope = db.get_session("prospect-2")
+        assert default_scope["marketing_user_id"] == "default"
+        assert default_scope["marketing_account_id"] == "prospect_default"
+        assert user_scope["marketing_user_id"] == "feishu-user"
+        assert user_scope["marketing_account_id"].startswith("prospect_")
+        assert user_scope["marketing_account_id"] != "prospect_default"
+
     def test_marketing_scope_is_native_pristine_and_inherited(self, db):
         db.create_session(
             session_id="s1",

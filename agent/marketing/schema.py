@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS audience_hypotheses (
     segments_json TEXT NOT NULL DEFAULT '[]',
     pains_json TEXT NOT NULL DEFAULT '[]',
     scenarios_json TEXT NOT NULL DEFAULT '[]',
+    jobs_json TEXT NOT NULL DEFAULT '[]',
+    current_alternatives_json TEXT NOT NULL DEFAULT '[]',
+    trust_barriers_json TEXT NOT NULL DEFAULT '[]',
+    desired_outcomes_json TEXT NOT NULL DEFAULT '[]',
+    behavior_signals_json TEXT NOT NULL DEFAULT '[]',
     exclusions_json TEXT NOT NULL DEFAULT '[]',
     data_gaps_json TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'draft',
@@ -37,6 +42,121 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_audience_one_confirmed
     ON audience_hypotheses(project_id) WHERE status='confirmed';
 CREATE INDEX IF NOT EXISTS idx_audience_scope
     ON audience_hypotheses(user_id, account_id, project_id);
+
+CREATE TABLE IF NOT EXISTS creator_operating_profiles (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    profile_json TEXT NOT NULL DEFAULT '{}',
+    source_refs_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    UNIQUE(project_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS market_route_hypotheses (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    route_json TEXT NOT NULL DEFAULT '{}',
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    confidence REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TEXT NOT NULL,
+    selected_at TEXT,
+    UNIQUE(project_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS benchmark_accounts (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL DEFAULT '',
+    user_id TEXT NOT NULL,
+    target_account_id TEXT NOT NULL DEFAULT '',
+    platform TEXT NOT NULL DEFAULT '',
+    platform_account_id TEXT NOT NULL DEFAULT '',
+    account_handle TEXT NOT NULL DEFAULT '',
+    account_name TEXT,
+    profile_url TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'direct',
+    selection_reason TEXT NOT NULL DEFAULT '',
+    match_dimensions_json TEXT NOT NULL DEFAULT '{}',
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    selection_status TEXT NOT NULL DEFAULT 'candidate',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    observed_at TEXT,
+    valid_until TEXT,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS benchmark_observations (
+    id TEXT PRIMARY KEY,
+    benchmark_account_id TEXT NOT NULL REFERENCES benchmark_accounts(id),
+    project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
+    user_id TEXT NOT NULL,
+    target_account_id TEXT NOT NULL,
+    dimension TEXT NOT NULL,
+    value_json TEXT NOT NULL DEFAULT '{}',
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    provenance_json TEXT NOT NULL DEFAULT '{}',
+    confidence REAL NOT NULL DEFAULT 0,
+    observed_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS positioning_versions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    positioning_json TEXT NOT NULL DEFAULT '{}',
+    basis_refs_json TEXT NOT NULL DEFAULT '[]',
+    data_gaps_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TEXT NOT NULL,
+    approved_at TEXT,
+    UNIQUE(project_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS content_system_versions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    positioning_id TEXT NOT NULL REFERENCES positioning_versions(id),
+    version INTEGER NOT NULL,
+    system_json TEXT NOT NULL DEFAULT '{}',
+    basis_refs_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TEXT NOT NULL,
+    approved_at TEXT,
+    UNIQUE(project_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS account_experiments (
+    id TEXT PRIMARY KEY,
+    source_key TEXT,
+    project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    content_system_id TEXT REFERENCES content_system_versions(id),
+    hypothesis TEXT NOT NULL,
+    variable_json TEXT NOT NULL DEFAULT '{}',
+    variants_json TEXT NOT NULL DEFAULT '[]',
+    asset_ids_json TEXT NOT NULL DEFAULT '[]',
+    prediction_json TEXT NOT NULL DEFAULT '{}',
+    success_criteria_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TEXT NOT NULL,
+    approved_at TEXT,
+    updated_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS evidence_records (
     id TEXT PRIMARY KEY,
@@ -316,6 +436,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_marketing_knowledge_identity
 LEGACY_MARKETING_TABLES = (
     "account_strategy_projects",
     "audience_hypotheses",
+    "creator_operating_profiles",
+    "market_route_hypotheses",
+    "benchmark_accounts",
+    "benchmark_observations",
+    "positioning_versions",
+    "content_system_versions",
+    "account_experiments",
     "evidence_records",
     "content_production_plans",
     "content_assets",

@@ -2,6 +2,7 @@
 
 from .account_context import AccountContextRepository
 from .account_lifecycle import AccountLifecycleRepository
+from .account_strategy import AccountStrategyRepository
 from .article_drafts import ArticleDraftValidator, article_stylebooks
 from .content_assets import ContentAssetRepository
 from .content_policy import ContentProductionPolicy
@@ -14,6 +15,7 @@ from .short_video_signals import ShortVideoSignalRepository
 __all__ = [
     "AccountContextRepository",
     "AccountLifecycleRepository",
+    "AccountStrategyRepository",
     "ArticleDraftValidator",
     "ContentAssetRepository",
     "ContentProductionPolicy",

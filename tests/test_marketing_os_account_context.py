@@ -115,8 +115,9 @@ def test_account_context_projects_existing_product_truth_without_secrets(tmp_pat
     assert context["connected"] is True
     assert context["lifecycle"]["stage"] == "positioning_approved"
     assert context["lifecycle"]["audience_hypothesis"]["segments"][0]["label"] == "想转型的职场人"
-    assert context["account_dna"]["persona"] == "懂业务的 AI 实践者"
-    assert context["account_dna"]["goals"] == ["提供可复现路径"]
+    assert context["lifecycle"]["strategy_alignment"]["positioning_current"] is False
+    assert "persona" not in context["account_dna"]
+    assert context["account_dna"]["goals"] == "稳定获客"
     assert context["actual_audience"]["dimensions"]["age"]["25-34"] == 0.6
 
 
@@ -132,7 +133,7 @@ def test_account_context_is_explicit_when_database_is_not_initialized(tmp_path):
 
     assert result["connected"] is False
     assert result["data_state"] == "database_missing"
-    assert result["lifecycle"]["next_action"] == "draft_audience_hypothesis"
+    assert result["lifecycle"]["next_action"] == "begin_project"
 
 
 def test_native_gateway_reads_same_marketing_store(tmp_path, monkeypatch):
@@ -182,7 +183,8 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
     }
     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
     assert result["lifecycle"]["stage"] == "positioning_approved"
-    assert result["account_dna"]["taboos"] == ["虚构收益"]
+    assert result["lifecycle"]["strategy_alignment"]["positioning_current"] is False
+    assert "taboos" not in result["account_dna"]
 
 
 def test_session_scope_keeps_only_stable_routing_identity_in_prompt(tmp_path):

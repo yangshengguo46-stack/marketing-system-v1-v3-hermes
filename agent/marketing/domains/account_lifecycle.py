@@ -8,16 +8,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.storage import MarketingDomainRepository
 
 
 class AccountLifecycleRepository(MarketingDomainRepository):
     """Own the first account-strategy transitions inside the Hermes runtime."""
-
-    def __init__(self, paths: MarketingDataPaths | None = None):
-        super().__init__(paths)
-        self._ensure_schema()
 
     def begin_project(
         self,
@@ -63,6 +58,11 @@ class AccountLifecycleRepository(MarketingDomainRepository):
         segments: list[Any],
         pains: list[Any] | None = None,
         scenarios: list[Any] | None = None,
+        jobs: list[Any] | None = None,
+        current_alternatives: list[Any] | None = None,
+        trust_barriers: list[Any] | None = None,
+        desired_outcomes: list[Any] | None = None,
+        behavior_signals: list[Any] | None = None,
         exclusions: list[Any] | None = None,
         data_gaps: list[Any] | None = None,
     ) -> dict[str, Any]:
@@ -70,6 +70,19 @@ class AccountLifecycleRepository(MarketingDomainRepository):
             "segments_json": _bounded_list(segments, field="segments", required=True),
             "pains_json": _bounded_list(pains or [], field="pains"),
             "scenarios_json": _bounded_list(scenarios or [], field="scenarios"),
+            "jobs_json": _bounded_list(jobs or [], field="jobs"),
+            "current_alternatives_json": _bounded_list(
+                current_alternatives or [], field="current_alternatives"
+            ),
+            "trust_barriers_json": _bounded_list(
+                trust_barriers or [], field="trust_barriers"
+            ),
+            "desired_outcomes_json": _bounded_list(
+                desired_outcomes or [], field="desired_outcomes"
+            ),
+            "behavior_signals_json": _bounded_list(
+                behavior_signals or [], field="behavior_signals"
+            ),
             "exclusions_json": _bounded_list(exclusions or [], field="exclusions"),
             "data_gaps_json": _bounded_list(data_gaps or [], field="data_gaps"),
         }
@@ -77,6 +90,13 @@ class AccountLifecycleRepository(MarketingDomainRepository):
             _require_active_project(
                 db, user_id=user_id, account_id=account_id, project_id=project_id
             )
+            selected_route = db.execute(
+                """SELECT id FROM market_route_hypotheses
+                WHERE project_id=? AND user_id=? AND account_id=? AND status='selected'""",
+                (project_id, user_id, account_id),
+            ).fetchone()
+            if selected_route is None:
+                raise ValueError("selected market route is required before audience modeling")
             version = int(
                 db.execute(
                     "SELECT COALESCE(MAX(version), 0) + 1 FROM audience_hypotheses WHERE project_id=?",
@@ -87,8 +107,10 @@ class AccountLifecycleRepository(MarketingDomainRepository):
             db.execute(
                 """INSERT INTO audience_hypotheses
                 (id,project_id,user_id,account_id,version,segments_json,pains_json,
-                 scenarios_json,exclusions_json,data_gaps_json,status,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,'draft',?)""",
+                 scenarios_json,jobs_json,current_alternatives_json,trust_barriers_json,
+                 desired_outcomes_json,behavior_signals_json,exclusions_json,data_gaps_json,
+                 status,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?)""",
                 (
                     hypothesis_id,
                     project_id,
@@ -98,6 +120,11 @@ class AccountLifecycleRepository(MarketingDomainRepository):
                     payload["segments_json"],
                     payload["pains_json"],
                     payload["scenarios_json"],
+                    payload["jobs_json"],
+                    payload["current_alternatives_json"],
+                    payload["trust_barriers_json"],
+                    payload["desired_outcomes_json"],
+                    payload["behavior_signals_json"],
                     payload["exclusions_json"],
                     payload["data_gaps_json"],
                     _now(),
@@ -148,7 +175,11 @@ class AccountLifecycleRepository(MarketingDomainRepository):
             )
             db.execute(
                 """UPDATE account_strategy_projects
-                SET stage='audience_hypothesis_ready', updated_at=? WHERE id=?""",
+                SET stage=CASE
+                    WHEN stage IN ('goal_defined','creator_model_ready','market_routes_ready',
+                                   'market_route_selected')
+                    THEN 'audience_hypothesis_ready' ELSE stage END,
+                    updated_at=? WHERE id=?""",
                 (now, project_id),
             )
             confirmed = db.execute(
@@ -156,49 +187,6 @@ class AccountLifecycleRepository(MarketingDomainRepository):
                 (hypothesis_id,),
             ).fetchone()
         return _hypothesis_record(confirmed, operation="confirmed")
-
-    def _ensure_schema(self) -> None:
-        with self._connection() as db:
-            db.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS account_strategy_projects (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    account_id TEXT NOT NULL,
-                    business_goal TEXT NOT NULL,
-                    constraints_json TEXT NOT NULL DEFAULT '{}',
-                    stage TEXT NOT NULL DEFAULT 'goal_defined',
-                    status TEXT NOT NULL DEFAULT 'active',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_strategy_projects_one_active
-                    ON account_strategy_projects(user_id, account_id) WHERE status='active';
-                CREATE INDEX IF NOT EXISTS idx_strategy_projects_scope
-                    ON account_strategy_projects(user_id, account_id, status);
-
-                CREATE TABLE IF NOT EXISTS audience_hypotheses (
-                    id TEXT PRIMARY KEY,
-                    project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
-                    user_id TEXT NOT NULL,
-                    account_id TEXT NOT NULL,
-                    version INTEGER NOT NULL,
-                    segments_json TEXT NOT NULL DEFAULT '[]',
-                    pains_json TEXT NOT NULL DEFAULT '[]',
-                    scenarios_json TEXT NOT NULL DEFAULT '[]',
-                    exclusions_json TEXT NOT NULL DEFAULT '[]',
-                    data_gaps_json TEXT NOT NULL DEFAULT '[]',
-                    status TEXT NOT NULL DEFAULT 'draft',
-                    created_at TEXT NOT NULL,
-                    confirmed_at TEXT,
-                    UNIQUE(project_id, version)
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_audience_one_confirmed
-                    ON audience_hypotheses(project_id) WHERE status='confirmed';
-                CREATE INDEX IF NOT EXISTS idx_audience_scope
-                    ON audience_hypotheses(user_id, account_id, project_id);
-                """
-            )
 
 def _require_active_project(
     db: sqlite3.Connection, *, user_id: str, account_id: str, project_id: str
@@ -226,6 +214,11 @@ def _hypothesis_record(row: sqlite3.Row, *, operation: str) -> dict[str, Any]:
         "segments_json",
         "pains_json",
         "scenarios_json",
+        "jobs_json",
+        "current_alternatives_json",
+        "trust_barriers_json",
+        "desired_outcomes_json",
+        "behavior_signals_json",
         "exclusions_json",
         "data_gaps_json",
     ):

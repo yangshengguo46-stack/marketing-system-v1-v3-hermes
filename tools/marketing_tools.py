@@ -7,6 +7,7 @@ import json
 from agent.marketing.domains import (
     AccountContextRepository,
     AccountLifecycleRepository,
+    AccountStrategyRepository,
     ContentAssetRepository,
     ContentProductionPolicy,
     EvidenceRepository,
@@ -61,10 +62,10 @@ READ_ACCOUNT_CONTEXT_SCHEMA = {
 UPDATE_ACCOUNT_LIFECYCLE_SCHEMA = {
     "name": "marketing_update_account_lifecycle",
     "description": (
-        "Advance the bound account's versioned onboarding lifecycle. Use begin_project after the "
-        "user states a real operating goal; draft_audience_hypothesis to save a reviewable hypothesis; "
-        "and confirm_audience_hypothesis only after the user explicitly accepts that exact draft. "
-        "The account is taken from the current conversation and cannot be overridden."
+        "Build the bound account's versioned operating model through natural conversation: creator "
+        "assets, market-route hypotheses, behavioral audience, evidence-backed benchmark graph, "
+        "positioning, content system and falsifiable experiments. Important transitions require "
+        "explicit confirmation. The account is conversation-bound and cannot be overridden."
     ),
     "parameters": {
         "type": "object",
@@ -73,19 +74,67 @@ UPDATE_ACCOUNT_LIFECYCLE_SCHEMA = {
                 "type": "string",
                 "enum": [
                     "begin_project",
+                    "draft_creator_profile",
+                    "confirm_creator_profile",
+                    "draft_market_route",
+                    "select_market_route",
                     "draft_audience_hypothesis",
                     "confirm_audience_hypothesis",
+                    "add_benchmark_account",
+                    "decide_benchmark_account",
+                    "add_benchmark_observation",
+                    "draft_positioning",
+                    "approve_positioning",
+                    "draft_content_system",
+                    "approve_content_system",
+                    "propose_experiment",
+                    "approve_experiment",
                 ],
             },
             "business_goal": {"type": "string"},
             "constraints": {"type": "object"},
             "project_id": {"type": "string"},
+            "profile_id": {"type": "string"},
+            "profile": {"type": "object"},
+            "source_refs": {"type": "array", "items": {"type": "string"}},
+            "route_id": {"type": "string"},
+            "route": {"type": "object"},
+            "evidence_refs": {"type": "array", "items": {"type": "string"}},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             "hypothesis_id": {"type": "string"},
             "segments": {"type": "array", "items": {}},
             "pains": {"type": "array", "items": {}},
             "scenarios": {"type": "array", "items": {}},
+            "jobs": {"type": "array", "items": {}},
+            "current_alternatives": {"type": "array", "items": {}},
+            "trust_barriers": {"type": "array", "items": {}},
+            "desired_outcomes": {"type": "array", "items": {}},
+            "behavior_signals": {"type": "array", "items": {}},
             "exclusions": {"type": "array", "items": {}},
             "data_gaps": {"type": "array", "items": {}},
+            "benchmark_id": {"type": "string"},
+            "platform": {"type": "string"},
+            "account_handle": {"type": "string"},
+            "account_name": {"type": "string"},
+            "platform_account_id": {"type": "string"},
+            "profile_url": {"type": "string"},
+            "role": {"type": "string"},
+            "selection_reason": {"type": "string"},
+            "match_dimensions": {"type": "object"},
+            "decision": {"type": "string"},
+            "dimension": {"type": "string"},
+            "value": {"type": "object"},
+            "positioning_id": {"type": "string"},
+            "positioning": {"type": "object"},
+            "accept_data_gaps": {"type": "boolean"},
+            "system_id": {"type": "string"},
+            "content_system": {"type": "object"},
+            "experiment_id": {"type": "string"},
+            "hypothesis": {"type": "string"},
+            "variable": {"type": "object"},
+            "variants": {"type": "array", "items": {"type": "object"}},
+            "prediction": {"type": "object"},
+            "success_criteria": {"type": "object"},
             "confirmed_by_user": {
                 "type": "boolean",
                 "description": (
@@ -185,15 +234,19 @@ READ_SOUND_TRENDS_SCHEMA = {
 READ_KNOWLEDGE_SCHEMA = {
     "name": "marketing_read_knowledge",
     "description": (
-        "Read governed platform, account, or content knowledge. Platform knowledge contains current "
-        "rules and operating guidance; account knowledge contains only accepted receipt-backed learning; "
+        "Read governed platform, market, account, or content knowledge. Platform knowledge contains "
+        "current rules and operating guidance; market knowledge contains category, audience and "
+        "competitive patterns; account knowledge contains only accepted receipt-backed learning; "
         "content knowledge contains attention, psychology, sociology, trust and propagation principles. "
         "User statements and model opinions are never knowledge truth."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "knowledge_base": {"type": "string", "enum": ["platform", "account", "content"]},
+            "knowledge_base": {
+                "type": "string",
+                "enum": ["platform", "market", "account", "content"],
+            },
             "platform": {"type": "string"},
             "content_kind": {"type": "string"},
             "topics": {"type": "array", "items": {"type": "string"}},
@@ -402,6 +455,7 @@ def _update_account_lifecycle(args: dict, **kwargs) -> str:
         require_bound=True,
     )
     repository = AccountLifecycleRepository()
+    strategy = AccountStrategyRepository()
     action = str(args.get("action") or "")
     if action == "begin_project":
         result = repository.begin_project(
@@ -409,6 +463,39 @@ def _update_account_lifecycle(args: dict, **kwargs) -> str:
             account_id=account_id,
             business_goal=str(args.get("business_goal") or ""),
             constraints=args.get("constraints") or {},
+        )
+    elif action == "draft_creator_profile":
+        result = strategy.draft_creator_profile(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            profile=args.get("profile") or {},
+            source_refs=args.get("source_refs") or [],
+        )
+    elif action == "confirm_creator_profile":
+        result = strategy.confirm_creator_profile(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            profile_id=str(args.get("profile_id") or ""),
+            confirmed_by_user=args.get("confirmed_by_user") is True,
+        )
+    elif action == "draft_market_route":
+        result = strategy.draft_market_route(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            route=args.get("route") or {},
+            evidence_refs=args.get("evidence_refs") or [],
+            confidence=float(args.get("confidence") or 0.3),
+        )
+    elif action == "select_market_route":
+        result = strategy.select_market_route(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            route_id=str(args.get("route_id") or ""),
+            confirmed_by_user=args.get("confirmed_by_user") is True,
         )
     elif action == "draft_audience_hypothesis":
         result = repository.draft_audience_hypothesis(
@@ -418,6 +505,11 @@ def _update_account_lifecycle(args: dict, **kwargs) -> str:
             segments=args.get("segments"),
             pains=args.get("pains"),
             scenarios=args.get("scenarios"),
+            jobs=args.get("jobs"),
+            current_alternatives=args.get("current_alternatives"),
+            trust_barriers=args.get("trust_barriers"),
+            desired_outcomes=args.get("desired_outcomes"),
+            behavior_signals=args.get("behavior_signals"),
             exclusions=args.get("exclusions"),
             data_gaps=args.get("data_gaps"),
         )
@@ -427,6 +519,91 @@ def _update_account_lifecycle(args: dict, **kwargs) -> str:
             account_id=account_id,
             project_id=str(args.get("project_id") or ""),
             hypothesis_id=str(args.get("hypothesis_id") or ""),
+            confirmed_by_user=args.get("confirmed_by_user") is True,
+        )
+    elif action == "add_benchmark_account":
+        result = strategy.add_benchmark_account(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            platform=str(args.get("platform") or ""),
+            account_handle=str(args.get("account_handle") or ""),
+            role=str(args.get("role") or ""),
+            selection_reason=str(args.get("selection_reason") or ""),
+            match_dimensions=args.get("match_dimensions") or {},
+            evidence_refs=args.get("evidence_refs") or [],
+            account_name=str(args.get("account_name") or ""),
+            platform_account_id=str(args.get("platform_account_id") or ""),
+            profile_url=str(args.get("profile_url") or ""),
+        )
+    elif action == "decide_benchmark_account":
+        result = strategy.decide_benchmark_account(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            benchmark_id=str(args.get("benchmark_id") or ""),
+            decision=str(args.get("decision") or ""),
+            confirmed_by_user=args.get("confirmed_by_user") is True,
+        )
+    elif action == "add_benchmark_observation":
+        result = strategy.add_benchmark_observation(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            benchmark_id=str(args.get("benchmark_id") or ""),
+            dimension=str(args.get("dimension") or ""),
+            value=args.get("value") or {},
+            evidence_refs=args.get("evidence_refs") or [],
+            confidence=float(args.get("confidence") or 0),
+        )
+    elif action == "draft_positioning":
+        result = strategy.draft_positioning(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            positioning=args.get("positioning") or {},
+        )
+    elif action == "approve_positioning":
+        result = strategy.approve_positioning(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            positioning_id=str(args.get("positioning_id") or ""),
+            confirmed_by_user=args.get("confirmed_by_user") is True,
+            accept_data_gaps=args.get("accept_data_gaps") is True,
+        )
+    elif action == "draft_content_system":
+        result = strategy.draft_content_system(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            system=args.get("content_system") or {},
+        )
+    elif action == "approve_content_system":
+        result = strategy.approve_content_system(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            system_id=str(args.get("system_id") or ""),
+            confirmed_by_user=args.get("confirmed_by_user") is True,
+        )
+    elif action == "propose_experiment":
+        result = strategy.propose_experiment(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            hypothesis=str(args.get("hypothesis") or ""),
+            variable=args.get("variable") or {},
+            variants=args.get("variants") or [],
+            prediction=args.get("prediction") or {},
+            success_criteria=args.get("success_criteria") or {},
+        )
+    elif action == "approve_experiment":
+        result = strategy.approve_experiment(
+            user_id=user_id,
+            account_id=account_id,
+            project_id=str(args.get("project_id") or ""),
+            experiment_id=str(args.get("experiment_id") or ""),
             confirmed_by_user=args.get("confirmed_by_user") is True,
         )
     else:
@@ -911,7 +1088,9 @@ registry.register(
     toolset="marketing",
     schema=READ_KNOWLEDGE_SCHEMA,
     handler=_read_knowledge,
-    description="Read governed platform, account, or content knowledge without allowing model writes.",
+    description=(
+        "Read governed platform, market, account, or content knowledge without allowing model writes."
+    ),
     emoji="📚",
 )
 

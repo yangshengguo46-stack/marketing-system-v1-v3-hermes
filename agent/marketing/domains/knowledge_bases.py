@@ -1,4 +1,4 @@
-"""Three governed knowledge bases: platform, account, and content."""
+"""Four governed knowledge bases: platform, market, account, and content."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from agent.marketing.domains.evidence import EvidenceRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
 
 
-KNOWLEDGE_BASES = {"platform", "account", "content"}
+KNOWLEDGE_BASES = {"platform", "market", "account", "content"}
 TRUSTED_SOURCE_KINDS = {
     "builtin_curated",
     "verified_evidence",
@@ -23,7 +23,7 @@ TRUSTED_SOURCE_KINDS = {
     "signed_aggregate",
 }
 FORBIDDEN_SOURCE_KINDS = {"user", "agent", "conversation", "model_inference"}
-BOOTSTRAP_MARKER = "marketing_three_knowledge_bases_20260712_v1"
+BOOTSTRAP_MARKER = "marketing_four_knowledge_bases_20260712_v1"
 
 
 CONTENT_PRINCIPLES: tuple[dict[str, Any], ...] = (
@@ -228,7 +228,12 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
 
     def install_signed_pack(self, pack: dict[str, Any]) -> dict[str, Any]:
         knowledge_type = str(pack.get("knowledge_type") or "content_prior")
-        knowledge_base = "platform" if knowledge_type == "platform_rule" else "content"
+        if knowledge_type == "platform_rule":
+            knowledge_base = "platform"
+        elif knowledge_type in {"market_pattern", "category_pattern", "category_benchmark"}:
+            knowledge_base = "market"
+        else:
+            knowledge_base = "content"
         sample_size = max(1, int(pack.get("sample_size") or 1))
         confidence = min(0.9, 0.5 + math.log10(sample_size) * 0.1)
         return self._upsert(
@@ -309,6 +314,12 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
             )
         return {
             "platform": platform_entries,
+            "market": self.retrieve(
+                knowledge_base="market",
+                platform=platforms[0] if len(platforms) == 1 else None,
+                content_kind=content_kind,
+                limit=40,
+            )["entries"],
             "account": self.retrieve(
                 knowledge_base="account",
                 user_id=user_id,
@@ -324,6 +335,7 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
             "authority_order": [
                 "local_receipt_backed_account_knowledge",
                 "verified_current_platform_knowledge",
+                "verified_market_and_category_knowledge",
                 "curated_or_signed_content_prior",
                 "user_preference_memory_is_not_knowledge_truth",
             ],
@@ -448,7 +460,7 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
 def _base(value: Any) -> str:
     base = str(value or "").strip().lower()
     if base not in KNOWLEDGE_BASES:
-        raise ValueError("knowledge_base must be platform, account, or content")
+        raise ValueError("knowledge_base must be platform, market, account, or content")
     return base
 
 

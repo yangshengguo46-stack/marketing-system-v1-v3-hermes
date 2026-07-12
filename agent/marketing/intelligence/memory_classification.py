@@ -7,7 +7,7 @@ Inspired by Cheat on Content's knowledge base structure:
            "title_patterns", "audience_age_distribution")
 
 User/model statements classified here remain preferences, events or pending
-interpretations.  They never enter the governed platform/account/content
+interpretations.  They never enter the governed platform/market/account/content
 knowledge bases without the evidence and receipt gates owned by
 ``KnowledgeBaseRepository``.
 
