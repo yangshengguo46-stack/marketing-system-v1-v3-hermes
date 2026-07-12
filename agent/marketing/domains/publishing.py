@@ -96,6 +96,11 @@ class PublishingRepository(MarketingDomainRepository):
                 account_id=account_id,
             )
             decision = preflight.get("decision") or {}
+            if decision.get("publish_eligible") is not True:
+                raise ValueError(
+                    "latest preflight is exploratory only; current positioning, content system "
+                    "and a connected account are required before publishing review"
+                )
             product_decision = decision.get("preflight_decision") or decision
             if product_decision.get("go") is not True:
                 raise ValueError("latest preflight does not allow publishing review")

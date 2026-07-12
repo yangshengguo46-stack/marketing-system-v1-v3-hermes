@@ -698,6 +698,7 @@ def _plan_content_production(args: dict, **kwargs) -> str:
                 "formula_version": preflight["formula_version"],
                 "scores": preflight["scores"],
                 "decision": preflight["preflight_decision"],
+                "publish_eligible": preflight["decision"]["publish_eligible"],
                 "influence_score": preflight["influence_score"],
             },
         },

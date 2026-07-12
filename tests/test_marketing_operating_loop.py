@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import (
     ContentAssetRepository,
@@ -38,7 +40,7 @@ def _paths(tmp_path):
     )
 
 
-def _saved_plan(tmp_path):
+def _saved_plan(tmp_path, *, strategy_ready=True):
     paths = _paths(tmp_path)
     plan = ContentProductionPolicy().plan(
         objective="写一篇有证据的 AI 行业分析",
@@ -46,7 +48,22 @@ def _saved_plan(tmp_path):
         platforms=["zhihu"],
         audience="希望提高工作效率的职场人",
         evidence_refs=["evidence_demo"],
-        account_context={"account_id": "acct-1", "connected": True},
+        account_context=(
+            {
+                "account_id": "acct-1",
+                "connected": True,
+                "lifecycle": {
+                    "positioning": {"promise": "可复现工作流"},
+                    "content_system": {"id": "system-test"},
+                    "strategy_alignment": {
+                        "positioning_current": True,
+                        "content_system_current": True,
+                    },
+                },
+            }
+            if strategy_ready
+            else {"account_id": "acct-1", "connected": True}
+        ),
     )
     saved = ContentAssetRepository(paths).save_production_plan(
         user_id="default", account_id="acct-1", plan=plan
@@ -54,8 +71,8 @@ def _saved_plan(tmp_path):
     return paths, saved
 
 
-def _review_ready_asset(tmp_path):
-    paths, plan = _saved_plan(tmp_path)
+def _review_ready_asset(tmp_path, *, strategy_ready=True):
+    paths, plan = _saved_plan(tmp_path, strategy_ready=strategy_ready)
     loop = OperatingLoopRepository(paths)
     preflight = create_content_production_preflight(
         loop,
@@ -93,6 +110,22 @@ def _review_ready_asset(tmp_path):
             ),
         )
     return paths, plan, preflight, asset_id
+
+
+def test_exploratory_draft_cannot_enter_publish_approval(tmp_path):
+    paths, _plan, preflight, asset_id = _review_ready_asset(
+        tmp_path, strategy_ready=False
+    )
+
+    assert preflight["decision"]["publish_eligible"] is False
+    with pytest.raises(ValueError, match="exploratory only"):
+        PublishingRepository(paths).prepare_action(
+            user_id="default",
+            account_id="acct-1",
+            asset_id=asset_id,
+            platform="zhihu",
+            provider="playwright_mcp",
+        )
 
 
 def test_influence_formula_keeps_missing_dimensions_explicit():

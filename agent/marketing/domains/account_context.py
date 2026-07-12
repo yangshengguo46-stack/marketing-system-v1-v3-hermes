@@ -110,7 +110,12 @@ class AccountContextRepository:
                 "creator_profile": operating_model["creator_profile"],
                 "market_route": operating_model["market_route"],
                 "audience_hypothesis": audience,
+                "positioning_id": positioning_record.get("id") if positioning_record else None,
                 "positioning": positioning,
+                "content_system_id": (
+                    operating_model["content_system"].get("id")
+                    if operating_model["content_system"] else None
+                ),
                 "content_system": operating_model["content_system"],
                 "strategy_alignment": operating_model["strategy_alignment"],
                 "benchmark_readiness": operating_model["benchmark_readiness"],
@@ -142,7 +147,9 @@ def _empty_lifecycle() -> dict[str, Any]:
         "creator_profile": None,
         "market_route": None,
         "audience_hypothesis": None,
+        "positioning_id": None,
         "positioning": None,
+        "content_system_id": None,
         "content_system": None,
         "strategy_alignment": None,
         "benchmark_readiness": None,

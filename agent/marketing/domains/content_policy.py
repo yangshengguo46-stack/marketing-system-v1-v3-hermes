@@ -149,16 +149,35 @@ class ContentProductionPolicy:
 
         context = account_context or {}
         lifecycle = context.get("lifecycle") if isinstance(context.get("lifecycle"), dict) else {}
+        alignment = (
+            lifecycle.get("strategy_alignment")
+            if isinstance(lifecycle.get("strategy_alignment"), dict)
+            else {}
+        )
         account_ready = bool(
             str(audience or "").strip()
             or lifecycle.get("audience_hypothesis")
             or (context.get("account_dna") or {}).get("audience_summary")
+        )
+        strategy_ready = bool(
+            lifecycle.get("positioning")
+            and lifecycle.get("content_system")
+            and alignment.get("positioning_current") is True
+            and alignment.get("content_system_current") is True
         )
         gates = [
             {
                 "id": "audience",
                 "status": "ready" if account_ready else "needs_input",
                 "rule": "有明确目标受众、真实受众证据或用户确认的受众假设。",
+            },
+            {
+                "id": "strategy",
+                "status": "ready" if strategy_ready else "exploration_only",
+                "rule": (
+                    "正式经营内容必须绑定当前版本的已批准定位与内容系统；"
+                    "缺失或过期时只允许可逆探索草稿。"
+                ),
             },
             {
                 "id": "evidence",
@@ -178,6 +197,8 @@ class ContentProductionPolicy:
         ]
         if not account_ready:
             next_action = "通过自然对话补齐目标用户、内容承诺和明确禁区"
+        elif not strategy_ready:
+            next_action = "先完成或修订账号定位与内容系统；当前仅生成探索草稿"
         elif not evidence:
             next_action = "检索并核对支撑本选题的证据，再开始写父稿"
         else:
@@ -195,7 +216,10 @@ class ContentProductionPolicy:
                 "account_id": context.get("account_id"),
                 "connected": context.get("connected", False),
                 "lifecycle_stage": lifecycle.get("stage", "not_started"),
+                "positioning_id": lifecycle.get("positioning_id"),
+                "content_system_id": lifecycle.get("content_system_id"),
             },
+            "operating_mode": "strategy_aligned" if strategy_ready else "exploratory_draft",
             "capabilities": {
                 name: SHARED_CAPABILITIES[name] for name in config["capabilities"]
             },

@@ -196,13 +196,15 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     assert planned["account_scope"]["account_id"] == "acct-1"
     assert planned["checkpoint_status"] == "planned"
     assert planned["preflight"]["id"].startswith("preflight_")
-    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.4"
+    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.5"
     assert planned["preflight"]["scores"]["knowledge_support"] > 0
     assert planned["preflight"]["scores"]["knowledge_confidence_factor"] <= 1
+    assert planned["preflight"]["publish_eligible"] is False
+    assert planned["operating_mode"] == "exploratory_draft"
     assert knowledge["total"] >= 8
     assert planned["preflight"]["decision"]["version"] == "preflight-decision-v0.1"
     assert planned["preflight"]["influence_score"]["version"] == "influenceos-score-v0.1"
-    assert planned["recommended_next_action"].startswith("使用已固化")
+    assert planned["recommended_next_action"].startswith("先完成或修订账号定位")
     assert planned["platform_stylebooks"]["wechat_official"]["guidance_status"].startswith(
         "operational_guidance"
     )
