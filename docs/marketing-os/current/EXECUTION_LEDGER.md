@@ -176,7 +176,9 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - 多次成功并有失败恢复的流程进入 Skill candidate。
 - 权重候选必须有至少三个支持样本并通过历史回放。
 - 单次 Retro 只生成 pending candidate；显式接受后才允许投影 Account KB。自动接受、自动改永久权重和把用户陈述写成账号真相仍被禁止。
-- Memory/strategy/Skill 的最终原生投影与用户治理界面仍待后续纵切。
+- 已打通 `memory → Account KB` 与 `weight → 历史回放 → pending strategy → 二次确认 → 版本化 account influence calibration`；校准按账号隔离、幂等、可被后续 Preflight 与指标复盘读取，单次结果不能绕过两层门禁。
+- Gateway 已提供账号作用域的候选列表与显式决策 RPC；Electron 后续只展示候选并收集 `confirmed + reason`，不拥有学习或策略状态。
+- 用户稳定偏好继续由 Hermes 原生 USER/MEMORY owner 管理，不把账号发布结果污染成全局个人记忆；重复成功且包含失败恢复证据的 Skill candidate 原生投影和治理 UI 仍待后续纵切。
 
 ### LOOP-05 真人闭环
 

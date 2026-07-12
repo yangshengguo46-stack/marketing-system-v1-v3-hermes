@@ -12965,6 +12965,85 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, {"contribution": contribution})
 
 
+@method("marketing.learning.candidates.list")
+def _(rid, params: dict) -> dict:
+    """List governed learning waiting for a user decision in one account scope."""
+    from agent.marketing.intelligence import OperatingLoopRepository
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    if not account_id:
+        return _err(rid, -32602, "account_id is required")
+    try:
+        candidates = OperatingLoopRepository().list_learning_candidates(
+            candidate_type=str(params.get("candidate_type") or "").strip() or None,
+            status=str(params.get("status") or "pending").strip() or None,
+            user_id=str(params.get("user_id") or "default"),
+            account_id=account_id,
+            platform=str(params.get("platform") or "").strip() or None,
+            limit=int(params.get("limit") or 100),
+        )
+    except (TypeError, ValueError) as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"candidates": candidates, "total": len(candidates)})
+
+
+@method("marketing.learning.candidate.decide")
+def _(rid, params: dict) -> dict:
+    """Apply one explicit candidate decision through the native domain owner."""
+    from agent.marketing.intelligence import OperatingLoopRepository
+    from agent.marketing.intelligence.learning_governance import (
+        decide_weight_candidate_with_replay,
+    )
+    from agent.marketing.learning import AccountLearningGovernance
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit user confirmation is required")
+    candidate_id = str(params.get("candidate_id") or "").strip()
+    user_id = str(params.get("user_id") or "default")
+    account_id = str(params.get("account_id") or "").strip()
+    decision = str(params.get("decision") or "").strip()
+    reason = str(params.get("reason") or "").strip()
+    if not candidate_id or not account_id or decision not in {"accepted", "rejected"} or not reason:
+        return _err(
+            rid,
+            -32602,
+            "account_id, candidate_id, accepted/rejected decision and reason are required",
+        )
+    store = OperatingLoopRepository()
+    try:
+        current = store.get_learning_candidate(candidate_id)
+        if current.get("user_id") != user_id or current.get("account_id") != account_id:
+            raise KeyError("learning candidate not found in account scope")
+        if current.get("candidate_type") == "weight":
+            result = decide_weight_candidate_with_replay(
+                store,
+                candidate_id,
+                decision=decision,
+                reason=reason,
+            )
+        elif decision == "accepted":
+            result = AccountLearningGovernance().accept_and_project(
+                candidate_id,
+                reason=reason,
+                topic=str(params.get("topic") or "").strip() or None,
+            )
+        else:
+            result = {
+                "candidate": store.decide_learning_candidate(
+                    candidate_id,
+                    status="rejected",
+                    reason=reason,
+                )
+            }
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
+
+
 @method("marketing.accounts.register")
 def _(rid, params: dict) -> dict:
     """Create a pending account in Hermes before the BrowserContext login flow."""
