@@ -14,6 +14,15 @@ from agent import tts_registry
 from agent.tts_provider import TTSProvider
 from hermes_cli import tools_config
 
+SHIPPED_TTS_PLUGIN = "volcengine-speech"
+
+
+def _test_plugin_rows() -> list[dict]:
+    return [
+        row for row in tools_config._plugin_tts_providers()
+        if row.get("tts_plugin_name") != SHIPPED_TTS_PLUGIN
+    ]
+
 
 class _FakeTTSProvider(TTSProvider):
     def __init__(self, name: str, schema: dict | None = None):
@@ -43,8 +52,9 @@ def _reset_registry():
 class TestPluginTTSProviders:
     """``_plugin_tts_providers()`` returns picker-row dicts."""
 
-    def test_empty_when_no_plugins(self):
-        assert tools_config._plugin_tts_providers() == []
+    def test_shipped_provider_is_the_only_default_plugin(self):
+        rows = tools_config._plugin_tts_providers()
+        assert [row["tts_plugin_name"] for row in rows] == [SHIPPED_TTS_PLUGIN]
 
     def test_returns_row_for_registered_plugin(self):
         tts_registry.register_provider(
@@ -61,7 +71,7 @@ class TestPluginTTSProviders:
                 },
             )
         )
-        rows = tools_config._plugin_tts_providers()
+        rows = _test_plugin_rows()
         assert len(rows) == 1
         row = rows[0]
         assert row["name"] == "Cartesia"
@@ -85,7 +95,7 @@ class TestPluginTTSProviders:
         provider = _FakeTTSProvider(name="edge")
         tts_registry._providers["edge"] = provider  # type: ignore[index]
         try:
-            rows = tools_config._plugin_tts_providers()
+            rows = _test_plugin_rows()
             assert rows == [], (
                 "Picker must filter built-in name shadows even when the "
                 "registry has been bypassed."
@@ -117,14 +127,14 @@ class TestPluginTTSProviders:
 
         tts_registry.register_provider(_ExplodingSchema(name="exploding"))
         tts_registry.register_provider(_FakeTTSProvider(name="working"))
-        rows = tools_config._plugin_tts_providers()
+        rows = _test_plugin_rows()
         assert [r["tts_plugin_name"] for r in rows] == ["working"]
 
     def test_minimal_schema_uses_display_name(self):
         """A provider with no setup_schema override gets a row built from
         ``display_name`` and ``name`` only."""
         tts_registry.register_provider(_FakeTTSProvider(name="minimal"))
-        rows = tools_config._plugin_tts_providers()
+        rows = _test_plugin_rows()
         assert len(rows) == 1
         assert rows[0]["name"] == "Minimal"  # display_name default
         assert rows[0]["tts_provider"] == "minimal"
@@ -162,7 +172,10 @@ class TestVisibleProvidersInjectsTTSPlugins:
         assert "Cartesia" in names
 
         # Plugin row has tts_provider key for write-path compat
-        plugin_rows = [r for r in visible if r.get("tts_plugin_name")]
+        plugin_rows = [
+            row for row in visible
+            if row.get("tts_plugin_name") not in {None, SHIPPED_TTS_PLUGIN}
+        ]
         assert len(plugin_rows) == 1
         assert plugin_rows[0]["tts_provider"] == "cartesia"
 
@@ -176,12 +189,13 @@ class TestVisibleProvidersInjectsTTSPlugins:
         names = [row.get("name") for row in visible]
         assert "Cartesia" not in names
 
-    def test_tts_category_without_plugins_only_hardcoded(self):
-        """No plugins → picker shows exactly the hardcoded rows."""
+    def test_tts_category_without_test_plugins_includes_shipped_provider(self):
         tts_cat = tools_config.TOOL_CATEGORIES["tts"]
         visible = tools_config._visible_providers(tts_cat, config={})
         names = [row.get("name") for row in visible]
-        # No row has the plugin marker
-        assert all(not row.get("tts_plugin_name") for row in visible)
+        plugin_names = {
+            row.get("tts_plugin_name") for row in visible if row.get("tts_plugin_name")
+        }
+        assert plugin_names == {SHIPPED_TTS_PLUGIN}
         # Hardcoded rows still present (sample one of the always-visible ones)
         assert "Microsoft Edge TTS" in names

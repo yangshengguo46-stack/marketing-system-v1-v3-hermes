@@ -1,0 +1,7 @@
+name: volcengine-speech
+version: 1.0.0
+description: "Volcengine Doubao Speech V3 text-to-speech provider using the new-console API Key flow."
+author: MarketingOS
+kind: backend
+requires_env:
+  - VOLCENGINE_SPEECH_API_KEY
