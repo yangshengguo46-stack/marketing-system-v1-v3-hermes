@@ -25,7 +25,11 @@ import {
   setMarketingAccounts
 } from '@/store/marketing'
 
-import { AccountConnectDialog, MarketingPlatformAvatar } from './account-connect-dialog'
+import {
+  AccountConnectDialog,
+  buildOwnedAccountAnalysisPrompt,
+  MarketingPlatformAvatar
+} from './account-connect-dialog'
 
 interface SurfaceProps {
   onNewChat: (prefill?: string) => void
@@ -263,9 +267,7 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
                     onClick={() => {
                       if (account.auth_state === 'authenticated') {
                         selectMarketingAccount(account.id)
-                        onNewChat(
-                          `请进入账号 ${account.id} 的经营上下文，先汇总账号现状、受众、定位和今天最值得推进的任务。`
-                        )
+                        onNewChat(buildOwnedAccountAnalysisPrompt(account))
                       } else {
                         setResumeAccount(account)
                         setConnectOpen(true)
@@ -274,15 +276,25 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
                     variant={selectedId === account.id ? 'default' : 'outline'}
                   >
                     {account.auth_state === 'authenticated'
-                      ? selectedId === account.id
-                        ? '进入当前账号'
-                        : '进入经营'
+                      ? account.platform === 'wechat_official'
+                        ? selectedId === account.id
+                          ? '同步文章并评分'
+                          : '诊断公众号'
+                        : selectedId === account.id
+                          ? '进入当前账号'
+                          : '进入经营'
                       : '继续登录'}
                   </Button>
                 </div>
                 <div className="mt-5 grid grid-cols-2 gap-3 border-y border-(--ui-stroke-tertiary) py-4 sm:grid-cols-4">
-                  <AccountMetric label="粉丝" value={accountMetric(account.stats, ['followers', 'fan_count', 'fans'])} />
-                  <AccountMetric label="浏览" value={accountMetric(account.stats, ['views', 'play_count', 'total_views'])} />
+                  <AccountMetric
+                    label="粉丝"
+                    value={accountMetric(account.stats, ['followers', 'fan_count', 'fans'])}
+                  />
+                  <AccountMetric
+                    label="浏览"
+                    value={accountMetric(account.stats, ['views', 'play_count', 'total_views'])}
+                  />
                   <AccountMetric
                     label="互动"
                     value={accountMetric(account.stats, [
@@ -314,7 +326,8 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
                         size="sm"
                         variant="ghost"
                       >
-                        <RefreshCw className="mr-1.5 size-3.5" />继续验证
+                        <RefreshCw className="mr-1.5 size-3.5" />
+                        继续验证
                       </Button>
                     ) : (
                       <Button
@@ -348,6 +361,10 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
       </section>
       <AccountConnectDialog
         onAccountChanged={handleChanged}
+        onAnalyzeAccount={account => {
+          selectMarketingAccount(account.id)
+          onNewChat(buildOwnedAccountAnalysisPrompt(account))
+        }}
         onOpenChange={setConnectOpen}
         open={connectOpen}
         platforms={platforms}
@@ -442,7 +459,11 @@ function contentLane(asset: AssetSummary): 'article' | 'faceless' | 'unknown' {
     .map(value => (value || '').toLowerCase())
     .filter(Boolean)
 
-  if (values.some(value => ['article', 'article_soft', 'multi_article', 'wechat_article', 'zhihu_article'].includes(value))) {
+  if (
+    values.some(value =>
+      ['article', 'article_soft', 'multi_article', 'wechat_article', 'zhihu_article'].includes(value)
+    )
+  ) {
     return 'article'
   }
 
@@ -465,7 +486,9 @@ function platformLabel(platform?: string): string {
       xiaohongshu: '小红书',
       youtube: 'YouTube',
       zhihu: '知乎'
-    }[platform || ''] || platform || '内容平台'
+    }[platform || ''] ||
+    platform ||
+    '内容平台'
   )
 }
 

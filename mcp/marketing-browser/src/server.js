@@ -12,9 +12,11 @@ import {
 import { resolveBrowserExecutable } from './browser-runtime.js'
 import { installAccountAuthTool } from './account-auth.js'
 import { installShortVideoSignalTool } from './short-video-signals.js'
+import { installWechatOfficialPortfolioTool } from './wechat-official.js'
 
 installAccountAuthTool()
 installShortVideoSignalTool()
+installWechatOfficialPortfolioTool()
 
 if (process.argv.includes('--purge-profile')) {
   const lease = parseAccountLease()

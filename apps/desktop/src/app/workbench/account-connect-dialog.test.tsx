@@ -84,4 +84,50 @@ describe('AccountConnectDialog', () => {
     ])
     await waitFor(() => expect(changed.at(-1)?.auth_state).toBe('authenticated'))
   })
+
+  it('puts WeChat Official Account first and starts evidence-backed diagnosis after login', async () => {
+    const analyze = vi.fn()
+
+    const requestGateway = async <T,>(method: string): Promise<T> => {
+      const account = {
+        auth_state: method === 'marketing.account.login.verify' ? 'authenticated' : 'unauthenticated',
+        id: 'acct-wechat',
+        label: '微信公众号账号',
+        platform: 'wechat_official',
+        status: method === 'marketing.account.login.verify' ? 'active' : 'pending'
+      }
+
+      if (method === 'marketing.accounts.register') {
+        return { account } as T
+      }
+
+      if (method === 'marketing.account.login.start') {
+        return { account, browser_owner: 'marketing-browser-mcp', login_state: 'waiting_for_user' } as T
+      }
+
+      if (method === 'marketing.account.login.verify') {
+        return { account, verified: true } as T
+      }
+
+      throw new Error(`unexpected method: ${method}`)
+    }
+
+    render(
+      <AccountConnectDialog
+        onAccountChanged={() => undefined}
+        onAnalyzeAccount={analyze}
+        onOpenChange={() => undefined}
+        open
+        platforms={platforms}
+        requestGateway={requestGateway}
+      />
+    )
+
+    const choices = screen.getAllByRole('button')
+    expect(choices[0].textContent).toContain('微信公众号')
+    fireEvent.click(screen.getByRole('button', { name: /微信公众号/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '我已完成，立即检查' }))
+    fireEvent.click(await screen.findByRole('button', { name: '同步文章并评分' }))
+    expect(analyze).toHaveBeenCalledWith(expect.objectContaining({ id: 'acct-wechat' }))
+  })
 })

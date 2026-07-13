@@ -170,6 +170,7 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
     assert names == {
         "marketing_read_accounts",
         "marketing_read_account_context",
+        "marketing_read_account_portfolio",
         "marketing_update_account_lifecycle",
         "marketing_plan_content_production",
         "marketing_read_evidence_pack",

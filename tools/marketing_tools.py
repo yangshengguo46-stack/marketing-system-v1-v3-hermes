@@ -7,6 +7,7 @@ import json
 from agent.marketing.domains import (
     AccountContextRepository,
     AccountLifecycleRepository,
+    AccountPortfolioRepository,
     AccountStrategyRepository,
     ContentAssetRepository,
     ContentProductionPolicy,
@@ -236,6 +237,18 @@ READ_SOUND_TRENDS_SCHEMA = {
         },
         "required": ["platform"],
     },
+}
+
+READ_ACCOUNT_PORTFOLIO_SCHEMA = {
+    "name": "marketing_read_account_portfolio",
+    "description": (
+        "Read the latest verified owned-content portfolio and transparent execution baseline for "
+        "the account bound to this conversation. For a WeChat Official Account, call "
+        "browser_collect_wechat_official_portfolio first to refresh its published articles. "
+        "Separate observed facts, qualitative interpretation and recommendations; missing response "
+        "metrics are data gaps and must not be invented."
+    ),
+    "parameters": {"type": "object", "properties": {}, "required": []},
 }
 
 READ_KNOWLEDGE_SCHEMA = {
@@ -787,6 +800,20 @@ def _read_sound_trends(args: dict, **kwargs) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def _read_account_portfolio(_args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = AccountPortfolioRepository().latest(
+        user_id=user_id,
+        account_id=account_id,
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 def _read_knowledge(args: dict, **kwargs) -> str:
     user_id, account_id = enforce_tool_account_scope(
         {},
@@ -1112,6 +1139,15 @@ registry.register(
     handler=_read_sound_trends,
     description="Read evidence-backed short-video sound momentum for the current account.",
     emoji="🎵",
+)
+
+registry.register(
+    name="marketing_read_account_portfolio",
+    toolset="marketing",
+    schema=READ_ACCOUNT_PORTFOLIO_SCHEMA,
+    handler=_read_account_portfolio,
+    description="Read evidence-backed owned work and the latest account execution baseline.",
+    emoji="📝",
 )
 
 registry.register(

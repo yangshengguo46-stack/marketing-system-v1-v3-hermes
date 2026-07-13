@@ -26,7 +26,11 @@ import {
 } from '@/store/marketing'
 import { $gatewayState } from '@/store/session'
 
-import { AccountConnectDialog, MarketingPlatformAvatar } from './account-connect-dialog'
+import {
+  AccountConnectDialog,
+  buildOwnedAccountAnalysisPrompt,
+  MarketingPlatformAvatar
+} from './account-connect-dialog'
 
 interface MarketingAccountsSummary {
   accounts: MarketingAccountSummary[]
@@ -460,6 +464,10 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
 
       <AccountConnectDialog
         onAccountChanged={handleAccountChanged}
+        onAnalyzeAccount={account => {
+          selectMarketingAccount(account.id)
+          onNewChat(buildOwnedAccountAnalysisPrompt(account))
+        }}
         onOpenChange={setConnectOpen}
         open={connectOpen}
         platforms={platforms}

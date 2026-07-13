@@ -273,6 +273,7 @@ function titleForTool(name: string): string {
     marketing_prepare_publish: '准备发布',
     marketing_publish_query: '核对发布结果',
     marketing_read_account_context: '读取账号经营上下文',
+    marketing_read_account_portfolio: '读取账号作品档案',
     marketing_read_accounts: '读取账号列表',
     marketing_read_content_assets: '读取内容资产',
     marketing_read_evidence_pack: '读取证据资料',

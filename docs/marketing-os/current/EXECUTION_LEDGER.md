@@ -1,6 +1,6 @@
 # Marketing OS 当前执行台账
 
-> 日期：2026-07-12
+> 日期：2026-07-13
 > 分支：`codex/marketing-os-product-source`
 > 本文件是唯一任务入口。研究资料、ADR 和 Git 历史不得直接发任务。
 
@@ -31,6 +31,7 @@
 | Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
 | Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；新会话自动获得稳定 `prospect_*` 作用域；MCP 真实登录验证后原子迁移经营事实，旧 session 不变、successor 从首轮绑定真实账号；`accounts.json` 仅一次迁移 | automated | 真人二维码/验证码校准、successor UI 切换、多账号恢复、冲突合并审查与打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、真实登录验证、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放登录窗口，后续以同一持久 profile 后台恢复；删除时清理 profile | automated | 真人多平台登录/退出、Cookie 信号随平台变更的巡检 |
+| Owned account diagnosis | 微信公众号账号浏览器可采集已发布文章列表与公开正文；Hermes 将作品、EvidenceRecord、透明执行基线和数据缺口按账号写入 `state.db`；Desktop 登录后直接进入同步与评分 | dev-runtime | 真人扫码、真实文章 selector 与指标可见性验收；评分必须继续区分执行基线、内容解释和受众反馈 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
 | Content plan/assets | 图文与不露脸素材视频双 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
 | Preflight | InfluenceOS + 不可变记录 + draft gate | automated | 真实账号历史校准、发布前版本链 |
@@ -78,7 +79,9 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 
 未登录到登录的继承合同已落地：`AccountRegistry.adopt_prospect` 只接受已认证且经营事实为空的目标账号，`SessionDB` 按声明式 scope 表映射在单事务中迁移全部 prospect 事实并写审计记录；重复调用幂等，旧 session 永不重绑。目标账号已有项目、证据、资产或学习事实时立即阻断，禁止静默覆盖。Gateway 已提供 `marketing.account.prospect.adopt`。
 
-真实登录事实也已归回浏览器 owner：改造后的 Playwright MCP 提供只读 `browser_verify_account_login`，直接在当前账号持久 Context 内核验平台域名和第一方登录信号，只返回真假、信号数量和已去掉查询参数/片段的页面位置，Cookie 值永不离开 MCP。Hermes post-tool seam 只信任 `mcp_marketing_browser_browser_verify_account_login` 的真实结果；认证成功后激活 AccountRegistry、尝试安全继承 prospect，并关闭有头登录进程，下一次租约以同一 profile 在后台恢复。目标账号已有经营事实时只标记认证成功、继承进入 `review_required`，绝不覆盖。Desktop 仍只待展示状态和创建 successor 会话。
+真实登录事实也已归回浏览器 owner：改造后的 Playwright MCP 提供只读 `browser_verify_account_login`，直接在当前账号持久 Context 内核验平台域名和第一方登录信号，只返回真假、信号数量和已去掉查询参数/片段的页面位置，Cookie 值永不离开 MCP。Hermes post-tool seam 只信任 `mcp_marketing_browser_browser_verify_account_login` 的真实结果；认证成功后激活 AccountRegistry、尝试安全继承 prospect，并关闭有头登录进程，下一次租约以同一 profile 在后台恢复。目标账号已有经营事实时只标记认证成功、继承进入 `review_required`，绝不覆盖。Desktop 已能展示状态、创建 successor 会话，并在公众号登录后直接触发历史文章同步与账号诊断。
+
+公众号第一条真实内容诊断纵切已进入开发机运行态：`marketing-browser-mcp` 在账号专属持久 Context 内读取已发布文章列表和同域公开正文，只返回文章事实，不返回后台 token、Cookie 或密码；Hermes `AccountPortfolioRepository` 将文章固化为 EvidenceRecord 和账号作品快照，按标题执行、正文结构、发布节奏生成透明基线。没有阅读、点赞、分享或评论数据时，受众反馈维度保持空缺，Agent 不得猜测。Desktop 只负责把公众号置顶并提供“同步文章并评分”入口；真人扫码和真实后台 selector 仍待用户完成，不能宣称 human-loop。
 
 开发机真实 `state.db` 此前已完成知识 schema 升级并种入 2 条平台 stylebook、8 条内容原理、0 条账号知识；账号库为 0 证明系统没有把用户陈述或模型推断伪装成账号经验。新增赛道库和经营世界模型本轮已完成自动化临时库迁移验证，真实长期数据仍不得在未备份前批量改写。
 
@@ -130,7 +133,7 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - Playwright/MCP 的真实发布动作与作品列表反查 Provider 尚未接入；当前不能宣称能自动发布。
 - 仍需一条开发机真人图文发布和重启恢复证据，证据等级目前停在 `automated`。
 
-账号登录第一条原生纵切已进入工作台：平台目录、pending account、启动登录、自动验证和认证后账号切换均由 Hermes Gateway 调用 `marketing-browser-mcp` 完成；Electron 只展示状态和收集点击，不接触 Cookie、BrowserContext 或认证真相。内容审核、发布确认、执行状态和 unknown 恢复 UI 仍待实现，随后再用平台 Skill 验收知乎与短视频真人流程。
+账号登录第一条原生纵切已进入工作台：平台目录、pending account、启动登录、自动验证和认证后账号切换均由 Hermes Gateway 调用 `marketing-browser-mcp` 完成；Electron 只展示状态和收集点击，不接触 Cookie、BrowserContext 或认证真相。公众号入口已在开发机真实窗口验收，登录后可直接同步历史文章并进入证据化评分；真人扫码与真实文章采集仍待完成。内容审核、发布确认、执行状态和 unknown 恢复 UI 仍待实现，随后再用平台 Skill 验收知乎与短视频真人流程。
 
 浏览器二进制口径已确定为安装包内置单独受控 Chromium，不要求用户安装 Chrome，也不在运行时静默下载。打包后的 Hermes 使用 Electron 可执行文件的 `ELECTRON_RUN_AS_NODE` 模式运行 MCP JavaScript，但 Electron/Chromium 渲染进程不拥有账号、Cookie、自动化或业务状态；真正的浏览器 owner 仍是 `marketing-browser-mcp`。当前自包含 runtime staging 为约 917MB，其中 Chromium 约 394MB、浏览器生产依赖约 46MB；已避免额外打包 Node，并保留 Chrome.app 符号链接避免膨胀到 1.7GB，后续继续精简 Python 依赖并验证签名、公证和压缩安装包体积。
 
@@ -219,7 +222,7 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
 - 当前营销域、经营世界模型、四类知识、中央服务/同步/撤回、内容生产、原生采证、prospect 继承、真实登录激活、SessionDB 与经营闭环主组合回归：391 passed。
 - 中央知识服务专项：15 passed；覆盖嵌套身份拒绝、持久化、内容碰撞、删除失效、认证、过期请求、nonce、限流、客户端 token 轮换/吊销、跨客户端删除拒绝和删除 key-ring 轮换。
-- 改造版 Playwright MCP：16 passed；包含账号租约、profile 持久化/清理、浏览器运行时、平台登录启动、登录信号、敏感 URL 清洗和 55 项工具 schema。
+- 改造版 Playwright MCP：18 passed；包含账号租约、profile 持久化/清理、浏览器运行时、平台登录启动、登录信号、公众号作品采集、敏感 URL 清洗和 56 项工具 schema。
 - TUI/Gateway 会话既有回归：172 passed；本轮新增 Gateway adoption RPC 已包含在营销组合回归。
 - Hermes Cron 调度/作业/产品任务组合回归：302 passed；产品任务无 MetricProvider 时静默，有真实 Provider 时调用指标 owner。
 - LOOP-01/02/03/04 发布账本、审批、指标回执、缺失值、延期、崩溃领取恢复、Retro、候选和账号知识治理单文件回归：19 passed。

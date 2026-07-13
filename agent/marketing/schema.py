@@ -481,6 +481,45 @@ CREATE INDEX IF NOT EXISTS idx_short_video_observation_scope
 CREATE INDEX IF NOT EXISTS idx_short_video_observation_sound
     ON marketing_short_video_observations(sound_id,platform,observed_at DESC);
 
+CREATE TABLE IF NOT EXISTS marketing_account_portfolio_snapshots (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    account_name TEXT NOT NULL DEFAULT '',
+    source_count INTEGER NOT NULL DEFAULT 0,
+    portfolio_json TEXT NOT NULL DEFAULT '{}',
+    score_json TEXT NOT NULL DEFAULT '{}',
+    session_id TEXT NOT NULL DEFAULT '',
+    tool_call_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id,account_id,platform,observed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_account_portfolio_latest
+    ON marketing_account_portfolio_snapshots(user_id,account_id,platform,observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS marketing_owned_content_observations (
+    id TEXT PRIMARY KEY,
+    snapshot_id TEXT NOT NULL REFERENCES marketing_account_portfolio_snapshots(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    source_item_id TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    evidence_id TEXT NOT NULL REFERENCES evidence_records(id),
+    title TEXT NOT NULL DEFAULT '',
+    digest TEXT NOT NULL DEFAULT '',
+    content_excerpt TEXT NOT NULL DEFAULT '',
+    published_at TEXT,
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    features_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(snapshot_id,source_item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_owned_content_scope
+    ON marketing_owned_content_observations(user_id,account_id,platform,published_at DESC);
+
 CREATE TABLE IF NOT EXISTS marketing_knowledge_entries (
     id TEXT PRIMARY KEY,
     knowledge_base TEXT NOT NULL,
@@ -537,6 +576,8 @@ PROSPECT_SCOPE_COLUMNS = {
     "marketing_knowledge_contributions": "account_id",
     "marketing_knowledge_entries": "account_id",
     "marketing_short_video_observations": "account_id",
+    "marketing_account_portfolio_snapshots": "account_id",
+    "marketing_owned_content_observations": "account_id",
     # Optional compatibility tables may exist in upgraded product databases.
     "audience_snapshots": "account_id",
     "memory_candidates": "account_id",
@@ -563,5 +604,7 @@ LEGACY_MARKETING_TABLES = (
     "marketing_metric_checkpoints",
     "marketing_sounds",
     "marketing_short_video_observations",
+    "marketing_account_portfolio_snapshots",
+    "marketing_owned_content_observations",
     "marketing_knowledge_entries",
 )

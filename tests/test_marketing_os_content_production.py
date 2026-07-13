@@ -259,6 +259,7 @@ def test_content_write_schema_cannot_override_account_scope():
     ]
     assert "marketing_read_evidence_pack" in by_name
     assert "marketing_read_sound_trends" in by_name
+    assert "marketing_read_account_portfolio" in by_name
     assert "marketing_read_knowledge" in by_name
     assert "marketing_read_content_assets" in by_name
 

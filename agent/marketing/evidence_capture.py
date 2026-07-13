@@ -6,6 +6,10 @@ import json
 from typing import Any
 
 from agent.marketing.domains.evidence import EvidenceRepository
+from agent.marketing.domains.account_portfolio import (
+    AccountPortfolioRepository,
+    decode_browser_portfolio_result,
+)
 from agent.marketing.domains.short_video_signals import (
     ShortVideoSignalRepository,
     decode_browser_signal_result,
@@ -16,6 +20,11 @@ from agent.marketing.session_scope import read_tool_session_scope
 SHORT_VIDEO_SIGNAL_TOOL_NAMES = {
     "browser_extract_short_video_signals",
     "mcp_marketing_browser_browser_extract_short_video_signals",
+}
+
+ACCOUNT_PORTFOLIO_TOOL_NAMES = {
+    "browser_collect_wechat_official_portfolio",
+    "mcp_marketing_browser_browser_collect_wechat_official_portfolio",
 }
 
 
@@ -35,6 +44,21 @@ def enrich_tool_result_with_evidence(
     excerpt cannot enter the verified store through the marketing toolset.
     """
 
+    if tool_name in ACCOUNT_PORTFOLIO_TOOL_NAMES:
+        scope = read_tool_session_scope(task_id=task_id, session_id=session_id)
+        payload = decode_browser_portfolio_result(result)
+        if not scope or payload is None:
+            return result
+        capture = AccountPortfolioRepository().capture_browser_result(
+            user_id=str(scope["user_id"]),
+            account_id=str(scope["account_id"]),
+            payload=payload,
+            session_id=str(session_id or task_id),
+            tool_call_id=str(tool_call_id or ""),
+        )
+        return str(result) + "\n\nMarketing OS owned-account capture:\n" + json.dumps(
+            capture, ensure_ascii=False, indent=2
+        )
     if tool_name in SHORT_VIDEO_SIGNAL_TOOL_NAMES:
         scope = read_tool_session_scope(task_id=task_id, session_id=session_id)
         payload = decode_browser_signal_result(result)

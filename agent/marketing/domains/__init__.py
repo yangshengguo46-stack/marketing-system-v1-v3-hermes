@@ -1,6 +1,7 @@
 """Product-owned Marketing OS domain capabilities."""
 
 from .account_context import AccountContextRepository
+from .account_portfolio import AccountPortfolioRepository
 from .account_lifecycle import AccountLifecycleRepository
 from .account_strategy import AccountStrategyRepository
 from .article_drafts import ArticleDraftValidator, article_stylebooks
@@ -15,6 +16,7 @@ from .short_video_signals import ShortVideoSignalRepository
 
 __all__ = [
     "AccountContextRepository",
+    "AccountPortfolioRepository",
     "AccountLifecycleRepository",
     "AccountStrategyRepository",
     "ArticleDraftValidator",
