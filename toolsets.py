@@ -113,6 +113,26 @@ TOOLSETS = {
         "includes": [],
     },
 
+    # Product-owned coding capability. It is granted to the top-level product
+    # session only so Hermes delegation can hand it to a bound leaf worker;
+    # product runtime policy keeps these schemas deferred and blocks direct
+    # top-level execution. This preserves Hermes' code strength without letting
+    # coding become the Marketing Agent's default way to answer business gaps.
+    "marketing_code": {
+        "description": (
+            "Bounded code worker for code-generated marketing media, content "
+            "rendering and structured content-data transformation"
+        ),
+        "tools": [
+            "terminal", "process",
+            "read_file", "write_file", "patch", "search_files",
+            "web_search", "web_extract", "vision_analyze", "image_generate",
+            "marketing_read_content_assets", "marketing_draft_content_create",
+        ],
+        "includes": [],
+        "posture": True,
+    },
+
     "web": {
         "description": "Web research and content extraction tools",
         "tools": ["web_search", "web_extract"],

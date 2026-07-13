@@ -146,6 +146,21 @@ class ContentAssetRepository(MarketingDomainRepository):
             memory_refs=memory_refs,
         )
 
+    def get_production_plan(
+        self, *, plan_id: str, user_id: str, account_id: str
+    ) -> dict[str, Any]:
+        """Read one durable production plan inside its account boundary."""
+
+        with self._connection() as db:
+            row = db.execute(
+                """SELECT * FROM content_production_plans
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (plan_id, user_id, account_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError("production plan not found in account scope")
+        return _plan_record(row)
+
     def create_article_bundle(
         self,
         *,

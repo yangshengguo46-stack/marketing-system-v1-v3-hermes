@@ -15,7 +15,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from hermes_constants import (
     get_hermes_home,
@@ -2396,6 +2396,21 @@ def _load_enabled_toolsets() -> list[str] | None:
     except Exception:
         product_runtime = False
 
+    def _product_toolsets(names: Iterable[str]) -> list[str]:
+        selected = set(names)
+        if not product_runtime:
+            return sorted(selected)
+        try:
+            from agent.product import PRODUCT_RAW_CODE_TOOLSETS
+
+            selected.difference_update(PRODUCT_RAW_CODE_TOOLSETS)
+        except Exception:
+            selected.difference_update(
+                {"coding", "terminal", "file", "code_execution", "debugging", "project"}
+            )
+        selected.update({"marketing", "marketing_code", "delegation"})
+        return sorted(selected)
+
     # Coding posture (base Hermes): with no explicit pin, collapse to the
     # coding toolset (+ enabled MCP servers) when sitting in a code workspace.
     # The desktop app and `hermes --tui` both land here. See
@@ -2417,10 +2432,7 @@ def _load_enabled_toolsets() -> list[str] | None:
                 # the focus-mode coding posture returns before the fallback path
                 # that normally adds it — without this the desktop loses the
                 # project tools exactly when sitting in a repo (see below).
-                required = {"project"}
-                if product_runtime:
-                    required.add("marketing")
-                return sorted(set(selection) | required)
+                return _product_toolsets(set(selection) | {"project"})
         except Exception:
             pass
 
@@ -2458,11 +2470,7 @@ def _load_enabled_toolsets() -> list[str] | None:
             return None
 
         if not unresolved:
-            return (
-                sorted({*built_in, "marketing"})
-                if product_runtime
-                else built_in
-            )
+            return _product_toolsets(built_in) if product_runtime else built_in
 
         mcp_names: set[str] = set()
         mcp_disabled: set[str] = set()
@@ -2512,11 +2520,7 @@ def _load_enabled_toolsets() -> list[str] | None:
             )
 
         if valid:
-            return (
-                sorted({*valid, "marketing"})
-                if product_runtime
-                else valid
-            )
+            return _product_toolsets(valid) if product_runtime else valid
 
         fallback_notice = (
             "[tui] no valid HERMES_TUI_TOOLSETS entries; using configured CLI toolsets"
@@ -2548,8 +2552,9 @@ def _load_enabled_toolsets() -> list[str] | None:
         # Marketing is a native desktop capability, not an optional plugin.
         # Keep it in the GUI fallback even when an older config predates the
         # toolset or an invalid explicit override forced recovery.
-        required = {"marketing", "project"}
-        return sorted(enabled | required)
+        if product_runtime:
+            return _product_toolsets(enabled)
+        return sorted(enabled | {"marketing", "project"})
     except Exception:
         if fallback_notice is not None:
             print(

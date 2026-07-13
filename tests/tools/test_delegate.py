@@ -70,11 +70,54 @@ class TestDelegateRequirements(unittest.TestCase):
         self.assertIn("tasks", props)
         self.assertIn("context", props)
         self.assertIn("toolsets", props)
+        self.assertIn("product_scope", props)
         # max_iterations is intentionally NOT exposed to the model — it's
         # config-authoritative via delegation.max_iterations so users get
         # predictable budgets.
         self.assertNotIn("max_iterations", props)
         self.assertNotIn("maxItems", props["tasks"])  # removed — limit is now runtime-configurable
+
+    def test_product_runtime_rejects_raw_coding_delegation(self):
+        parent = _make_mock_parent()
+        with patch.dict(os.environ, {"HERMES_DESKTOP": "1"}, clear=False):
+            result = json.loads(
+                delegate_task(
+                    goal="inspect the repository",
+                    toolsets=["terminal", "file"],
+                    parent_agent=parent,
+                )
+            )
+        self.assertIn("raw Hermes coding toolsets", result["error"])
+
+    def test_product_runtime_requires_asset_binding_for_code_worker(self):
+        parent = _make_mock_parent()
+        with patch.dict(os.environ, {"HERMES_DESKTOP": "1"}, clear=False):
+            result = json.loads(
+                delegate_task(
+                    goal="render the visual",
+                    toolsets=["marketing_code"],
+                    parent_agent=parent,
+                )
+            )
+        self.assertIn("production_plan_id or content_asset_id", result["error"])
+
+    def test_product_runtime_rejects_unverified_code_asset_binding(self):
+        parent = _make_mock_parent()
+        parent.session_id = "session-without-account"
+        parent._session_db = None
+        with patch.dict(os.environ, {"HERMES_DESKTOP": "1"}, clear=False):
+            result = json.loads(
+                delegate_task(
+                    goal="render the visual",
+                    toolsets=["marketing_code"],
+                    product_scope={
+                        "purpose": "code_generated_media",
+                        "content_asset_id": "asset_does_not_exist",
+                    },
+                    parent_agent=parent,
+                )
+            )
+        self.assertIn("conversation bound", result["error"])
 
     def test_schema_description_advertises_runtime_limits(self):
         """The model must see the user's actual concurrency / spawn-depth caps,

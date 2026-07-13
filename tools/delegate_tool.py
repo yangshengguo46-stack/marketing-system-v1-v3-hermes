@@ -16,6 +16,7 @@ The parent's context only sees the delegation call and the summary result,
 never the child's intermediate tool calls or reasoning.
 """
 
+import copy
 import enum
 import json
 import logging
@@ -2121,10 +2122,45 @@ def _recover_tasks_from_json_string(
     return parsed, None
 
 
+def _validate_product_code_binding(parent_agent, product_scope: Dict[str, Any]) -> str | None:
+    """Verify that a code worker points at a real asset in this conversation."""
+
+    try:
+        from agent.marketing.domains import ContentAssetRepository
+        from agent.marketing.session_scope import read_session_scope
+
+        session_id = str(getattr(parent_agent, "session_id", "") or "").strip()
+        session_db = getattr(parent_agent, "_session_db", None)
+        account_scope = read_session_scope(session_db, session_id)
+        if not account_scope:
+            return (
+                "marketing_code requires a conversation bound to a Marketing OS "
+                "account before code work can start."
+            )
+        user_id = str(account_scope["user_id"])
+        account_id = str(account_scope["account_id"])
+        repository = ContentAssetRepository()
+        plan_id = str(product_scope.get("production_plan_id") or "").strip()
+        asset_id = str(product_scope.get("content_asset_id") or "").strip()
+        if plan_id:
+            repository.get_production_plan(
+                plan_id=plan_id, user_id=user_id, account_id=account_id
+            )
+        if asset_id:
+            repository.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
+    except (KeyError, ValueError) as exc:
+        return str(exc)
+    except Exception as exc:
+        logger.warning("marketing_code binding validation failed: %s", exc)
+        return "marketing_code could not verify its production plan or content asset."
+    return None
+
+
 def delegate_task(
     goal: Optional[str] = None,
     context: Optional[str] = None,
     toolsets: Optional[List[str]] = None,
+    product_scope: Optional[Dict[str, Any]] = None,
     tasks: Optional[List[Dict[str, Any]]] = None,
     max_iterations: Optional[int] = None,
     acp_command: Optional[str] = None,
@@ -2232,7 +2268,13 @@ def delegate_task(
         task_list = tasks
     elif goal and isinstance(goal, str) and goal.strip():
         task_list = [
-            {"goal": goal, "context": context, "toolsets": toolsets, "role": top_role}
+            {
+                "goal": goal,
+                "context": context,
+                "toolsets": toolsets,
+                "product_scope": product_scope,
+                "role": top_role,
+            }
         ]
     else:
         return tool_error("Provide either 'goal' (single task) or 'tasks' (batch).")
@@ -2248,6 +2290,52 @@ def delegate_task(
             )
         if not task.get("goal", "").strip():
             return tool_error(f"Task {i} is missing a 'goal'.")
+
+    # Marketing OS keeps the generic Hermes delegation engine, but owns the
+    # product boundary around coding. Top-level business delegations get a
+    # safe research surface by default. Code is available only through the
+    # dedicated marketing_code toolset and must be bound to an existing
+    # production plan or content asset. Nested Hermes orchestrators retain the
+    # generic behavior they were explicitly granted by their parent.
+    if depth == 0:
+        try:
+            from agent.product import (
+                PRODUCT_CODE_TOOLSET,
+                is_product_runtime,
+                normalize_product_delegation_toolsets,
+                validate_product_code_scope,
+            )
+
+            product_runtime = is_product_runtime()
+        except Exception:
+            product_runtime = False
+        if product_runtime:
+            for i, task in enumerate(task_list):
+                requested = task.get("toolsets") or toolsets
+                normalized, policy_error = normalize_product_delegation_toolsets(requested)
+                if policy_error:
+                    return tool_error(f"Task {i}: {policy_error}")
+                task["toolsets"] = normalized
+                if PRODUCT_CODE_TOOLSET not in normalized:
+                    continue
+                scope = task.get("product_scope") or product_scope
+                scope_error = validate_product_code_scope(scope)
+                if scope_error:
+                    return tool_error(f"Task {i}: {scope_error}")
+                binding_error = _validate_product_code_binding(parent_agent, dict(scope))
+                if binding_error:
+                    return tool_error(f"Task {i}: {binding_error}")
+                task["product_scope"] = dict(scope)
+                boundary = (
+                    "Marketing OS code-worker boundary:\n"
+                    + json.dumps(scope, ensure_ascii=False, sort_keys=True)
+                    + "\nImplement only the bound production artifact. Do not decide "
+                    "audience, positioning, evidence, strategy, or publication."
+                )
+                existing_context = str(task.get("context") or "").strip()
+                task["context"] = (
+                    f"{boundary}\n\n{existing_context}" if existing_context else boundary
+                )
 
     overall_start = time.monotonic()
     results = []
@@ -3053,13 +3141,39 @@ def _build_dynamic_schema_overrides() -> dict:
         **DELEGATE_TASK_SCHEMA["parameters"],
     }
     # Deep-copy properties so we don't mutate the static schema dict.
-    overrides_params["properties"] = {
-        k: dict(v) for k, v in DELEGATE_TASK_SCHEMA["parameters"]["properties"].items()
-    }
+    overrides_params["properties"] = copy.deepcopy(
+        DELEGATE_TASK_SCHEMA["parameters"]["properties"]
+    )
     overrides_params["properties"]["tasks"]["description"] = _build_tasks_param_description()
     overrides_params["properties"]["role"]["description"] = _build_role_param_description()
+    description = _build_top_level_description()
+    try:
+        from agent.product import is_product_runtime
+
+        product_runtime = is_product_runtime()
+    except Exception:
+        product_runtime = False
+    if product_runtime:
+        product_toolset_description = (
+            "Marketing OS child capabilities. Omit this field for safe marketing/web research. "
+            "For code-generated media, rendering, or structured transformation use only "
+            "['marketing_code'] and provide product_scope bound to a production_plan_id or "
+            "content_asset_id. Raw coding, terminal, file, code_execution, debugging and "
+            "project toolsets are rejected."
+        )
+        overrides_params["properties"]["toolsets"]["description"] = (
+            product_toolset_description
+        )
+        overrides_params["properties"]["tasks"]["items"]["properties"]["toolsets"][
+            "description"
+        ] = product_toolset_description
+        description += (
+            "\n\nMARKETING OS CODE BOUNDARY: The top-level agent never delegates raw Hermes "
+            "coding toolsets. Code work is allowed only through marketing_code with a durable "
+            "product_scope; the child implements an artifact and cannot make marketing decisions."
+        )
     return {
-        "description": _build_top_level_description(),
+        "description": description,
         "parameters": overrides_params,
     }
 
@@ -3110,6 +3224,25 @@ DELEGATE_TASK_SCHEMA = {
                     "['terminal', 'file', 'web'] for full-stack tasks."
                 ),
             },
+            "product_scope": {
+                "type": "object",
+                "properties": {
+                    "purpose": {
+                        "type": "string",
+                        "enum": [
+                            "code_generated_media",
+                            "content_rendering",
+                            "structured_data_transform",
+                        ],
+                    },
+                    "production_plan_id": {"type": "string"},
+                    "content_asset_id": {"type": "string"},
+                },
+                "description": (
+                    "Marketing OS boundary for toolsets=['marketing_code']. "
+                    "Bind the worker to an existing production plan or content asset."
+                ),
+            },
             "tasks": {
                 "type": "array",
                 "items": {
@@ -3124,6 +3257,25 @@ DELEGATE_TASK_SCHEMA = {
                             "type": "array",
                             "items": {"type": "string"},
                             "description": f"Toolsets for this specific task. Available: {_TOOLSET_LIST_STR}. Use 'web' for network access, 'terminal' for shell, 'browser' for web interaction.",
+                        },
+                        "product_scope": {
+                            "type": "object",
+                            "properties": {
+                                "purpose": {
+                                    "type": "string",
+                                    "enum": [
+                                        "code_generated_media",
+                                        "content_rendering",
+                                        "structured_data_transform",
+                                    ],
+                                },
+                                "production_plan_id": {"type": "string"},
+                                "content_asset_id": {"type": "string"},
+                            },
+                            "description": (
+                                "Required for a marketing_code child; binds it to "
+                                "one durable production plan or content asset."
+                            ),
                         },
                         "acp_command": {
                             "type": "string",
@@ -3224,6 +3376,7 @@ registry.register(
         goal=args.get("goal"),
         context=args.get("context"),
         toolsets=args.get("toolsets"),
+        product_scope=args.get("product_scope"),
         tasks=args.get("tasks"),
         max_iterations=args.get("max_iterations"),
         acp_command=args.get("acp_command"),

@@ -732,7 +732,12 @@ def test_load_enabled_toolsets_product_runtime_does_not_collapse_to_coding(monke
         lambda *_args, **_kwargs: {"marketing", "memory"},
     )
 
-    assert server._load_enabled_toolsets() == ["marketing", "memory", "project"]
+    assert server._load_enabled_toolsets() == [
+        "delegation",
+        "marketing",
+        "marketing_code",
+        "memory",
+    ]
 
 
 def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):

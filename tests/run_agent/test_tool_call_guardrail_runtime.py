@@ -184,6 +184,39 @@ def test_same_tool_failure_warning_tells_model_to_recover_with_tools():
     assert "different tool" in content
 
 
+def test_product_top_level_blocks_direct_code_execution(monkeypatch):
+    monkeypatch.setenv("HERMES_DESKTOP", "1")
+    agent = _make_agent("terminal")
+    agent._delegate_depth = 0
+    tc = _mock_tool_call("terminal", json.dumps({"command": "pwd"}), "c-product")
+    messages = []
+
+    with patch("run_agent.handle_function_call", return_value="SHOULD_NOT_RUN") as call:
+        agent._execute_tool_calls_sequential(
+            SimpleNamespace(content="", tool_calls=[tc]), messages, "task-1"
+        )
+
+    call.assert_not_called()
+    assert "isolated from the top-level Marketing Agent" in messages[0]["content"]
+    assert "marketing_code" in messages[0]["content"]
+
+
+def test_product_code_worker_can_use_bounded_code_tool(monkeypatch):
+    monkeypatch.setenv("HERMES_DESKTOP", "1")
+    agent = _make_agent("terminal")
+    agent._delegate_depth = 1
+    tc = _mock_tool_call("terminal", json.dumps({"command": "pwd"}), "c-worker")
+    messages = []
+
+    with patch("run_agent.handle_function_call", return_value=json.dumps({"ok": True})) as call:
+        agent._execute_tool_calls_sequential(
+            SimpleNamespace(content="", tool_calls=[tc]), messages, "task-1"
+        )
+
+    call.assert_called_once()
+    assert json.loads(messages[0]["content"]) == {"ok": True}
+
+
 def test_config_enabled_hard_stop_concurrent_path_does_not_submit_blocked_calls_and_preserves_result_order():
     agent = _make_agent("web_search", config=_hard_stop_config())
     blocked_args = {"query": "blocked"}

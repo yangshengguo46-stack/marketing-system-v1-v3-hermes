@@ -163,6 +163,33 @@ User goal
 → Hermes memory / account strategy / Skill
 ```
 
+## 代码能力为营销生产服务
+
+Hermes 的代码、终端和文件能力继续保留，但不与营销经营争夺主 Agent 的决策权。产品运行时采用三层硬边界：
+
+1. 主 Marketing Agent 的默认工具面不展示 `terminal`、`read_file`、`write_file`、`patch`、`execute_code` 和 Project 工具；源码目录不能触发 Coding posture。
+2. 主 Agent 即使通过旧轨迹或工具搜索请求上述工具，原生执行器仍会阻断。不得用代码、项目文件或生成脚本补造账号数据、证据、受众、定位和策略。
+3. 只有已经存在 `production_plan_id` 或 `content_asset_id` 时，主 Agent 才能用原生 `delegate_task` 创建 `marketing_code` 叶子任务。该 worker 只负责代码生成素材、内容渲染或结构化内容数据转换，不能决定营销事实、策略和发布。
+
+```text
+Marketing goal / evidence / plan
+              │
+              ├─ normal marketing work ─→ native marketing tools
+              │
+              └─ code artifact required
+                    │ durable plan/asset binding
+                    ▼
+             marketing_code leaf worker
+                    │ implementation only
+                    ▼
+             ContentAsset / verifiable output
+                    │
+                    ▼
+          main Marketing Agent review + next gate
+```
+
+`marketing_code` 不是第二套 Agent，也不是外围代码服务；它是 Hermes 原生 delegation 和 tool registry 内的受限姿态。MCP、Skill、浏览器、搜索和记忆仍按各自原生 owner 工作，Electron 不参与工具授权。
+
 定时触发与业务执行严格分离：`cron/product_tasks.py` 仅在已注册真实 MetricProvider 时非阻塞唤醒 `metric_loop.py`；Provider 只观察平台，Publishing 只结算 checkpoint，OperatingLoop 只保存 Receipt/Candidate。缺失指标不补 0，未校准预测不制造偏差，pending candidate 不自动进入账号知识。
 
 ## InfluenceOS 在架构中的位置

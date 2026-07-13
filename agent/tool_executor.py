@@ -222,6 +222,35 @@ def _tool_search_scoped_names(agent) -> frozenset:
     return names
 
 
+def _product_code_block_message(agent, function_name: str) -> str | None:
+    """Keep top-level Marketing OS reasoning out of the coding runtime.
+
+    A delegated child has ``_delegate_depth > 0`` and may use the bounded
+    ``marketing_code`` toolset. The user-facing Marketing Agent must instead
+    create/read a durable production plan or content asset and delegate a
+    scoped implementation task. This is an execution gate, not prompt advice.
+    """
+
+    try:
+        from agent.product import is_product_code_tool, is_product_runtime
+
+        if not is_product_runtime() or not is_product_code_tool(function_name):
+            return None
+    except Exception:
+        return None
+    if getattr(agent, "_delegate_depth", 0) > 0:
+        return None
+    return (
+        f"'{function_name}' is isolated from the top-level Marketing Agent. "
+        "Do not use code, shell, project files, or generated scripts to replace "
+        "missing account data, evidence, positioning, or strategy. If a durable "
+        "content-production plan or content asset genuinely requires code-generated "
+        "media, rendering, or structured transformation, call delegate_task with "
+        "toolsets=['marketing_code'] and product_scope bound to its "
+        "production_plan_id or content_asset_id."
+    )
+
+
 def _apply_tool_request_middleware_for_agent(
     agent,
     *,
@@ -362,6 +391,13 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                         }, ensure_ascii=False)
         except Exception:
             pass
+
+        if _ts_scope_block is None:
+            product_code_block = _product_code_block_message(agent, function_name)
+            if product_code_block is not None:
+                _ts_scope_block = json.dumps(
+                    {"error": product_code_block}, ensure_ascii=False
+                )
 
         function_args, middleware_trace = _apply_tool_request_middleware_for_agent(
             agent,
@@ -909,6 +945,9 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                         )
         except Exception:
             pass
+
+        if _ts_scope_block is None:
+            _ts_scope_block = _product_code_block_message(agent, function_name)
 
         function_args, middleware_trace = _apply_tool_request_middleware_for_agent(
             agent,

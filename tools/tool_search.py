@@ -136,7 +136,24 @@ def load_config() -> ToolSearchConfig:
         tools_cfg = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
         if not isinstance(tools_cfg, dict):
             tools_cfg = {}
-        return ToolSearchConfig.from_raw(tools_cfg.get("tool_search"))
+        resolved = ToolSearchConfig.from_raw(tools_cfg.get("tool_search"))
+        try:
+            from agent.product import is_product_runtime
+
+            if is_product_runtime():
+                # Product runtime uses progressive disclosure as an authority
+                # boundary, not merely a token optimization. In particular,
+                # coding tools stay out of the Marketing Agent's default
+                # surface even when the user's global threshold is high.
+                return ToolSearchConfig(
+                    enabled="on",
+                    threshold_pct=resolved.threshold_pct,
+                    search_default_limit=resolved.search_default_limit,
+                    max_search_limit=resolved.max_search_limit,
+                )
+        except Exception:
+            pass
+        return resolved
     except Exception as e:
         logger.debug("Failed to load tool-search config: %s", e)
         return ToolSearchConfig.from_raw(None)
@@ -170,6 +187,16 @@ def is_deferrable_tool_name(name: str) -> bool:
     """
     if name in BRIDGE_TOOL_NAMES:
         return False
+    try:
+        from agent.product import is_product_code_tool, is_product_runtime
+
+        if is_product_runtime() and is_product_code_tool(name):
+            # These are upstream Hermes core tools, but in Marketing OS they
+            # belong to a delegated production worker. Treat them as deferred
+            # before the generic core-tool exemption below.
+            return True
+    except Exception:
+        pass
     if name in _core_tool_names():
         return False
     # Check registry toolset for MCP prefix.

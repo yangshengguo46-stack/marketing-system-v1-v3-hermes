@@ -89,8 +89,16 @@ class TestConfigParsing:
 
 
 class TestClassification:
-    def test_core_tools_never_defer(self):
+    def test_core_tools_never_defer(self, monkeypatch):
         """The critical invariant from the OpenClaw report."""
+        for key in (
+            "HERMES_DESKTOP",
+            "HERMES_PRODUCT_ID",
+            "MARKETING_OS_USER_DATA",
+            "MARKETING_OS_CONFIG_DIR",
+            "MARKETING_OS_AGENT_DB",
+        ):
+            monkeypatch.delenv(key, raising=False)
         from tools.tool_search import is_deferrable_tool_name
         # Sample of core tools from _HERMES_CORE_TOOLS.
         for core_name in ["terminal", "read_file", "write_file", "patch",
@@ -100,6 +108,16 @@ class TestClassification:
             assert not is_deferrable_tool_name(core_name), (
                 f"Core tool '{core_name}' must NEVER be deferrable"
             )
+
+    def test_product_runtime_defers_code_but_not_marketing_tools(self, monkeypatch):
+        monkeypatch.setenv("HERMES_DESKTOP", "1")
+        from tools.tool_search import is_deferrable_tool_name, load_config
+
+        assert is_deferrable_tool_name("terminal") is True
+        assert is_deferrable_tool_name("read_file") is True
+        assert is_deferrable_tool_name("execute_code") is True
+        assert is_deferrable_tool_name("marketing_read_account_context") is False
+        assert load_config().enabled == "on"
 
     def test_bridge_tools_never_defer(self):
         from tools.tool_search import is_deferrable_tool_name, BRIDGE_TOOL_NAMES
@@ -535,4 +553,3 @@ class TestRegression_ToolsetScoping:
         assert "mcp_helper_op" in names
         # core tools are never deferrable
         assert "terminal" not in names
-

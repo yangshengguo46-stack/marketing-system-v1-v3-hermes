@@ -10,10 +10,90 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
-from typing import Mapping
+from typing import Iterable, Mapping
 
 PRODUCT_ID = "marketing-os"
 PRODUCT_NAME = "Marketing OS"
+
+# Code remains a Hermes-native capability, but it is not part of the product's
+# business reasoning surface.  The top-level Marketing Agent may delegate this
+# bounded capability to a child that is producing a durable marketing asset;
+# it must never reach for shell/file/code tools to compensate for missing
+# account data, evidence or strategy.
+PRODUCT_CODE_TOOLSET = "marketing_code"
+PRODUCT_CODE_TOOLS = frozenset(
+    {
+        "terminal",
+        "process",
+        "read_terminal",
+        "close_terminal",
+        "read_file",
+        "write_file",
+        "patch",
+        "search_files",
+        "execute_code",
+        "project_list",
+        "project_create",
+        "project_switch",
+    }
+)
+PRODUCT_RAW_CODE_TOOLSETS = frozenset(
+    {"coding", "terminal", "file", "code_execution", "debugging", "project"}
+)
+PRODUCT_CODE_PURPOSES = frozenset(
+    {"code_generated_media", "content_rendering", "structured_data_transform"}
+)
+
+
+def is_product_code_tool(name: str) -> bool:
+    """Return whether *name* belongs behind the Marketing OS code boundary."""
+
+    return str(name or "").strip() in PRODUCT_CODE_TOOLS
+
+
+def normalize_product_delegation_toolsets(
+    requested: Iterable[str] | None,
+) -> tuple[list[str], str | None]:
+    """Validate product delegation without weakening Hermes delegation.
+
+    Generic research children receive a business-safe default.  A child that
+    needs code must request the single product-owned ``marketing_code``
+    capability instead of reaching around the boundary with raw Hermes coding
+    toolsets.
+    """
+
+    values = [str(item).strip() for item in (requested or ()) if str(item).strip()]
+    if not values:
+        return ["marketing", "web", "browser", "vision", "image_gen"], None
+    raw = sorted(set(values) & PRODUCT_RAW_CODE_TOOLSETS)
+    if raw:
+        return values, (
+            "Marketing OS does not delegate raw Hermes coding toolsets "
+            f"({', '.join(raw)}). Use toolsets=['{PRODUCT_CODE_TOOLSET}'] and "
+            "bind the task to a production_plan_id or content_asset_id."
+        )
+    return values, None
+
+
+def validate_product_code_scope(scope: object) -> str | None:
+    """Require every code worker to serve one durable marketing artifact."""
+
+    if not isinstance(scope, Mapping):
+        return (
+            "marketing_code requires product_scope with purpose and either "
+            "production_plan_id or content_asset_id."
+        )
+    purpose = str(scope.get("purpose") or "").strip()
+    if purpose not in PRODUCT_CODE_PURPOSES:
+        return (
+            "product_scope.purpose must be one of: "
+            + ", ".join(sorted(PRODUCT_CODE_PURPOSES))
+        )
+    plan_id = str(scope.get("production_plan_id") or "").strip()
+    asset_id = str(scope.get("content_asset_id") or "").strip()
+    if not plan_id and not asset_id:
+        return "marketing_code must bind to production_plan_id or content_asset_id."
+    return None
 
 PRODUCT_ECOSYSTEM_COMPATIBILITY = {
     "mcp": {
@@ -146,7 +226,13 @@ PRODUCT_RUNTIME_GUIDANCE = (
     "or earlier assistant answers as a substitute for native account context. If a "
     "required product tool is unavailable or fails, state the real limitation and "
     "ask only for the missing decision; do not reconstruct business facts from the "
-    "development workspace or conversation search. External effects, paid providers, publication and "
+    "development workspace or conversation search. Shell commands, source files, code execution and "
+    "project tools are not problem-solving shortcuts for marketing work. Use them only through a "
+    "leaf delegate with the marketing_code toolset when a validated content-production plan or "
+    "content asset specifically requires code-generated media, rendering or structured data "
+    "transformation. The delegation must include product_scope bound to that plan or asset; the "
+    "code worker may implement the artifact but may not decide audience, positioning, evidence, "
+    "strategy or publication. External effects, paid providers, publication and "
     "sensitive account actions require the product's approval and receipt rules."
 )
 
