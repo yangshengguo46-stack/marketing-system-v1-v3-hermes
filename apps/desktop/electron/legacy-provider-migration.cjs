@@ -67,13 +67,16 @@ function migrateLegacyProviderEnvironment({
   if (!userDataPath || !hermesHome) {
     return { migrated: false, reason: 'missing-path' }
   }
-  if (!safeStorage?.isEncryptionAvailable?.()) {
-    return { migrated: false, reason: 'secure-storage-unavailable' }
-  }
 
   const legacyPath = path.join(path.resolve(userDataPath), 'secrets', 'providers.env.encrypted')
   if (!fsImpl.existsSync(legacyPath)) {
     return { migrated: false, reason: 'no-legacy-store' }
+  }
+  // Electron safeStorage can synchronously block on the macOS keychain.  The
+  // retired file is absent for virtually every current install, so prove that
+  // migration work exists before touching secure storage at all.
+  if (!safeStorage?.isEncryptionAvailable?.()) {
+    return { migrated: false, reason: 'secure-storage-unavailable' }
   }
 
   let values

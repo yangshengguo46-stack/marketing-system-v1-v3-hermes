@@ -77,13 +77,32 @@ test('migration leaves the legacy store untouched when secure storage is unavail
   const result = migrateLegacyProviderEnvironment({
     userDataPath: '/product',
     hermesHome: '/product/agent-runtime',
-    safeStorage: { isEncryptionAvailable: () => false }
+    safeStorage: { isEncryptionAvailable: () => false },
+    fsImpl: { existsSync: () => true }
   })
 
   assert.deepEqual(result, {
     migrated: false,
     reason: 'secure-storage-unavailable'
   })
+})
+
+test('missing legacy store never wakes secure storage or the macOS keychain', () => {
+  let secureStorageCalls = 0
+  const result = migrateLegacyProviderEnvironment({
+    userDataPath: '/product',
+    hermesHome: '/product/agent-runtime',
+    safeStorage: {
+      isEncryptionAvailable: () => {
+        secureStorageCalls += 1
+        return true
+      }
+    },
+    fsImpl: { existsSync: () => false }
+  })
+
+  assert.deepEqual(result, { migrated: false, reason: 'no-legacy-store' })
+  assert.equal(secureStorageCalls, 0)
 })
 
 test('desktop preserves the original Electron identity used by macOS safeStorage', () => {
