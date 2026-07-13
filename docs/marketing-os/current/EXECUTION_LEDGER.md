@@ -48,11 +48,11 @@
 |---|---|---|---|
 | `article_soft` 软文 | 账号/实验绑定、EvidencePack、父稿与平台变体、质量门、版本资产、Preflight 和发布资格约束 | 真实账号调性、主张级多源核验、配图版权与真人审稿 | automated |
 | `faceless_video` 不露脸素材视频 | 账号/实验绑定、内容计划、素材需求、声音计划、特征快照、Preflight 和内容资产协议 | 授权素材下载与排序、TTS/BGM、EDL 实际填充、真实渲染和人工审片 | automated |
-| `premium_human_video` 高级视频 | 独立 `engine/video_core` 合同、火山 adapter/poller、画布、成本 hook、EDL/renderer 命令与 8 角色职责骨架 | 独立 Agent 调度、动态样片审批、真实成片、反馈闭环和真人质量验收 | deferred |
+| `premium_human_video` 高级视频 | 已迁入独立 `video-studio` 产品；Marketing OS 只保留未来可选 host adapter 边界，不拥有项目画布、8 角色调度、Provider、预算或审批状态机 | 独立产品需完成八角色真实模型联跑、Studio API、动态样片审批、真实成片和真人质量验收；营销接入需另行排期 | external standalone product / deferred integration |
 
 三种形态共同消费账号上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与受治理学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接人工确认，不拥有生产、素材、浏览器、发布或学习事实。
 
-当前不能宣称“内容制作已完成”。软文与不露脸视频停在自动化合同和草稿能力，高级视频停在独立引擎地基与开发机 provider 校准；三者都缺少从真实账号输入到真人认可成品、发布回执和跨天指标学习的 `human-loop` 证据。高级视频的完整历史方案与校准记录只保存在 [`../deferred/high-end-video-volcengine.md`](../deferred/high-end-video-volcengine.md)，恢复开发前必须先在本台账重新排入顺序。
+当前不能宣称“内容制作已完成”。软文与不露脸视频停在自动化合同和草稿能力；高级视频已经迁出为独立 `video-studio` 产品，营销系统当前没有到该产品的运行时接入。三者都缺少从真实账号输入到真人认可成品、发布回执和跨天指标学习的 `human-loop` 证据。迁移位置和边界记录见 [`../deferred/high-end-video-volcengine.md`](../deferred/high-end-video-volcengine.md)。
 
 ## 当前唯一主线
 
