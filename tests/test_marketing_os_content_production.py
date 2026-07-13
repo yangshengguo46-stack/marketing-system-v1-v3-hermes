@@ -107,10 +107,9 @@ def _long_article(evidence_id, voice):
     [
         ("写一篇公众号软文", "article_soft"),
         ("做一条授权素材拼接的不露脸视频", "faceless_video"),
-        ("做一条真人数字人高质量视频", "premium_human_video"),
     ],
 )
-def test_native_planner_selects_three_connected_lanes(objective, kind):
+def test_native_planner_selects_marketing_os_owned_lanes(objective, kind):
     result = ContentProductionPolicy().plan(objective=objective)
 
     assert result["kind"] == kind
@@ -118,8 +117,19 @@ def test_native_planner_selects_three_connected_lanes(objective, kind):
     assert "account_context" in result["capabilities"]
     assert "evidence_research" in result["capabilities"]
     assert "copywriting" in result["capabilities"]
-    if kind != "article_soft":
+    if kind == "faceless_video":
         assert "editing_render" in result["capabilities"]
+
+
+def test_native_planner_rejects_external_video_studio_work():
+    with pytest.raises(ValueError, match="standalone video-studio"):
+        ContentProductionPolicy().plan(objective="做一条真人数字人高质量视频")
+
+    with pytest.raises(ValueError, match="standalone video-studio"):
+        ContentProductionPolicy().plan(
+            objective="制作品牌片",
+            kind="premium_human_video",
+        )
 
 
 def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, monkeypatch):
@@ -196,7 +206,7 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     assert planned["account_scope"]["account_id"] == "acct-1"
     assert planned["checkpoint_status"] == "planned"
     assert planned["preflight"]["id"].startswith("preflight_")
-    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.5"
+    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.6"
     assert planned["preflight"]["scores"]["knowledge_support"] > 0
     assert planned["preflight"]["scores"]["knowledge_confidence_factor"] <= 1
     assert planned["preflight"]["publish_eligible"] is False
@@ -238,6 +248,15 @@ def test_content_write_schema_cannot_override_account_scope():
     assert "account_id" not in create_properties
     assert "account_id" not in article_properties
     assert "account_id" not in plan_properties
+    assert plan_properties["kind"]["enum"] == [
+        "auto",
+        "article_soft",
+        "faceless_video",
+    ]
+    assert create_properties["production_kind"]["enum"] == [
+        "article_soft",
+        "faceless_video",
+    ]
     assert "marketing_read_evidence_pack" in by_name
     assert "marketing_read_sound_trends" in by_name
     assert "marketing_read_knowledge" in by_name

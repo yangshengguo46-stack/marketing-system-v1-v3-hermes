@@ -239,10 +239,10 @@ Playwright MCP 官方 `createConnection(config, contextGetter)` 要求 `contextG
 
 ## 视频边界
 
-- 图文、不露脸视频、高阶视频共享账号、证据、素材、音频、版权、回执和复盘合同。
-- 高阶视频片子预演独立判断剧本到画面、镜头、连续性、节奏、声音和预算。
-- 总营销预演不能把电影制作维度塞进一个总分。
-- 视频 Web 工作台是未来 surface，不拥有第二 Agent、记忆或任务系统。
+- Marketing OS 只拥有图文和不露脸素材视频两条内容生产 lane；二者共享账号、证据、素材、音频、版权、回执和复盘合同。
+- 真人、数字人和 AI 电影级生产由独立 `/Users/yangyucheng/projects/video-studio` 产品拥有，Marketing OS 不保存其项目画布、角色调度、Provider、预算、审批或预演状态。
+- 当前没有 Marketing OS → Video Studio 运行时接入；在独立产品提供稳定 Port/API 前，不保留假入口、host adapter 或内部 `premium_human_video` 计划。
+- 通用 TTS、平台 BGM 情报和素材版权仍服务不露脸视频，不能因为高阶视频迁出而删除。
 
 ## 禁止架构
 

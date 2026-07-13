@@ -149,8 +149,9 @@ UPDATE_ACCOUNT_LIFECYCLE_SCHEMA = {
 PLAN_CONTENT_PRODUCTION_SCHEMA = {
     "name": "marketing_plan_content_production",
     "description": (
-        "Build a Hermes-native production work order for a soft article, faceless material video, "
-        "or premium human/digital-human video. It reads the current conversation's account context, "
+        "Build a Hermes-native production work order for a soft article or faceless material video. "
+        "High-end human, digital-human, and AI film production belongs to the standalone video-studio "
+        "product and is intentionally outside this tool. It reads the current conversation's account context, "
         "selects a lane and shared capabilities, then persists an immutable InfluenceOS preflight "
         "covering audience/evidence/rights/cost gates. The work order is a checkpoint and returns "
         "the plan_id plus the decision that every drafting action must consume."
@@ -161,7 +162,7 @@ PLAN_CONTENT_PRODUCTION_SCHEMA = {
             "objective": {"type": "string"},
             "kind": {
                 "type": "string",
-                "enum": ["auto", "article_soft", "faceless_video", "premium_human_video"],
+                "enum": ["auto", "article_soft", "faceless_video"],
                 "default": "auto",
             },
             "platforms": {"type": "array", "items": {"type": "string"}},
@@ -283,7 +284,7 @@ CREATE_CONTENT_DRAFT_SCHEMA = {
             "platform": {"type": "string"},
             "production_kind": {
                 "type": "string",
-                "enum": ["article_soft", "faceless_video", "premium_human_video"],
+                "enum": ["article_soft", "faceless_video"],
             },
             "topic": {"type": "string"},
             "hook": {"type": "string"},
@@ -682,7 +683,7 @@ def _plan_content_production(args: dict, **kwargs) -> str:
         content_kind=result["kind"],
     )
     sound_context: dict = {}
-    if result["kind"] in {"faceless_video", "premium_human_video"}:
+    if result["kind"] == "faceless_video":
         sound_context = {
             "platforms": [
                 ShortVideoSignalRepository().rank_sounds(

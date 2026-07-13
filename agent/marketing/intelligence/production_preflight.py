@@ -6,8 +6,9 @@ This is the *general* preflight layer.  It answers:
 - What is missing before we create a draft asset?
 - Which lane should run next?
 
-It deliberately does not judge high-end video cinematography or film quality.
-Premium video projects delegate that to ``video_core.high_end_preflight``.
+It owns only Marketing OS article and faceless-video lanes. Professional
+human/digital-human/AI film production belongs to the standalone
+``video-studio`` product and never enters this preflight runtime.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from .influence_score import build_influence_score
 from .preflight_decision import build_preflight_decision
 
 
-CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.5"
+CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.6"
 
 
 def _text(value: Any) -> str:
@@ -96,7 +97,7 @@ def _platform_fit(plan: dict[str, Any]) -> float:
         return 0.45
     if kind == "article_soft" and set(platforms).issubset({"zhihu", "wechat_official"}):
         return 0.82
-    if kind in {"faceless_video", "premium_human_video"} and any(
+    if kind == "faceless_video" and any(
         item in {"douyin", "wechat_channels", "bilibili", "xiaohongshu", "kuaishou"}
         for item in platforms
     ):
@@ -104,13 +105,11 @@ def _platform_fit(plan: dict[str, Any]) -> float:
     return 0.62
 
 
-def _production_feasibility(kind: str, plan_status: str, url_evidence: int, has_audience: bool) -> float:
+def _production_feasibility(kind: str, url_evidence: int, has_audience: bool) -> float:
     if kind == "article_soft":
         return _clamp(0.58 + (0.18 if url_evidence else 0.0) + (0.12 if has_audience else 0.0))
     if kind == "faceless_video":
         return _clamp(0.42 + (0.18 if url_evidence else 0.0) + (0.12 if has_audience else 0.0))
-    if plan_status == "blocked_on_provider_calibration":
-        return 0.32
     return 0.45
 
 
@@ -152,12 +151,10 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
     audience_fit = 0.78 if has_audience else 0.34
     evidence_strength = _clamp(0.28 + min(0.45, 0.15 * url_evidence))
     platform_fit = _platform_fit(plan)
-    production_feasibility = _production_feasibility(kind, str(plan.get("status")), url_evidence, has_audience)
+    production_feasibility = _production_feasibility(kind, url_evidence, has_audience)
     cost_safety = 0.82
     if kind == "faceless_video":
         cost_safety = 0.68
-    if kind == "premium_human_video":
-        cost_safety = 0.28
 
     scores = {
         "audience_fit": _clamp(audience_fit),
@@ -169,7 +166,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         "knowledge_support": knowledge_support,
         "strategy_fit": 0.82 if has_current_strategy else 0.24,
     }
-    if kind in {"faceless_video", "premium_human_video"}:
+    if kind == "faceless_video":
         top_sound_score = max(
             [float(item.get("selection_score") or 0) for item in sound_candidates if isinstance(item, dict)],
             default=0.0,
@@ -214,29 +211,8 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         blockers.append("url_evidence_missing")
     if kind == "faceless_video" and "stock_material" in (plan.get("capabilities") or {}):
         warnings.append("material_license_check_required")
-    if kind in {"faceless_video", "premium_human_video"} and not sound_candidates:
+    if kind == "faceless_video" and not sound_candidates:
         warnings.append("bgm_trend_evidence_missing")
-    if kind == "premium_human_video":
-        blockers.append("video_previsualization_agent_required")
-        if plan.get("status") == "blocked_on_provider_calibration":
-            blockers.append("provider_calibration_required")
-
-    video_previsualization: dict[str, Any]
-    if kind == "premium_human_video":
-        video_previsualization = {
-            "agent": "high_end_video_previsualization_agent",
-            "scope": "film_previsualization",
-            "status": "not_run",
-            "required": True,
-            "reason": "premium_human_video needs film-level animatic/project preflight",
-        }
-    else:
-        video_previsualization = {
-            "agent": "high_end_video_previsualization_agent",
-            "scope": "film_previsualization",
-            "status": "not_required_for_lane",
-            "required": False,
-        }
 
     influence_score = build_influence_score({
         "preflight_scores": scores,
@@ -251,8 +227,6 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
             "selected_lane": kind,
             "blockers": blockers,
             "warnings": warnings,
-            "force_video_previsualization": True,
-            "video_previsualization_status": video_previsualization["status"],
         },
     )
 
@@ -262,7 +236,6 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         "blockers": blockers,
         "warnings": preflight_decision["warnings"],
         "selected_lane": kind,
-        "video_previsualization_status": video_previsualization["status"],
         "publish_eligible": bool(
             has_current_strategy and (plan.get("account_scope") or {}).get("connected") is True
         ),
@@ -317,17 +290,12 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
                 "governed_knowledge_support",
                 "content_lane_go_no_go",
             ],
-            "high_end_video_previsualization_agent_owns": [
-                "script_to_screen_coherence",
-                "shot_feasibility",
-                "visual_continuity",
-                "pacing_and_animatic",
-                "sound_timing",
-                "budget_gate_readiness",
-            ],
-            "rule": "premium_human_video must not collapse film previsualization into the general Marketing OS score.",
+            "external_product": "video-studio",
+            "rule": (
+                "Professional human, digital-human, and AI film production is "
+                "not scored, planned, or persisted by Marketing OS."
+            ),
         },
-        "video_previsualization": video_previsualization,
         "plan_summary": {
             "kind_label": plan.get("kind_label"),
             "tool_sequence": plan.get("execution_order") or [],
@@ -355,7 +323,6 @@ def create_content_production_preflight(store: Any, params: dict[str, Any] | Non
             "influence_score": result["influence_score"],
             "preflight_decision": result["preflight_decision"],
             "separation_rule": result["separation"]["rule"],
-            "video_previsualization_status": result["video_previsualization"]["status"],
         },
     )
     return {

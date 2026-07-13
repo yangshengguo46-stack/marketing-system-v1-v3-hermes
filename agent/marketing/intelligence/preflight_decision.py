@@ -65,8 +65,6 @@ def _selected_lane(context: dict[str, Any]) -> str | None:
 
 
 def _reason_from_status(status: str, influence_score: dict[str, Any], blockers: list[str]) -> str:
-    if status == "delegate_to_video_previsualization":
-        return "高阶视频需要先由独立片子预演 Agent 判断镜头、连续性和预算可行性。"
     if status == "needs_audience_context":
         return "当前缺少目标受众或账号定位，直接生产容易变成泛泛内容。"
     if status == "needs_evidence":
@@ -94,8 +92,6 @@ def _next_steps(status: str, blockers: list[str], lane: str | None, stage: str) 
         steps.append("补充至少 1-3 条带 URL/来源的事实证据。")
     if "material_license_check_required" in blockers or status == "replace_or_license_materials":
         steps.append("检查素材来源、授权、版权和可商用范围。")
-    if "video_previsualization_agent_required" in blockers or lane == "premium_human_video":
-        steps.append("创建视频项目画布和动态样片，交给高阶视频片子预演 Agent。")
     if "provider_calibration_required" in blockers:
         steps.append("先完成视频/语音/渲染提供商校准，再开机。")
     if status == "blocked_by_risk":
@@ -109,8 +105,6 @@ def _next_steps(status: str, blockers: list[str], lane: str | None, stage: str) 
             steps.append("进入素材/渲染准备，先检查素材授权、字幕和音频来源。")
         elif lane == "faceless_video":
             steps.append("进入素材清单、脚本拆镜和低成本样片。")
-        elif lane == "premium_human_video":
-            steps.append("进入片子预演确认，而不是直接调用视频生成。")
         else:
             steps.append("进入草稿生产，并保留发布前预测和回执计划。")
     if not steps:
@@ -163,13 +157,7 @@ def build_preflight_decision(
     risk = _risk_value(influence_score)
     score_decision = str(influence_score.get("decision") or "")
 
-    if "video_previsualization_agent_required" in blockers or (
-        lane == "premium_human_video" and context.get("force_video_previsualization", True)
-    ):
-        status = "delegate_to_video_previsualization"
-        go = False
-        action = "delegate"
-    elif "audience_context_missing" in blockers:
+    if "audience_context_missing" in blockers:
         status = "needs_audience_context"
         go = False
         action = "collect_context"

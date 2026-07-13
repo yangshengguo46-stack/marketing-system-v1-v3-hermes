@@ -17,10 +17,14 @@ describe('Marketing OS business surfaces', () => {
     return result as T
   }
 
-  it('renders the three product-owned business destinations', () => {
+  it('renders the product-owned business destinations without an internal high-end video lane', () => {
     selectMarketingAccount('prospect_default')
     const { rerender } = render(<ContentFactoryView onNewChat={vi.fn()} requestGateway={requestGateway} />)
     expect(screen.getByText('内容工厂')).toBeTruthy()
+    expect(screen.getByText('图文创作')).toBeTruthy()
+    expect(screen.getByText('素材视频')).toBeTruthy()
+    expect(screen.queryByText('高阶视频')).toBeNull()
+    expect(screen.queryByText('数字人视频')).toBeNull()
 
     rerender(<AccountCenterView onNewChat={vi.fn()} requestGateway={requestGateway} />)
     expect(screen.getByText('账号管理')).toBeTruthy()

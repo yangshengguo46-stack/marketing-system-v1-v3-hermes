@@ -6,5 +6,4 @@
 
 ## 项目
 
-- [高级视频方案与历史执行记录（火山引擎）](./high-end-video-volcengine.md)：保留 `premium_human_video` 的视频核心、8 角色设计、ARK 字段校准和未完成人工闭环；不是当前任务入口。
-- [视频 Web 合同](./video-web-contract.md)：保留未来视频 Web surface 的边界合同；当前不实施。
+- [高级视频迁移指针](./high-end-video-volcengine.md)：核心、运行时、8 角色、Provider 研究和 Studio UI 均已迁入独立 `video-studio`；这里只保留边界证据。

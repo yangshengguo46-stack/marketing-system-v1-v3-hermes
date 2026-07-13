@@ -638,7 +638,6 @@ function contentTypeLabel(type?: string): string {
   const labels: Record<string, string> = {
     article_soft: '图文软文',
     faceless_video: '素材视频',
-    premium_video: '高阶视频',
     video: '视频'
   }
 

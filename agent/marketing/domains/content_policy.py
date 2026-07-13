@@ -13,7 +13,8 @@ from typing import Any
 from agent.marketing.domains.article_drafts import article_stylebooks
 
 
-CONTENT_KINDS = {"article_soft", "faceless_video", "premium_human_video"}
+CONTENT_KINDS = {"article_soft", "faceless_video"}
+EXTERNAL_CONTENT_KINDS = {"premium_human_video"}
 ARTICLE_PLATFORMS = {"zhihu", "wechat_official"}
 VIDEO_PLATFORMS = {
     "douyin",
@@ -107,22 +108,6 @@ LANE_CONFIG = {
         "skills": ["humanizer", "baoyu-infographic", "manim-video", "p5js", "ascii-video"],
         "deliverables": ["voiceover_script", "shot_list", "material_manifest", "sound_plan", "timeline", "final_video"],
     },
-    "premium_human_video": {
-        "label": "真人/数字人高质量视频",
-        "default_platforms": ["douyin", "wechat_channels", "bilibili"],
-        "asset_type": "video",
-        "capabilities": [
-            "account_context",
-            "evidence_research",
-            "copywriting",
-            "stock_material",
-            "generated_visual",
-            "audio",
-            "editing_render",
-        ],
-        "skills": ["humanizer", "baoyu-infographic", "manim-video", "p5js"],
-        "deliverables": ["film_brief", "screenplay", "storyboard", "animatic", "sound_plan", "rights_pack", "final_video"],
-    },
 }
 
 
@@ -192,7 +177,7 @@ class ContentProductionPolicy:
             },
             {
                 "id": "cost",
-                "status": "approval_required" if kind_value == "premium_human_video" else "local_first",
+                "status": "local_first",
                 "rule": "优先本地和免费能力；付费生成必须在调用前展示成本并获批。",
             },
         ]
@@ -259,6 +244,11 @@ def infer_content_kind(objective: str, *, kind: str = "auto", platforms: Any = N
         "digital_human": "premium_human_video",
     }
     requested = aliases.get(requested, requested)
+    if requested in EXTERNAL_CONTENT_KINDS:
+        raise ValueError(
+            "premium_human_video belongs to the standalone video-studio product, "
+            "not the Marketing OS content-production runtime"
+        )
     if requested in CONTENT_KINDS:
         return requested
     normalized_platforms = normalize_platforms(platforms)
@@ -268,7 +258,10 @@ def infer_content_kind(objective: str, *, kind: str = "auto", platforms: Any = N
     if any(word in text for word in ("知乎", "公众号", "软文", "长文", "文章")):
         return "article_soft"
     if any(word in text for word in ("数字人", "真人", "ai人", "ai 人", "口播", "高质量视频")):
-        return "premium_human_video"
+        raise ValueError(
+            "high-end human, digital-human, and AI film production belongs to "
+            "the standalone video-studio product"
+        )
     if any(word in text for word in ("不露脸", "素材拼接", "混剪", "空镜", "素材视频")):
         return "faceless_video"
     if normalized_platforms and any(item in VIDEO_PLATFORMS for item in normalized_platforms):
@@ -292,8 +285,6 @@ def normalize_platforms(value: Any) -> list[str]:
 
 
 def _fallback(kind: str) -> dict[str, str]:
-    if kind == "premium_human_video":
-        return {"if_provider_unavailable": "保留脚本和分镜，降级为授权素材不露脸视频。"}
     if kind == "faceless_video":
         return {
             "if_materials_insufficient": "交付旁白脚本、分镜和素材缺口清单，不伪造最终视频。"

@@ -160,7 +160,7 @@ def build_prediction_dimensions(
         "confidence_score": confidence_score,
         "basis": list(dict.fromkeys([*basis, f"platforms={platform_note}", "prediction_dimensions_v2"])),
         "missing_dimensions": (["trust", "account_fit"] if not evidence_ready else [])
-        + (["sound"] if kind in {"faceless_video", "premium_human_video"} and sound <= 0 else []),
+        + (["sound"] if kind == "faceless_video" and sound <= 0 else []),
         "note": "v2 dimensions align pre-publish predictions with post-publish metric labels; legacy expected_* fields remain for retro compatibility.",
     }
 

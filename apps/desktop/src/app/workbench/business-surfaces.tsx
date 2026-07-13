@@ -12,7 +12,6 @@ import {
   FileImage,
   FileText,
   Lock,
-  MonitorPlay,
   Plus,
   RefreshCw,
   Trash2,
@@ -91,10 +90,10 @@ export function ContentFactoryView({ onNewChat, requestGateway }: SurfaceProps) 
         </Button>
       }
       eyebrow="CONTENT STUDIO"
-      subtitle="三条内容管道共享选题、证据、素材、预演与发布回执。"
+      subtitle="图文与素材视频共享选题、证据、素材、预演与发布回执。"
       title="内容工厂"
     >
-      <section className="grid gap-4 lg:grid-cols-3">
+      <section className="grid gap-4 lg:grid-cols-2">
         <PipelineCard
           accent="coral"
           count={assets.filter(asset => contentLane(asset) === 'article').length}
@@ -118,18 +117,6 @@ export function ContentFactoryView({ onNewChat, requestGateway }: SurfaceProps) 
             )
           }
           title="素材视频"
-        />
-        <PipelineCard
-          accent="blue"
-          count={assets.filter(asset => contentLane(asset) === 'premium').length}
-          detail="真人、数字人和 AI 影像由独立片场 Agent 预演后生产。"
-          icon={<MonitorPlay className="size-5" />}
-          onClick={() =>
-            onNewChat(
-              '我要筹备一条高质量真人、数字人或 AI 视频。请先建立创作 brief，并让片场预演 Agent 评估方案、成本和风险，不要直接开机生成。'
-            )
-          }
-          title="高阶视频"
         />
       </section>
 
@@ -450,7 +437,7 @@ export function ManagedView({ onNewChat, requestGateway }: SurfaceProps) {
   )
 }
 
-function contentLane(asset: AssetSummary): 'article' | 'faceless' | 'premium' | 'unknown' {
+function contentLane(asset: AssetSummary): 'article' | 'faceless' | 'unknown' {
   const values = [asset.production_kind, asset.type, asset.platform]
     .map(value => (value || '').toLowerCase())
     .filter(Boolean)
@@ -461,10 +448,6 @@ function contentLane(asset: AssetSummary): 'article' | 'faceless' | 'premium' | 
 
   if (values.some(value => ['faceless_video', 'material_video', 'remix_video'].includes(value))) {
     return 'faceless'
-  }
-
-  if (values.some(value => ['premium_human_video', 'premium_video', 'digital_human_video'].includes(value))) {
-    return 'premium'
   }
 
   return 'unknown'
@@ -560,7 +543,7 @@ function AccountMetric({ label, value }: { label: string; value: number | null }
 function formatAssetKind(asset: AssetSummary): string {
   const lane = contentLane(asset)
 
-  return { article: '图文', faceless: '素材视频', premium: '高阶视频', unknown: '内容资产' }[lane]
+  return { article: '图文', faceless: '素材视频', unknown: '内容资产' }[lane]
 }
 
 function formatAssetStatus(status?: string): string {

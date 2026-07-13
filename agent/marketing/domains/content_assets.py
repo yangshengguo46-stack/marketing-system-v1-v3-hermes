@@ -324,7 +324,7 @@ class ContentAssetRepository(MarketingDomainRepository):
             payload["_experiment_id"] = experiment_id
             plan_payload = json.loads(plan_row["plan_json"])
             sound_plan = payload.get("sound_plan")
-            if production_kind in {"faceless_video", "premium_human_video"}:
+            if production_kind == "faceless_video":
                 sound_plan = _validated_sound_plan(
                     sound_plan,
                     repository=ShortVideoSignalRepository(self.paths),
