@@ -32,27 +32,25 @@
 | Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；新会话自动获得稳定 `prospect_*` 作用域；MCP 真实登录验证后原子迁移经营事实，旧 session 不变、successor 从首轮绑定真实账号；`accounts.json` 仅一次迁移 | automated | 真人二维码/验证码校准、successor UI 切换、多账号恢复、冲突合并审查与打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、真实登录验证、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放登录窗口，后续以同一持久 profile 后台恢复；删除时清理 profile | automated | 真人多平台登录/退出、Cookie 信号随平台变更的巡检 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
-| Content plan/assets | 三 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
+| Content plan/assets | 图文与不露脸素材视频双 lane policy、图文质量门、版本资产 | automated | 真实高质量内容与素材生产 |
 | Preflight | InfluenceOS + 不可变记录 + draft gate | automated | 真实账号历史校准、发布前版本链 |
 | Receipt/Learning store | ReceiptRef、LearningCandidate、PublishAction、MetricCheckpoint 状态机；观察后自动 Retro 和幂等 pending candidate；显式接受后投影 Account KB | automated | 真实平台指标 Provider 与跨天真人数据 |
 | Hermes memory/Skill | 原生能力保留，经营写入规则已加入 | automated | 候选治理后投影、重复成功流程沉淀 |
 | Publishing/metrics | 原生发布 intent、一次性审批、Provider 插槽、unknown 恢复、回执校验、5 段 checkpoint；Hermes Cron 原生触发指标 Provider，支持领取、延期、崩溃恢复和 unavailable 回执 | automated | 缺实际 L3 发布/指标 Provider 和真人跨天验收 |
 | Packaging | 自包含 staging 可构建 | automated | 精简依赖、签名、公证、干净机断网首启 |
-| High-end video | 独立项目/合同 | deferred | 不计桌面 v0.1 完成 |
+| High-end video | 已完整迁入独立 `/Users/yangyucheng/projects/video-studio`；Marketing OS 仅保留边界指针，不保留引擎、运行时、角色、Provider 或内部生产 lane | external product | 不计 Marketing OS 桌面完成度；未来接入必须等待独立产品稳定 Port/API |
 
 ## 内容生产当前边界
 
-内容生产按三种主要交付形态组织，但共享同一条 Hermes 原生经营闭环，不建设三套彼此隔离的产品或状态：
+Marketing OS 内容生产只保留两种内部交付形态，共享同一条 Hermes 原生经营闭环：
 
 | 交付形态 | 当前原生能力 | 主要缺口 | 当前证据 |
 |---|---|---|---|
 | `article_soft` 软文 | 账号/实验绑定、EvidencePack、父稿与平台变体、质量门、版本资产、Preflight 和发布资格约束 | 真实账号调性、主张级多源核验、配图版权与真人审稿 | automated |
-| `faceless_video` 不露脸素材视频 | 账号/实验绑定、内容计划、素材需求、声音计划、特征快照、Preflight 和内容资产协议 | 授权素材下载与排序、TTS/BGM、EDL 实际填充、真实渲染和人工审片 | automated |
-| `premium_human_video` 高级视频 | 已迁入独立 `video-studio` 产品；Marketing OS 只保留未来可选 host adapter 边界，不拥有项目画布、8 角色调度、Provider、预算或审批状态机 | 独立产品需完成八角色真实模型联跑、Studio API、动态样片审批、真实成片和真人质量验收；营销接入需另行排期 | external standalone product / deferred integration |
+| `faceless_video` 不露脸素材视频 | 账号/实验绑定、内容计划、素材需求、声音计划、特征快照、Preflight 和内容资产协议；Hermes 已有可用的火山语音 Provider | 授权素材下载与排序、把 TTS/BGM 接入本 lane、EDL 实际填充、真实渲染和人工审片 | automated |
+两种内部形态共同消费账号上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与受治理学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接人工确认，不拥有生产、素材、浏览器、发布或学习事实。
 
-三种形态共同消费账号上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与受治理学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接人工确认，不拥有生产、素材、浏览器、发布或学习事实。
-
-当前不能宣称“内容制作已完成”。软文与不露脸视频停在自动化合同和草稿能力；高级视频已经迁出为独立 `video-studio` 产品，营销系统当前没有到该产品的运行时接入。三者都缺少从真实账号输入到真人认可成品、发布回执和跨天指标学习的 `human-loop` 证据。迁移位置和边界记录见 [`../deferred/high-end-video-volcengine.md`](../deferred/high-end-video-volcengine.md)。
+当前不能宣称“内容制作已完成”。软文与不露脸视频停在自动化合同和草稿能力，仍缺从真实账号输入到真人认可成品、发布回执和跨天指标学习的 `human-loop` 证据。高级视频是独立产品，不属于本台账完成范围；迁移指针见 [`../deferred/high-end-video-volcengine.md`](../deferred/high-end-video-volcengine.md)。
 
 ## 当前唯一主线
 
@@ -70,7 +68,7 @@
 
 LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Hermes Cron 的非阻塞触发；`agent/marketing/providers/metrics.py` 是平台观察 seam；`PublishingRepository` 原子领取、延期、恢复并结算 checkpoint；`metric_loop.py` 把真实观察写为 Receipt、映射标签、执行 Retro 并生成幂等 pending candidate。单次结果永远不能自动改策略；只有 `AccountLearningGovernance.accept_and_project` 的显式治理动作才能进入 Account KB。
 
-四类知识库已进入 Hermes 原生 owner：平台库维护 source/region/version/valid time 与平台 stylebook；赛道与市场库维护品类、需求、竞争和商业路径的时效规律；内容库维护个体注意力、认知负荷、情绪、信任、身份与群体传播的可观察模型；账号库只允许真实 Receipt 支持且已 accepted 的 LearningCandidate 晋升。`memory_classification` 只是记忆候选分类器，用户/模型陈述不具有知识写权限。内容计划与 Preflight 已读取四库覆盖度及 entry IDs，公式为 `content-production-preflight-v0.5`。
+四类知识库已进入 Hermes 原生 owner：平台库维护 source/region/version/valid time 与平台 stylebook；赛道与市场库维护品类、需求、竞争和商业路径的时效规律；内容库维护个体注意力、认知负荷、情绪、信任、身份与群体传播的可观察模型；账号库只允许真实 Receipt 支持且已 accepted 的 LearningCandidate 晋升。`memory_classification` 只是记忆候选分类器，用户/模型陈述不具有知识写权限。内容计划与 Preflight 已读取四库覆盖度及 entry IDs，公式为 `content-production-preflight-v0.6`。
 
 账号经营世界模型已按今天定稿重写，不恢复旧 Electron/FastAPI 生命周期：`AccountStrategyRepository` 原生拥有创作者经营画像、赛道路线假设、多角色对标经营图谱、版本化定位、内容系统和可证伪实验；`AccountLifecycleRepository` 维护项目与行为受众版本。顺序固定为创作者资产 → 赛道路线 → 行为受众 → 对标图谱 → 定位 → 内容系统 → 实验 → Receipt/Retro。没有真实市场证据的路线置信度封顶 `0.45`；对标必须保留多维匹配向量和 EvidenceRecord，粉丝数及不透明总分不能解锁定位。
 
@@ -194,13 +192,25 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - 自包含 Hermes/Python/Chromium staging 与真实 bundled Chromium headless 启动已 automated；仍缺干净机器安装验收。
 - 断网首启和升级回滚。
 
+### DESKTOP-UI-01 原生产品壳（第一轮已完成）
+
+- 直接改造 Hermes `apps/desktop` 原生 Shell，没有新建第二套 Electron 前端，也没有增加 UI 适配服务。
+- 一级导航改为工作台、新对话、内容工厂、账号管理和托管；Skills、MCP、消息通道、Cron 等仍由 Hermes 原生 owner 管理，但不再以开发者概念占据用户一级入口。
+- 工作台读取 `AccountContextRepository`、账号平台统计、内容资产和 learning candidate；只展示真实快照，缺数据时明确等待回执，不生成装饰性假曲线。
+- 内容工厂只展示 Marketing OS 真正拥有的图文、素材视频两条入口；高阶视频已迁出，不保留无法执行的假入口。
+- 会话侧栏过滤 `<marketing-turn-context>` 等内部上下文，不再把系统会话泄漏为历史对话；外部消息渠道线程不再混入桌面历史列表。
+- 移除空置顶区、开发状态栏、面板换位、触感和快捷键等开发者标题栏入口；设置和左右栏折叠保留。
+- 视觉品牌改为 Marketing OS 珊瑚色体系，Hermes 主题能力继续提供明暗模式，但不能覆盖产品主品牌色。
+- 新安装默认简体中文，语言切换能力保留；默认值同时修改 Hermes 原生配置和 Desktop i18n owner。
+- 当前验证：Desktop TypeScript typecheck 通过；18 项路由、业务页面、账号连接及 i18n UI 测试通过；52 项 Gateway/账号/i18n 回归通过；正式 Vite build 通过。
+- 仍需真人视觉验收工作台、内容工厂、账号管理、托管与新对话五个入口；后续只根据真实使用反馈打磨信息密度，不恢复 Hermes 开发者控制台式信息架构。
+
 ## 暂停项
 
 - 非闭环所需的工作台装饰。
 - 全平台自动发布。
 - 微信/飞书体验扩张。
 - Windows 正式交付。
-- 高阶视频 Provider 和多 Agent 片场。
 - 抖音/B站/小红书 BGM 真人页面 selector 验收（账号登录 UI 已具备，等待真人账号纵切）。
 - 未校准的流量、完播、互动和 InfluenceOS 对外承诺。
 
