@@ -68,6 +68,40 @@ export function outputDirectory(
   return accountDirectory(base, normalized)
 }
 
+export async function migrateLegacyProfile(
+  lease,
+  profileRoot = process.env.HERMES_BROWSER_PROFILE_ROOT,
+  legacyRoot = process.env.HERMES_LEGACY_BROWSER_PROFILE_ROOT,
+) {
+  if (!legacyRoot) return false
+  const normalized = parseAccountLease(JSON.stringify(lease))
+  const target = profileDirectory(normalized, profileRoot)
+  const source = accountDirectory(path.resolve(legacyRoot), normalized)
+  try {
+    await fs.access(target)
+    return false
+  } catch {}
+  try {
+    await fs.access(source)
+  } catch {
+    return false
+  }
+  await fs.mkdir(path.dirname(target), { recursive: true })
+  try {
+    await fs.rename(source, target)
+  } catch (error) {
+    if (error?.code !== 'EXDEV') throw error
+    await fs.cp(source, target, { recursive: true, errorOnExist: true })
+    await fs.rm(source, { recursive: true, force: true })
+  }
+  await Promise.all(
+    ['SingletonCookie', 'SingletonLock', 'SingletonSocket'].map(name =>
+      fs.rm(path.join(target, name), { force: true, recursive: true }),
+    ),
+  )
+  return true
+}
+
 export async function purgeAccountDirectories(
   lease,
   profileRoot = process.env.HERMES_BROWSER_PROFILE_ROOT,

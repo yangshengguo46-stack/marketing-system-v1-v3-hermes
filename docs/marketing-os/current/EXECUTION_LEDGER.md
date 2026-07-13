@@ -222,13 +222,15 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - 营销、Agent、Gateway、审批与账号浏览器隔离组合回归：491 passed。
 - 当前营销域、经营世界模型、四类知识、中央服务/同步/撤回、内容生产、原生采证、prospect 继承、真实登录激活、SessionDB 与经营闭环主组合回归：391 passed。
 - 中央知识服务专项：15 passed；覆盖嵌套身份拒绝、持久化、内容碰撞、删除失效、认证、过期请求、nonce、限流、客户端 token 轮换/吊销、跨客户端删除拒绝和删除 key-ring 轮换。
-- 改造版 Playwright MCP：18 passed；包含账号租约、profile 持久化/清理、浏览器运行时、平台登录启动、登录信号、公众号作品采集、敏感 URL 清洗和 56 项工具 schema。
+- 改造版 Playwright MCP：23 passed；包含账号租约、旧 profile 原生迁移、持久化/清理、浏览器运行时、平台登录启动、登录信号、抖音自有作品采集、公众号内容分析采集、敏感 URL 清洗和 57 项工具 schema。
 - TUI/Gateway 会话既有回归：172 passed；本轮新增 Gateway adoption RPC 已包含在营销组合回归。
 - Hermes Cron 调度/作业/产品任务组合回归：302 passed；产品任务无 MetricProvider 时静默，有真实 Provider 时调用指标 owner。
 - LOOP-01/02/03/04 发布账本、审批、指标回执、缺失值、延期、崩溃领取恢复、Retro、候选和账号知识治理单文件回归：19 passed。
 - Desktop 平台/打包回归：262 passed、1 skipped；自包含 runtime staging、MCP 生产依赖闭包、受控 Chromium、Electron-as-Node 与真实 bundled Chromium 启动已验证。
 - 通用媒体素材库：65 项营销域回归通过；上传路径隔离、MIME/版权来源强绑定、敏感元数据脱敏、可信素材幂等、引用删除保护和 32MB Gateway 内联上限已进入 Hermes 原生领域 owner。
-- 工作台账号连接纵切：TypeScript 构建、3 项 UI/store 测试、15 项账号 Gateway/Registry/Auth 回归通过；尚缺本轮真人扫码验收。
+- 工作台账号连接纵切：TypeScript 生产构建通过，账号 Gateway/Registry/Auth/metrics 组合回归通过；真实已登录账号完成数据纵切验收，新的空 profile 扫码流程仍保留为交付检查项。
+- 真实账号指标验收（2026-07-13）：抖音创作者中心返回全部作品 4、公开已发布 3、私密 1、公开播放 5366、累计获赞 56，已写入 `marketing_accounts.stats_json`；公众号最近 9 篇逐篇读取内容分析详情，汇总阅读用户 351、分享用户 28、点赞 11、在看 7，口径为发表后 30 天且阅读/分享单位为去重用户。发表记录列表中的预览数只保留为 `publish_preview`，不得再进入指标评分或账号卡。
+- 指标边界：抖音 `videos_count` 只表示公开已发布作品，`all_videos_count` 包含私密作品；公众号账号卡使用“已同步阅读/已同步分享”，不声称是账号历史总量。若作品列表分页未完整加载，公开/私密拆分必须为空并暴露 data gap。
 - 内容审核读取纵切：Gateway 已提供账号作用域的 bounded asset summary 与按需全文读取，列表不再一次把多篇完整正文送入 Electron；14 项内容/素材/账号组合回归通过，审核与继续对话 UI 待接。
 - Git 历史恢复白名单：见 `../reference/engineering/git-history-recovery.md`。
 - 下一次更新本台账时必须写：代码路径、测试、dev-runtime、packaged、human-loop 和仍未完成的风险。

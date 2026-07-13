@@ -47,6 +47,7 @@ class AccountContextRepository:
         registry = AccountRegistry(db)
         try:
             registry.import_legacy_accounts(self.paths.config_dir / "accounts.json")
+            registry.reconcile_unverified_legacy_accounts()
             rows = registry.list()
             return [_sanitize_account(item) for item in rows]
         finally:

@@ -29,6 +29,11 @@ Use the current Hermes conversation account scope. Never ask the model to choose
 
 ## Browser discipline
 
+- Use only the account-scoped Marketing Browser MCP for the bound platform. Generic
+  `browser_*` tools run in a separate temporary profile and are never a fallback for
+  account login, creator data, drafts, publishing, metrics, or verification.
+- If the account-scoped MCP tool is unavailable, report the internal capability as
+  unavailable and stop. Do not open the platform in another browser backend.
 - Prefer accessibility snapshot refs and form tools over coordinate clicks or arbitrary JavaScript.
 - Use `browser_evaluate` only for read-only extraction when the snapshot cannot expose the field.
 - Do not use `browser_run_code_unsafe` for login, publishing, deletion, payment, messages, or account

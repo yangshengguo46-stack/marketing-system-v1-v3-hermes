@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.domains.browser_payloads import decode_schema_payload
 from agent.marketing.domains.content_policy import VIDEO_PLATFORMS
 from agent.marketing.domains.storage import MarketingDomainRepository
 
@@ -22,21 +23,7 @@ RIGHTS_STATUSES = {"unknown", "platform_library", "licensed", "user_owned", "res
 def decode_browser_signal_result(result: Any) -> dict[str, Any] | None:
     """Find the collector payload inside a Playwright MCP text response."""
 
-    if isinstance(result, dict):
-        return result if result.get("schema") == SIGNAL_SCHEMA else None
-    if not isinstance(result, str) or SIGNAL_SCHEMA not in result:
-        return None
-    decoder = json.JSONDecoder()
-    for index, character in enumerate(result):
-        if character != "{":
-            continue
-        try:
-            value, _ = decoder.raw_decode(result[index:])
-        except ValueError:
-            continue
-        if isinstance(value, dict) and value.get("schema") == SIGNAL_SCHEMA:
-            return value
-    return None
+    return decode_schema_payload(result, SIGNAL_SCHEMA)
 
 
 class ShortVideoSignalRepository(MarketingDomainRepository):

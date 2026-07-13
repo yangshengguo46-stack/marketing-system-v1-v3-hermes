@@ -419,6 +419,23 @@ def test_get_platform_tools_includes_enabled_mcp_servers_by_default():
     assert "disabled-server" not in enabled
 
 
+def test_get_platform_tools_includes_product_owned_mcp_without_user_config(
+    monkeypatch,
+):
+    import agent.product as product
+
+    monkeypatch.setattr(product, "is_product_runtime", lambda: True)
+    monkeypatch.setattr(
+        product,
+        "bundled_browser_mcp_config",
+        lambda: {"command": "node", "args": ["server.js", "--schema-only"]},
+    )
+
+    enabled = _get_platform_tools({}, "cli")
+
+    assert "marketing-browser" in enabled
+
+
 def test_get_platform_tools_keeps_enabled_mcp_servers_with_explicit_builtin_selection():
     config = {
         "platform_toolsets": {"cli": ["web", "memory"]},

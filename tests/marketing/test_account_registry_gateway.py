@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from agent.account_registry import AccountRegistry
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import AccountLifecycleRepository
@@ -165,5 +167,56 @@ def test_gateway_exposes_supported_platform_catalog_and_rejects_unknown(tmp_path
             }
         )
         assert response["error"]["code"] == -32602
+    finally:
+        db.close()
+
+
+def test_gateway_syncs_douyin_metrics_through_native_browser_owner(tmp_path, monkeypatch):
+    db = SessionDB(db_path=tmp_path / "state.db")
+    monkeypatch.setattr(server, "_db", db)
+    calls = []
+
+    def fake_browser(**kwargs):
+        calls.append(kwargs)
+        return json.dumps(
+            {
+                "schema": "marketing_douyin_owned_portfolio.v1",
+                "platform": "douyin",
+                "observed_at": "2026-07-13T12:00:00Z",
+                "account": {"name": "杨炎昭"},
+                "stats": {
+                    "followers": 4,
+                    "total_likes": 56,
+                    "all_work_count": 4,
+                    "public_work_count": 3,
+                    "private_work_count": 1,
+                    "public_view_count": 5366,
+                },
+                "works": [],
+                "collection": {"complete": True},
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(mcp_tool, "execute_marketing_account_browser_tool", fake_browser)
+    try:
+        registry = AccountRegistry(db)
+        account = registry.register_pending(platform="douyin")
+        registry.mark_authenticated(account["id"])
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": "sync",
+                "method": "marketing.account.sync",
+                "params": {"account_id": account["id"]},
+            }
+        )["result"]
+
+        assert result["account"]["stats"]["videos_count"] == 3
+        assert result["account"]["stats"]["all_videos_count"] == 4
+        assert result["account"]["stats"]["total_views"] == 5366
+        assert calls[0]["tool_name"] == "browser_collect_douyin_portfolio"
+        assert calls[0]["arguments"] == {"max_works": 50}
     finally:
         db.close()

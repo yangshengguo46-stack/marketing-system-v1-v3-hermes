@@ -279,6 +279,14 @@ export function buildOwnedAccountAnalysisPrompt(account: MarketingAccountSummary
     )
   }
 
+  if (account.platform === 'douyin') {
+    return (
+      '请诊断当前会话绑定的抖音账号。先调用 browser_collect_douyin_portfolio 同步创作者中心的账号和作品数据，' +
+      '再读取账号经营上下文。请明确区分公开已发布作品数、包含私密作品的全部作品数，以及每条作品的播放、' +
+      '点赞、评论、分享、完播和平均观看指标；不得用“近30天未发布”推断累计作品数。'
+    )
+  }
+
   return `请进入账号 ${account.id} 的经营上下文，先汇总账号现状、受众、定位和今天最值得推进的任务。`
 }
 

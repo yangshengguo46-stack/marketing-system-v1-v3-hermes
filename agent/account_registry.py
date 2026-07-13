@@ -54,6 +54,7 @@ class AccountRegistry:
     """The sole Hermes owner of connected social account identity and lifecycle."""
 
     LEGACY_IMPORT_MARKER = "marketing_accounts_json_import_v1"
+    LEGACY_TRUST_RECONCILE_MARKER = "marketing_accounts_legacy_trust_reconcile_v1"
 
     def __init__(self, session_db: SessionDB | None = None):
         self.db = session_db or SessionDB()
@@ -272,6 +273,36 @@ class AccountRegistry:
             issued_at=time.time(),
         )
 
+    def lease_for_sync(
+        self, account_id: str, *, user_id: str = "default"
+    ) -> BrowserContextLease:
+        """Issue a bounded lease for a first-party read collector.
+
+        A stale migrated account may use this lease once so the isolated
+        browser profile itself can prove whether its login is still valid.
+        """
+
+        account = self._require(account_id, user_id=user_id)
+        authenticated = (
+            account.get("status") == "active"
+            and account.get("auth_state") == "authenticated"
+        )
+        legacy_verification = (
+            account.get("status") == "stale"
+            and account.get("auth_state") == "verification_required"
+        )
+        if not (authenticated or legacy_verification):
+            raise ValueError("account requires login before metrics can be synchronized")
+        return BrowserContextLease(
+            session_id=f"sync-{account_id}",
+            user_id=user_id,
+            account_id=str(account["id"]),
+            platform=str(account["platform"]),
+            profile_key=str(account["profile_key"]),
+            auth_state=str(account["auth_state"]),
+            issued_at=time.time(),
+        )
+
     def import_legacy_accounts(self, accounts_path: Path) -> int:
         """One-time secret-free import from the deleted shell's accounts.json."""
 
@@ -287,9 +318,9 @@ class AccountRegistry:
             if not isinstance(item, dict) or not item.get("id") or not item.get("platform"):
                 continue
             legacy_status = str(item.get("status") or "active").lower()
-            status = legacy_status if legacy_status in {
-                "pending", "active", "stale", "disconnected", "deleted"
-            } else "active"
+            terminal = legacy_status if legacy_status in {"disconnected", "deleted"} else None
+            status = terminal or "stale"
+            legacy_stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
             self.db.upsert_marketing_account(
                 account_id=str(item["id"]),
                 platform=str(item["platform"]),
@@ -297,13 +328,57 @@ class AccountRegistry:
                 username=str(item.get("username") or "") or None,
                 label=str(item.get("label") or "") or None,
                 status=status,
-                auth_state="authenticated" if status == "active" else "unknown",
-                stats=item.get("stats") if isinstance(item.get("stats"), dict) else None,
-                metadata={"migrated_from": "accounts.json"},
+                auth_state=(
+                    "verification_required"
+                    if status == "stale"
+                    else "unauthenticated"
+                ),
+                stats={},
+                metadata={
+                    "migrated_from": "accounts.json",
+                    "legacy_stats_snapshot": legacy_stats,
+                    "trust_state": "unverified_legacy_import",
+                },
             )
             imported += 1
         self.db.set_meta(self.LEGACY_IMPORT_MARKER, "complete")
         return imported
+
+    def reconcile_unverified_legacy_accounts(self) -> int:
+        """Remove live authority from legacy rows never verified by this owner."""
+
+        if self.db.get_meta(self.LEGACY_TRUST_RECONCILE_MARKER) == "complete":
+            return 0
+        reconciled = 0
+        for account in self.db.list_marketing_accounts(include_deleted=True):
+            metadata = account.get("metadata") or {}
+            if (
+                metadata.get("migrated_from") != "accounts.json"
+                or account.get("last_verified_at") is not None
+                or account.get("status") == "deleted"
+            ):
+                continue
+            legacy_stats = account.get("stats") or metadata.get("legacy_stats_snapshot") or {}
+            self.db.upsert_marketing_account(
+                account_id=str(account["id"]),
+                user_id=str(account.get("user_id") or "default"),
+                platform=str(account["platform"]),
+                platform_user_id=account.get("platform_user_id"),
+                username=account.get("username"),
+                label=account.get("label"),
+                status="stale",
+                auth_state="verification_required",
+                permissions=account.get("permissions") or {},
+                stats={},
+                metadata={
+                    **metadata,
+                    "legacy_stats_snapshot": legacy_stats,
+                    "trust_state": "unverified_legacy_import",
+                },
+            )
+            reconciled += 1
+        self.db.set_meta(self.LEGACY_TRUST_RECONCILE_MARKER, "complete")
+        return reconciled
 
     def _require(self, account_id: str, *, user_id: str) -> dict[str, Any]:
         account = self.db.get_marketing_account(account_id, user_id=user_id)

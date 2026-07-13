@@ -227,22 +227,36 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
   const accountName = selectedAccount?.label || selectedAccount?.username || '你的账号'
   const greeting = timeGreeting()
 
-  const metrics = [
-    { icon: Users, label: '粉丝', value: metric(stats, ['followers', 'fan_count', 'fans']), accent: '#54b99a' },
-    { icon: Eye, label: '浏览', value: metric(stats, ['views', 'play_count', 'total_views']), accent: '#ef625c' },
-    {
-      icon: Zap,
-      label: '互动',
-      value: metric(stats, ['likes', 'total_likes', 'digg_count', 'engagement', 'interaction']),
-      accent: '#d6a84a'
-    },
-    {
-      icon: FileText,
-      label: '作品',
-      value: metric(stats, ['works', 'video_count', 'videos_count', 'content_count']),
-      accent: '#7894d8'
-    }
-  ]
+  const metrics = selectedAccount?.platform === 'wechat_official'
+    ? [
+        { icon: Eye, label: '已同步阅读', value: metric(stats, ['read_users']), accent: '#54b99a' },
+        { icon: ArrowUpRight, label: '已同步分享', value: metric(stats, ['share_users']), accent: '#ef625c' },
+        { icon: Zap, label: '点赞', value: metric(stats, ['like_count']), accent: '#d6a84a' },
+        { icon: FileText, label: '文章', value: metric(stats, ['articles_count']), accent: '#7894d8' }
+      ]
+    : selectedAccount?.platform === 'douyin'
+      ? [
+          { icon: Users, label: '粉丝', value: metric(stats, ['followers']), accent: '#54b99a' },
+          { icon: Eye, label: '公开播放', value: metric(stats, ['total_views']), accent: '#ef625c' },
+          { icon: Zap, label: '累计获赞', value: metric(stats, ['total_likes']), accent: '#d6a84a' },
+          { icon: FileText, label: '公开作品', value: metric(stats, ['videos_count']), accent: '#7894d8' }
+        ]
+      : [
+          { icon: Users, label: '粉丝', value: metric(stats, ['followers', 'fan_count', 'fans']), accent: '#54b99a' },
+          { icon: Eye, label: '浏览', value: metric(stats, ['views', 'play_count', 'total_views']), accent: '#ef625c' },
+          {
+            icon: Zap,
+            label: '互动',
+            value: metric(stats, ['likes', 'total_likes', 'digg_count', 'engagement', 'interaction']),
+            accent: '#d6a84a'
+          },
+          {
+            icon: FileText,
+            label: '作品',
+            value: metric(stats, ['works', 'video_count', 'videos_count', 'content_count']),
+            accent: '#7894d8'
+          }
+        ]
 
   return (
     <main className="marketing-workbench h-full overflow-y-auto bg-(--ui-background) text-foreground">

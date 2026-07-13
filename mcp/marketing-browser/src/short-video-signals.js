@@ -19,7 +19,8 @@ export function installShortVideoSignalTool() {
       }),
       type: 'readOnly',
     },
-    handle: async (tab, params, response) => {
+    handle: async (context, params, response) => {
+      const tab = await context.ensureTab()
       const result = await tab.page.evaluate(extractShortVideoSignals, params.max_items || 50)
       response.addCode('await page.evaluate(/* Marketing OS short-video and BGM extractor */);')
       await response.addResult('Marketing short-video signals', JSON.stringify(result, null, 2), {

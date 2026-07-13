@@ -12,12 +12,21 @@ _mcp_discovery_thread: Optional[threading.Thread] = None
 
 
 def _has_configured_mcp_servers() -> bool:
-    """Cheap config probe so non-MCP users avoid importing the MCP stack."""
+    """Cheap config probe so non-MCP users avoid importing the MCP stack.
+
+    Product-owned MCP servers are injected at runtime rather than written to
+    the user's config file.  Treat the product runtime itself as configured so
+    those native owners are discovered before the Agent snapshots its tools.
+    """
     try:
         from hermes_cli.config import read_raw_config
 
         mcp_servers = (read_raw_config() or {}).get("mcp_servers")
-        return isinstance(mcp_servers, dict) and len(mcp_servers) > 0
+        if isinstance(mcp_servers, dict) and len(mcp_servers) > 0:
+            return True
+        from agent.product import is_product_runtime
+
+        return is_product_runtime()
     except Exception:
         # Be conservative: if config probing fails, try discovery in the
         # background so startup still can't block.

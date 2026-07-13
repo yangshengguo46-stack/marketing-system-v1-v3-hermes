@@ -7,14 +7,17 @@ import {
   outputDirectory,
   parseAccountLease,
   profileDirectory,
+  migrateLegacyProfile,
   purgeAccountDirectories,
 } from './account-lease.js'
 import { resolveBrowserExecutable } from './browser-runtime.js'
 import { installAccountAuthTool } from './account-auth.js'
+import { installDouyinPortfolioTool } from './douyin-owned.js'
 import { installShortVideoSignalTool } from './short-video-signals.js'
 import { installWechatOfficialPortfolioTool } from './wechat-official.js'
 
 installAccountAuthTool()
+installDouyinPortfolioTool()
 installShortVideoSignalTool()
 installWechatOfficialPortfolioTool()
 
@@ -26,6 +29,7 @@ if (process.argv.includes('--purge-profile')) {
   await runSchemaServer()
 } else {
   const lease = parseAccountLease()
+  await migrateLegacyProfile(lease)
   const profile = profileDirectory(lease)
   const outputDir = outputDirectory(lease)
   const executablePath = resolveBrowserExecutable()

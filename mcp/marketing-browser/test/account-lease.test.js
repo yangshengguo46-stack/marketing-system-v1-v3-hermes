@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import {
+  migrateLegacyProfile,
   outputDirectory,
   parseAccountLease,
   profileDirectory,
@@ -53,6 +54,24 @@ test('keeps Playwright artifacts outside the source workspace', () => {
     outputDirectory(lease, '/browser-output'),
     path.join('/browser-output', 'douyin', 'acct_ab3145'),
   )
+})
+
+test('moves an obsolete account profile into the native browser owner once', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'marketing-browser-migrate-'))
+  const profileRoot = path.join(root, 'native')
+  const legacyRoot = path.join(root, 'legacy')
+  const legacyProfile = path.join(legacyRoot, 'douyin', lease.account_id)
+  await fs.mkdir(legacyProfile, { recursive: true })
+  await fs.writeFile(path.join(legacyProfile, 'Login Data'), 'opaque-browser-state')
+  await fs.writeFile(path.join(legacyProfile, 'SingletonLock'), 'stale-lock')
+
+  assert.equal(await migrateLegacyProfile(lease, profileRoot, legacyRoot), true)
+  const migrated = profileDirectory(lease, profileRoot)
+  assert.equal(await fs.readFile(path.join(migrated, 'Login Data'), 'utf8'), 'opaque-browser-state')
+  await assert.rejects(fs.stat(path.join(migrated, 'SingletonLock')))
+  await assert.rejects(fs.stat(legacyProfile))
+  assert.equal(await migrateLegacyProfile(lease, profileRoot, legacyRoot), false)
+  await fs.rm(root, { recursive: true, force: true })
 })
 
 test('purges only the deleted account profile and output', async () => {

@@ -2408,7 +2408,9 @@ def _load_enabled_toolsets() -> list[str] | None:
             selected.difference_update(
                 {"coding", "terminal", "file", "code_execution", "debugging", "project"}
             )
-        selected.update({"marketing", "marketing_code", "delegation"})
+        selected.update(
+            {"marketing", "marketing_code", "delegation", "marketing-browser"}
+        )
         return sorted(selected)
 
     # Coding posture (base Hermes): with no explicit pin, collapse to the
@@ -13295,6 +13297,70 @@ def _(rid, params: dict) -> dict:
             "account": account,
             "login_state": "waiting_for_user",
             "browser_owner": "marketing-browser-mcp",
+        },
+    )
+
+
+@method("marketing.account.sync")
+def _(rid, params: dict) -> dict:
+    """Refresh canonical account metrics from its first-party browser owner."""
+    from agent.account_registry import AccountRegistry
+    from agent.marketing.account_metrics_capture import (
+        apply_account_metrics,
+        decode_account_metrics_result,
+    )
+    from agent.marketing.domains.account_portfolio import AccountPortfolioRepository
+    from tools.mcp_tool import execute_marketing_account_browser_tool
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    user_id = str(params.get("user_id") or "default").strip() or "default"
+    db = _get_db()
+    if db is None:
+        return _db_unavailable_error(rid, code=5017)
+    try:
+        account = AccountRegistry(db).get(account_id, user_id=user_id)
+        tool_name = {
+            "douyin": "browser_collect_douyin_portfolio",
+            "wechat_official": "browser_collect_wechat_official_portfolio",
+        }.get(str(account.get("platform") or ""))
+        if not tool_name:
+            raise ValueError("this platform does not yet expose a first-party metrics collector")
+        raw = execute_marketing_account_browser_tool(
+            account_id=account_id,
+            user_id=user_id,
+            tool_name=tool_name,
+            arguments={"max_works": 50} if account["platform"] == "douyin" else {"max_articles": 20},
+        )
+        payload = decode_account_metrics_result(raw)
+        if payload is None:
+            raise RuntimeError("account browser returned no metrics evidence")
+        portfolio_capture = None
+        if account["platform"] == "wechat_official":
+            portfolio_capture = AccountPortfolioRepository().capture_browser_result(
+                user_id=user_id,
+                account_id=account_id,
+                payload=payload,
+                session_id=f"account-sync-{account_id}",
+                tool_call_id="gateway-account-sync",
+            )
+        projection = apply_account_metrics(
+            payload,
+            user_id=user_id,
+            account_id=account_id,
+            session_db=db,
+        )
+        updated = AccountRegistry(db).get(account_id, user_id=user_id)
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    except (RuntimeError, TimeoutError) as exc:
+        return _err(rid, 5026, str(exc))
+    return _ok(
+        rid,
+        {
+            "account": updated,
+            "projection": projection,
+            "portfolio_capture": portfolio_capture,
         },
     )
 

@@ -1402,12 +1402,28 @@ def enabled_mcp_server_names(config: dict) -> Set[str]:
     flag or an unrecognized value is treated as enabled.
     """
     mcp_servers = (config or {}).get("mcp_servers") or {}
-    return {
+    enabled = {
         str(name)
         for name, server_cfg in mcp_servers.items()
         if isinstance(server_cfg, dict)
         and _parse_enabled_flag(server_cfg.get("enabled", True), default=True)
     }
+    try:
+        from agent.product import bundled_browser_mcp_config, is_product_runtime
+
+        # Marketing Browser is a native product owner injected at runtime, so
+        # it is intentionally absent from the user's editable MCP config.
+        # Include it in every product platform's toolset unless the user has an
+        # explicit server entry (whose enabled flag remains authoritative).
+        if (
+            "marketing-browser" not in mcp_servers
+            and is_product_runtime()
+            and bundled_browser_mcp_config() is not None
+        ):
+            enabled.add("marketing-browser")
+    except Exception:
+        pass
+    return enabled
 
 
 def _get_platform_tools(

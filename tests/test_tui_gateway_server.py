@@ -735,6 +735,7 @@ def test_load_enabled_toolsets_product_runtime_does_not_collapse_to_coding(monke
     assert server._load_enabled_toolsets() == [
         "delegation",
         "marketing",
+        "marketing-browser",
         "marketing_code",
         "memory",
     ]

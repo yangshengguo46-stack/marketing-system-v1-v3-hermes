@@ -3484,6 +3484,8 @@ async def _release_marketing_account_browser(
 _PRODUCT_ACCOUNT_BROWSER_TOOLS = {
     "browser_start_account_login",
     "browser_verify_account_login",
+    "browser_collect_douyin_portfolio",
+    "browser_collect_wechat_official_portfolio",
 }
 
 
@@ -3503,7 +3505,10 @@ def execute_marketing_account_browser_tool(
 
     registry = AccountRegistry()
     try:
-        lease = registry.lease_for_login(account_id, user_id=user_id).to_dict()
+        if tool_name in {"browser_start_account_login", "browser_verify_account_login"}:
+            lease = registry.lease_for_login(account_id, user_id=user_id).to_dict()
+        else:
+            lease = registry.lease_for_sync(account_id, user_id=user_id).to_dict()
     finally:
         registry.close()
     config = bundled_browser_mcp_config()

@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.domains.browser_payloads import decode_schema_payload
 from agent.marketing.domains.storage import MarketingDomainRepository
 
 
@@ -19,21 +20,7 @@ PORTFOLIO_SCHEMA = "marketing_wechat_official_portfolio.v1"
 
 
 def decode_browser_portfolio_result(result: Any) -> dict[str, Any] | None:
-    if isinstance(result, dict):
-        return result if result.get("schema") == PORTFOLIO_SCHEMA else None
-    if not isinstance(result, str) or PORTFOLIO_SCHEMA not in result:
-        return None
-    decoder = json.JSONDecoder()
-    for index, character in enumerate(result):
-        if character != "{":
-            continue
-        try:
-            value, _ = decoder.raw_decode(result[index:])
-        except ValueError:
-            continue
-        if isinstance(value, dict) and value.get("schema") == PORTFOLIO_SCHEMA:
-            return value
-    return None
+    return decode_schema_payload(result, PORTFOLIO_SCHEMA)
 
 
 class AccountPortfolioRepository(MarketingDomainRepository):
@@ -227,6 +214,7 @@ class AccountPortfolioRepository(MarketingDomainRepository):
                         "paragraph_count": article["paragraph_count"],
                         "image_count": article["image_count"],
                         "cover_available": bool(article["cover_url"]),
+                        "metrics_provenance": article["metrics_provenance"],
                     },
                     ensure_ascii=False,
                     separators=(",", ":"),
@@ -292,11 +280,36 @@ def _article(raw: dict[str, Any]) -> dict[str, Any] | None:
     source_item_id = _text(raw.get("source_item_id"), 300)
     if not source_url or not source_item_id:
         return None
-    metrics = {
+    integer_metrics = {
         key: value
-        for key in ("read_count", "like_count", "share_count", "comment_count")
+        for key in (
+            "read_users",
+            "share_users",
+            "like_count",
+            "recommend_count",
+            "comment_count",
+            "collection_users",
+            "followers_gained",
+            "avg_read_seconds",
+            "listen_users",
+            "listen_count",
+        )
         if (value := _nonnegative_int((raw.get("metrics") or {}).get(key))) is not None
     }
+    metrics = {
+        **integer_metrics,
+        **(
+            {"completion_rate": completion_rate}
+            if (
+                completion_rate := _nonnegative_number(
+                    (raw.get("metrics") or {}).get("completion_rate")
+                )
+            ) is not None
+            and completion_rate <= 1
+            else {}
+        ),
+    }
+    provenance = raw.get("metrics_provenance") or {}
     body = _text(raw.get("body_text"), 20_000)
     return {
         "source_item_id": source_item_id,
@@ -310,6 +323,17 @@ def _article(raw: dict[str, Any]) -> dict[str, Any] | None:
         "character_count": _nonnegative_int(raw.get("character_count")) or len(body),
         "paragraph_count": _nonnegative_int(raw.get("paragraph_count")) or 0,
         "image_count": _nonnegative_int(raw.get("image_count")) or 0,
+        "metrics_provenance": {
+            key: value
+            for key, value in {
+                "source": _text(provenance.get("source"), 100),
+                "window": _text(provenance.get("window"), 100),
+                "read_unit": _text(provenance.get("read_unit"), 100),
+                "share_unit": _text(provenance.get("share_unit"), 100),
+                "is_new_data": bool(provenance.get("is_new_data")),
+            }.items()
+            if value not in ("", None)
+        },
     }
 
 
@@ -362,9 +386,10 @@ def _score_portfolio(articles: list[dict[str, Any]], inherited_gaps: list[Any]) 
     dimensions["audience_response"] = {
         "score": None,
         "basis": (
-            f"metrics observed for {len(metric_articles)} articles; raw counts retained for Agent comparison"
+            f"30-day content-analysis metrics observed for {len(metric_articles)} articles; "
+            "read/share values are unique-user counts"
             if metric_articles
-            else "read, like, share and comment metrics unavailable"
+            else "30-day article content-analysis metrics unavailable"
         ),
     }
     available = [float(item["score"]) for item in dimensions.values() if item["score"] is not None]
@@ -426,6 +451,14 @@ def _nonnegative_int(value: Any) -> int | None:
     if not math.isfinite(number) or number < 0:
         return None
     return int(number)
+
+
+def _nonnegative_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
 
 
 def _text(value: Any, limit: int) -> str:

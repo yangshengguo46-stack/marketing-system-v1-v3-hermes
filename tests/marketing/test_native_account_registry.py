@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from agent.account_registry import AccountRegistry
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import AccountContextRepository
 from hermes_state import SessionDB
@@ -79,8 +80,34 @@ def test_account_context_imports_legacy_json_once_into_hermes(tmp_path):
 
         assert first["source"] == "hermes_state"
         assert first["accounts"][0]["id"] == "acct_legacy"
-        assert first["accounts"][0]["auth_state"] == "authenticated"
+        assert first["accounts"][0]["status"] == "stale"
+        assert first["accounts"][0]["auth_state"] == "verification_required"
+        assert first["accounts"][0]["stats"] == {}
         assert "cookie" not in first["accounts"][0]
         assert second["accounts"][0]["id"] == "acct_legacy"
+    finally:
+        db.close()
+
+
+def test_existing_unverified_legacy_account_is_reconciled_once(tmp_path):
+    db = SessionDB(db_path=tmp_path / "state.db")
+    registry = AccountRegistry(db)
+    try:
+        db.upsert_marketing_account(
+            account_id="acct_legacy",
+            platform="douyin",
+            status="active",
+            auth_state="authenticated",
+            stats={"followers": 4, "videos_count": 0},
+            metadata={"migrated_from": "accounts.json"},
+        )
+
+        assert registry.reconcile_unverified_legacy_accounts() == 1
+        account = registry.get("acct_legacy")
+        assert account["status"] == "stale"
+        assert account["auth_state"] == "verification_required"
+        assert account["stats"] == {}
+        assert account["metadata"]["legacy_stats_snapshot"]["followers"] == 4
+        assert registry.reconcile_unverified_legacy_accounts() == 0
     finally:
         db.close()

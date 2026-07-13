@@ -27,7 +27,8 @@ export function installWechatOfficialPortfolioTool() {
       }),
       type: 'readOnly',
     },
-    handle: async (tab, params, response) => {
+    handle: async (context, params, response) => {
+      const tab = await context.ensureTab()
       const lease = parseAccountLease()
       if (lease.platform !== 'wechat_official') {
         throw new Error('This collector requires a session bound to a wechat_official account')
@@ -41,10 +42,15 @@ export function installWechatOfficialPortfolioTool() {
       const details = articles.length
         ? await page.evaluate(fetchPublicArticleDetails, articles.map(article => article.source_url))
         : []
+      const analytics = articles.length
+        ? await collectWechatArticleAnalytics(page, articles, source.read_token)
+        : []
       const detailByUrl = new Map(details.map(detail => [detail.source_url, detail]))
+      const analyticsById = new Map(analytics.map(detail => [detail.source_item_id, detail]))
       const merged = articles.map(article => ({
         ...article,
         ...(detailByUrl.get(article.source_url) || {}),
+        ...(analyticsById.get(article.source_item_id) || {}),
         source_url: article.source_url,
       }))
       const result = {
@@ -58,10 +64,13 @@ export function installWechatOfficialPortfolioTool() {
           returned: merged.length,
           body_count: merged.filter(article => article.body_text).length,
           metrics_count: merged.filter(article => Object.keys(article.metrics || {}).length).length,
+          metric_source: 'wechat_content_analysis_detail',
+          metric_window: 'first_30_days_after_publish',
         },
         data_gaps: [
           ...(merged.length ? [] : ['published_article_list_empty_or_unavailable']),
-          ...(merged.some(article => Object.keys(article.metrics || {}).length) ? [] : ['article_response_metrics_unavailable']),
+          ...(merged.some(article => Object.keys(article.metrics || {}).length) ? [] : ['article_30_day_analytics_unavailable']),
+          ...(merged.every(article => Object.keys(article.metrics || {}).length) ? [] : ['some_article_30_day_analytics_unavailable']),
           ...(merged.every(article => article.body_text) ? [] : ['some_public_article_bodies_unavailable']),
         ],
       }
@@ -106,28 +115,127 @@ export function parseWechatPublishPayload(payload, maxArticles = 20) {
       const sourceUrl = url(raw?.content_url || raw?.link || raw?.url)
       const sourceItemId = text(raw?.aid || raw?.appmsgid || raw?.appmsg_id || sourceUrl, 300)
       if (!sourceUrl || !sourceItemId || seen.has(sourceItemId) || output.length >= maxArticles) continue
-      const metrics = {}
-      for (const [name, candidates] of Object.entries({
-        read_count: ['read_num', 'read_count'],
-        like_count: ['like_num', 'like_count'],
-        share_count: ['share_num', 'share_count'],
-        comment_count: ['comment_num', 'comment_count'],
-      })) {
-        const value = candidates.map(key => integer(raw?.[key])).find(candidate => candidate !== null)
-        if (value !== undefined) metrics[name] = value
-      }
+      const publishedAt = integer(
+        info?.sent_info?.time ||
+        info?.publish_info?.create_time ||
+        raw?.line_info?.send_time ||
+        info?.publish_time ||
+        raw?.publish_time ||
+        raw?.create_time,
+      )
       output.push({
         source_item_id: sourceItemId,
         source_url: sourceUrl,
         title: text(raw?.title, 500),
         digest: text(raw?.digest, 2_000),
         cover_url: url(raw?.cover || raw?.cover_url || raw?.pic_cdn_url_235_1),
-        published_at: integer(info?.publish_time || raw?.publish_time || raw?.create_time),
-        metrics,
+        published_at: publishedAt,
+        analytics_ref: {
+          msg_id: text(raw?.appmsgid || raw?.appmsg_id || raw?.aid, 300),
+          item_index: integer(raw?.itemidx || raw?.item_idx) || 1,
+        },
+        publish_preview: {
+          read_num: integer(raw?.read_num),
+          share_num: integer(raw?.share_num),
+          like_num: integer(raw?.like_num),
+          comment_num: integer(raw?.comment_num),
+        },
+        metrics: {},
       })
       seen.add(sourceItemId)
     }
     if (output.length >= maxArticles) break
+  }
+  return output
+}
+
+export function normalizeWechatArticleAnalytics(articleData) {
+  const raw = articleData?.article_data_new
+  if (!raw || typeof raw !== 'object') return null
+  const integer = value => {
+    const number = Number(value)
+    return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : null
+  }
+  const decimal = value => {
+    const number = Number(value)
+    return Number.isFinite(number) && number >= 0 ? number : null
+  }
+  const metrics = {}
+  for (const [name, value] of Object.entries({
+    read_users: integer(raw.read_uv),
+    share_users: integer(raw.share_uv),
+    like_count: integer(raw.like_cnt),
+    recommend_count: integer(raw.zaikan_cnt),
+    comment_count: integer(raw.comment_cnt),
+    collection_users: integer(raw.collection_uv),
+    followers_gained: integer(raw.follow_after_read_uv),
+    avg_read_seconds: integer(raw.avg_article_read_time),
+    completion_rate: decimal(raw.finished_read_pv_ratio),
+    listen_users: integer(raw.listen_uv),
+    listen_count: integer(raw.listen_pv),
+  })) {
+    if (value !== null) metrics[name] = value
+  }
+  if (!Object.keys(metrics).length) return null
+  return {
+    metrics,
+    metrics_provenance: {
+      source: 'wechat_content_analysis_detail',
+      window: 'first_30_days_after_publish',
+      read_unit: 'unique_users',
+      share_unit: 'unique_users',
+      is_new_data: Number(articleData?.is_new_data || 0) === 1,
+    },
+  }
+}
+
+async function collectWechatArticleAnalytics(page, articles, readToken) {
+  if (!readToken) return []
+  const analyticsPage = await page.context().newPage()
+  const output = []
+  try {
+    for (const article of articles.slice(0, 50)) {
+      const msgId = String(article?.analytics_ref?.msg_id || '').trim()
+      const itemIndex = Number(article?.analytics_ref?.item_index || 1)
+      const timestamp = Number(article?.published_at || 0)
+      if (!msgId || !Number.isFinite(timestamp) || timestamp <= 0) continue
+      const publishDate = new Date(timestamp * 1000).toISOString().slice(0, 10)
+      const endpoint = new URL('/misc/appmsganalysis', page.url())
+      endpoint.search = new URLSearchParams({
+        action: 'detailpage',
+        msgid: `${msgId}_${itemIndex}`,
+        publish_date: publishDate,
+        type: 'int',
+        pageVersion: '1',
+        token: String(readToken),
+        lang: 'zh_CN',
+      }).toString()
+      try {
+        await analyticsPage.goto(endpoint.toString(), {
+          waitUntil: 'domcontentloaded',
+          timeout: 30_000,
+        })
+        await analyticsPage.waitForFunction(
+          () => Boolean(globalThis.wx?.cgiData?.articleData?.article_data_new),
+          undefined,
+          { timeout: 15_000 },
+        )
+        const detail = await analyticsPage.evaluate(() => {
+          const data = globalThis.wx?.cgiData?.articleData || {}
+          return {
+            msgid: String(data.msgid || ''),
+            publish_date: String(data.publish_date || ''),
+            is_new_data: data.is_new_data,
+            article_data_new: data.article_data_new || null,
+          }
+        })
+        if (detail.msgid.split('_')[0] !== msgId) continue
+        const normalized = normalizeWechatArticleAnalytics(detail)
+        if (normalized) output.push({ source_item_id: article.source_item_id, ...normalized })
+      } catch {}
+    }
+  } finally {
+    await analyticsPage.close().catch(() => {})
   }
   return output
 }
@@ -163,6 +271,7 @@ async function fetchPublishHistory(maxArticles) {
   return {
     payload,
     account_name: String(data.nick_name || data.nickname || data.user_name || domName || '').trim().slice(0, 300),
+    read_token: String(token),
   }
 }
 

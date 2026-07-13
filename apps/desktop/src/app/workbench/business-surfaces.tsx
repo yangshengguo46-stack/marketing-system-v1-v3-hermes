@@ -177,6 +177,7 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
   const [platforms, setPlatforms] = useState<MarketingPlatformSummary[]>([])
   const [connectOpen, setConnectOpen] = useState(false)
   const [resumeAccount, setResumeAccount] = useState<MarketingAccountSummary | null>(null)
+  const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null)
 
   const [accountAction, setAccountAction] = useState<{
     account: MarketingAccountSummary
@@ -218,6 +219,18 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
       { account_id: accountAction.account.id }
     )
     await refresh()
+  }
+
+  const syncAccount = async (account: MarketingAccountSummary) => {
+    setSyncingAccountId(account.id)
+    try {
+      const result = await requestGateway<{ account: MarketingAccountSummary }>('marketing.account.sync', {
+        account_id: account.id
+      })
+      handleChanged(result.account)
+    } finally {
+      setSyncingAccountId(null)
+    }
   }
 
   return (
@@ -287,28 +300,9 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
                   </Button>
                 </div>
                 <div className="mt-5 grid grid-cols-2 gap-3 border-y border-(--ui-stroke-tertiary) py-4 sm:grid-cols-4">
-                  <AccountMetric
-                    label="粉丝"
-                    value={accountMetric(account.stats, ['followers', 'fan_count', 'fans'])}
-                  />
-                  <AccountMetric
-                    label="浏览"
-                    value={accountMetric(account.stats, ['views', 'play_count', 'total_views'])}
-                  />
-                  <AccountMetric
-                    label="互动"
-                    value={accountMetric(account.stats, [
-                      'likes',
-                      'total_likes',
-                      'digg_count',
-                      'engagement',
-                      'interaction'
-                    ])}
-                  />
-                  <AccountMetric
-                    label="作品"
-                    value={accountMetric(account.stats, ['works', 'video_count', 'videos_count', 'content_count'])}
-                  />
+                  {accountMetricSpecs(account).map(metric => (
+                    <AccountMetric key={metric.label} label={metric.label} value={metric.value} />
+                  ))}
                 </div>
                 <footer className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   <span className="text-xs text-(--ui-text-tertiary)">
@@ -330,13 +324,26 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
                         继续验证
                       </Button>
                     ) : (
-                      <Button
-                        onClick={() => setAccountAction({ account, kind: 'disconnect' })}
-                        size="sm"
-                        variant="ghost"
-                      >
-                        退出登录
-                      </Button>
+                      <>
+                        {['douyin', 'wechat_official'].includes(account.platform || '') ? (
+                          <Button
+                            disabled={syncingAccountId === account.id}
+                            onClick={() => void syncAccount(account)}
+                            size="sm"
+                            variant="ghost"
+                          >
+                            <RefreshCw className="mr-1.5 size-3.5" />
+                            {syncingAccountId === account.id ? '同步中' : '同步数据'}
+                          </Button>
+                        ) : null}
+                        <Button
+                          onClick={() => setAccountAction({ account, kind: 'disconnect' })}
+                          size="sm"
+                          variant="ghost"
+                        >
+                          退出登录
+                        </Button>
+                      </>
                     )}
                     <Button
                       className="text-(--ui-text-tertiary) hover:text-destructive"
@@ -386,6 +393,31 @@ export function AccountCenterView({ onNewChat, requestGateway }: SurfaceProps) {
       />
     </ProductPage>
   )
+}
+
+function accountMetricSpecs(account: MarketingAccountSummary): { label: string; value: number | null }[] {
+  if (account.platform === 'wechat_official') {
+    return [
+      { label: '已同步阅读', value: accountMetric(account.stats, ['read_users']) },
+      { label: '已同步分享', value: accountMetric(account.stats, ['share_users']) },
+      { label: '点赞', value: accountMetric(account.stats, ['like_count']) },
+      { label: '文章', value: accountMetric(account.stats, ['articles_count']) }
+    ]
+  }
+  if (account.platform === 'douyin') {
+    return [
+      { label: '粉丝', value: accountMetric(account.stats, ['followers']) },
+      { label: '公开播放', value: accountMetric(account.stats, ['total_views']) },
+      { label: '累计获赞', value: accountMetric(account.stats, ['total_likes']) },
+      { label: '公开作品', value: accountMetric(account.stats, ['videos_count']) }
+    ]
+  }
+  return [
+    { label: '粉丝', value: accountMetric(account.stats, ['followers', 'fan_count', 'fans']) },
+    { label: '浏览', value: accountMetric(account.stats, ['views', 'play_count', 'total_views']) },
+    { label: '互动', value: accountMetric(account.stats, ['likes', 'total_likes', 'digg_count', 'engagement', 'interaction']) },
+    { label: '作品', value: accountMetric(account.stats, ['works', 'video_count', 'videos_count', 'content_count']) }
+  ]
 }
 
 export function ManagedView({ onNewChat, requestGateway }: SurfaceProps) {

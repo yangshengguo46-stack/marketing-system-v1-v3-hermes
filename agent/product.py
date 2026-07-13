@@ -151,6 +151,16 @@ def bundled_browser_mcp_config(
         values.get("HERMES_BROWSER_PROFILE_ROOT")
         or (Path(values.get("HERMES_HOME") or Path.home() / ".hermes") / "browser-profiles")
     )
+    legacy_profile_root = str(
+        values.get("HERMES_LEGACY_BROWSER_PROFILE_ROOT")
+        or (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "marketing-os-desktop"
+            / "mcp-browser"
+        )
+    )
     electron_node = str(values.get("HERMES_NODE_IS_ELECTRON") or "").strip() == "1"
     return {
         "command": node,
@@ -161,6 +171,7 @@ def bundled_browser_mcp_config(
             **({"ELECTRON_RUN_AS_NODE": "1"} if electron_node else {}),
             "HERMES_BROWSER_PROFILE_ROOT": profile_root,
             "HERMES_BROWSER_OUTPUT_ROOT": str(Path(profile_root).parent / "browser-output"),
+            "HERMES_LEGACY_BROWSER_PROFILE_ROOT": legacy_profile_root,
             **(
                 {"PLAYWRIGHT_BROWSERS_PATH": str(values["PLAYWRIGHT_BROWSERS_PATH"])}
                 if str(values.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
@@ -207,9 +218,20 @@ PRODUCT_RUNTIME_GUIDANCE = (
     "Before giving account-specific positioning, content or growth advice, use the "
     "native Marketing OS account tools to read the selected account's verified "
     "context; treat every missing field as an evidence gap instead of inventing it. "
+    "For a bound social account, only the account-scoped Marketing Browser MCP may "
+    "inspect or operate the platform. Generic browser tools use a separate temporary "
+    "profile and must never be used as a fallback for login, creator data, drafts, "
+    "publishing or account verification; report the native tool as unavailable instead. "
     "When the user asks to diagnose an owned WeChat Official Account, first call "
     "browser_collect_wechat_official_portfolio in the bound account browser and then "
-    "marketing_read_account_portfolio. Score only observed execution, cite the captured article "
+    "marketing_read_account_portfolio. Account-browser MCP tools are progressively disclosed: "
+    "search by the server-native name, then call the exact prefixed tool name returned by "
+    "tool_search through tool_call. "
+    "When the bound account is Douyin, call browser_collect_douyin_portfolio before "
+    "account-specific analysis. Treat public_work_count as the visible published work "
+    "count and all_work_count as including private works; never substitute a recent-post "
+    "window for either lifetime count. "
+    "Score only observed execution, cite the captured article "
     "evidence, and keep audience response unscored when real metrics are unavailable. "
     "For a new or unpositioned account, turn the user's stated goal into a versioned "
     "strategy project and a reviewable audience-hypothesis draft with the native "

@@ -168,3 +168,10 @@ def test_playwright_post_tool_seam_persists_verified_sound_signal(tmp_path, monk
     )
     assert ranked["sound_count"] == 1
     assert ranked["candidates"][0]["platform_sound_id"] == "music-88"
+
+
+def test_signal_decoder_handles_nested_mcp_result_envelope():
+    payload = _payload()
+    wrapped = json.dumps({"result": "### Result\n" + json.dumps(payload)})
+
+    assert decode_browser_signal_result(wrapped) == payload

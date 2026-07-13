@@ -113,7 +113,8 @@ export function installAccountAuthTool() {
         inputSchema: z.object({}),
         type: 'destructive',
       },
-      handle: async (tab, _params, response) => {
+      handle: async (context, _params, response) => {
+        const tab = await context.ensureTab()
         const lease = parseAccountLease()
         const loginUrl = accountLoginTarget(lease.platform)
         await tab.page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 })
@@ -125,7 +126,11 @@ export function installAccountAuthTool() {
           started_at: new Date().toISOString(),
         }
         response.addCode(`await page.goto(${JSON.stringify(loginUrl)});`)
-        await response.addResult('Marketing account login started', JSON.stringify(payload, null, 2))
+        await response.addResult(
+          'Marketing account login started',
+          JSON.stringify(payload, null, 2),
+          { prefix: 'account-login-started', ext: 'json' },
+        )
       },
     })
   }
@@ -139,7 +144,8 @@ export function installAccountAuthTool() {
       inputSchema: z.object({}),
       type: 'readOnly',
     },
-    handle: async (tab, _params, response) => {
+    handle: async (context, _params, response) => {
+      const tab = await context.ensureTab()
       const lease = parseAccountLease()
       const page = tab.page
       const pageUrl = page.url()
@@ -160,7 +166,11 @@ export function installAccountAuthTool() {
         ...verification,
       }
       response.addCode('await context.cookies(); // values never leave the browser owner')
-      await response.addResult('Marketing account login verification', JSON.stringify(payload, null, 2))
+      await response.addResult(
+        'Marketing account login verification',
+        JSON.stringify(payload, null, 2),
+        { prefix: 'account-login-verification', ext: 'json' },
+      )
     },
   })
 }
