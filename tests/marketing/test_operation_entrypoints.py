@@ -60,6 +60,22 @@ def test_account_analysis_contract_is_owned_by_the_backend_platform_scope():
     assert "不得猜测粉丝反馈" in result["prompt"]
 
 
+def test_first_run_goal_starts_research_without_asking_for_a_second_send():
+    result = prepare_marketing_operation(
+        {
+            "account_id": "acct_wechat",
+            "business_goal": "未来三十天验证 AI 教育方向并找到第一批付费用户",
+            "kind": "account.bootstrap",
+        },
+        account_repository=_AccountRepository(),
+    )
+
+    assert result["operation"]["business_goal"].startswith("未来三十天")
+    assert result["visible_text"] == "围绕经营目标启动首次研究"
+    assert "不要要求用户重新发送目标" in result["prompt"]
+    assert "第一个可在产品界面审阅的经营对象" in result["prompt"]
+
+
 def test_video_setup_persists_ui_selections_as_structured_native_context():
     result = prepare_marketing_operation(
         {
@@ -120,3 +136,169 @@ def test_gateway_exposes_the_structured_operation_entrypoint(monkeypatch):
 
     assert response["result"]["prompt"] == "native contract"
     assert response["result"]["visible_text"] == "排出今天的经营优先级"
+
+
+def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(monkeypatch):
+    from agent.marketing import operation_entrypoints
+    from tui_gateway import server
+
+    captured = {}
+
+    monkeypatch.setattr(
+        operation_entrypoints,
+        "prepare_marketing_operation",
+        lambda params: {
+            "account_id": params["account_id"],
+            "kind": params["kind"],
+            "operation": {
+                "account_id": params["account_id"],
+                "kind": params["kind"],
+            },
+            "prompt": "hidden backend execution contract",
+            "title": "今天的经营优先级",
+            "visible_text": "排出今天的经营优先级",
+        },
+    )
+    monkeypatch.setattr(
+        server,
+        "_marketing_operation_snapshot",
+        lambda kind, *, user_id, account_id: {
+            "content_assets": [],
+            "video_productions": [],
+        },
+    )
+
+    def create_session(rid, params):
+        captured["create"] = params
+        server._sessions["product-operation-live"] = {
+            "agent_error": None,
+            "running": False,
+        }
+        return server._ok(
+            rid,
+            {
+                "session_id": "product-operation-live",
+                "stored_session_id": "product-operation-stored",
+            },
+        )
+
+    def submit_prompt(rid, params):
+        captured["submit"] = params
+        server._sessions["product-operation-live"]["running"] = True
+        return server._ok(rid, {"status": "streaming"})
+
+    monkeypatch.setitem(server._methods, "session.create", create_session)
+    monkeypatch.setitem(server._methods, "prompt.submit", submit_prompt)
+    monkeypatch.setitem(
+        server._sessions,
+        "product-operation-live",
+        {"agent_error": None, "running": False},
+    )
+
+    started = server._methods["marketing.operation.start"](
+        "operation-start",
+        {"account_id": "acct_wechat", "kind": "account.prioritize"},
+    )
+
+    assert "prompt" not in started["result"]
+    assert started["result"]["state"] == "working"
+    assert captured["create"]["source"] == "desktop-product"
+    assert captured["submit"] == {
+        "session_id": "product-operation-live",
+        "text": "hidden backend execution contract",
+    }
+
+    operation_id = started["result"]["operation_id"]
+    working = server._methods["marketing.operation.status"](
+        "operation-status-working",
+        {"operation_id": operation_id},
+    )
+    assert working["result"]["state"] == "working"
+
+    server._sessions["product-operation-live"]["running"] = False
+    complete = server._methods["marketing.operation.status"](
+        "operation-status-complete",
+        {"operation_id": operation_id},
+    )
+    assert complete["result"]["state"] == "complete"
+    assert complete["result"]["results"] == [
+        {
+            "object_id": "acct_wechat",
+            "object_type": "account",
+            "title": "账号经营上下文",
+        }
+    ]
+
+
+def test_gateway_does_not_call_an_object_producing_operation_complete_without_an_object(
+    monkeypatch,
+):
+    from tui_gateway import server
+
+    monkeypatch.setattr(
+        server,
+        "_marketing_operation_snapshot",
+        lambda kind, *, user_id, account_id: {
+            "content_assets": [],
+            "video_productions": [],
+        },
+    )
+    monkeypatch.setitem(
+        server._sessions,
+        "product-operation-without-result",
+        {
+            "agent_error": None,
+            "marketing_operation": {
+                "account_id": "acct_wechat",
+                "baseline": {"content_assets": [], "video_productions": []},
+                "kind": "content.article.start",
+                "operation": {},
+                "operation_id": "marketing-operation-without-result",
+                "title": "图文创作",
+                "user_id": "default",
+                "visible_text": "开始一篇新的图文作品",
+            },
+            "running": False,
+        },
+    )
+
+    response = server._methods["marketing.operation.status"](
+        "operation-status-without-result",
+        {"operation_id": "marketing-operation-without-result"},
+    )
+
+    assert response["result"]["state"] == "error"
+    assert "没有形成产品界面可见的经营对象" in response["result"]["error"]
+
+
+def test_gateway_projects_a_failed_hidden_agent_turn_as_an_operation_error(monkeypatch):
+    from tui_gateway import server
+
+    monkeypatch.setitem(
+        server._sessions,
+        "product-operation-failed-turn",
+        {
+            "agent_error": None,
+            "marketing_operation": {
+                "account_id": "acct_wechat",
+                "baseline": {"content_assets": [], "video_productions": []},
+                "kind": "account.prioritize",
+                "operation": {},
+                "operation_id": "marketing-operation-failed-turn",
+                "title": "今天的经营优先级",
+                "user_id": "default",
+                "visible_text": "排出今天的经营优先级",
+            },
+            "marketing_operation_error": "provider rejected the request",
+            "marketing_operation_turn_status": "error",
+            "running": False,
+        },
+    )
+
+    response = server._methods["marketing.operation.status"](
+        "operation-status-failed-turn",
+        {"operation_id": "marketing-operation-failed-turn"},
+    )
+
+    assert response["result"]["state"] == "error"
+    assert response["result"]["error"] == "provider rejected the request"

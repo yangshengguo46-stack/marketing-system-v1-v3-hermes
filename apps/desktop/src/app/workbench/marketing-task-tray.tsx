@@ -1,5 +1,6 @@
 import { useStore } from '@nanostores/react'
 import { useEffect, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { AlertCircle, ArrowUpRight, CheckCircle2, Loader2, X } from '@/lib/icons'
@@ -10,20 +11,30 @@ import {
   updateMarketingOperationTask
 } from '@/store/marketing'
 
+import {
+  ARTICLE_CREATION_ROUTE,
+  MANAGED_ROUTE,
+  MATERIAL_LIBRARY_ROUTE,
+  VIDEO_CREATION_ROUTE,
+  WORKBENCH_ROUTE
+} from '../routes'
+
+import { readMarketingOperationStatus } from './operations'
+
 interface MarketingTaskTrayProps {
-  onOpenOperation: (storedSessionId: string) => void
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
 
-export function MarketingTaskTray({ onOpenOperation, requestGateway }: MarketingTaskTrayProps) {
+export function MarketingTaskTray({ requestGateway }: MarketingTaskTrayProps) {
   const tasks = useStore($marketingOperationTasks)
+  const navigate = useNavigate()
 
   const pollableTasks = useMemo(
-    () => tasks.filter(task => ['starting', 'waiting', 'working'].includes(task.state) && task.sessionId),
+    () => tasks.filter(task => ['starting', 'waiting', 'working'].includes(task.state) && task.operationId),
     [tasks]
   )
 
-  const pollableSignature = pollableTasks.map(task => `${task.id}:${task.sessionId}`).join('|')
+  const pollableSignature = pollableTasks.map(task => `${task.id}:${task.operationId}`).join('|')
 
   useEffect(() => {
     if (!pollableTasks.length) {
@@ -34,19 +45,19 @@ export function MarketingTaskTray({ onOpenOperation, requestGateway }: Marketing
 
     const poll = () => {
       for (const task of pollableTasks) {
-        void requestGateway<{ status?: string }>('session.status', { session_id: task.sessionId })
+        void readMarketingOperationStatus(requestGateway, task.operationId!)
           .then(result => {
             if (cancelled) {
               return
             }
 
-            if (result.status === 'idle') {
-              updateMarketingOperationTask(task.id, { state: 'complete' })
-            } else if (result.status === 'waiting') {
-              updateMarketingOperationTask(task.id, { state: 'waiting' })
-            } else if (result.status) {
-              updateMarketingOperationTask(task.id, { state: 'working' })
-            }
+            updateMarketingOperationTask(task.id, {
+              error: result.error || undefined,
+              label: result.visible_text || task.label,
+              results: result.results || [],
+              state: result.state,
+              title: result.title || task.title
+            })
           })
           .catch(() => undefined)
       }
@@ -59,8 +70,8 @@ export function MarketingTaskTray({ onOpenOperation, requestGateway }: Marketing
       cancelled = true
       window.clearInterval(timer)
     }
-  // The signature deliberately restarts polling only when the active sessions change.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // The signature deliberately restarts polling only when the active sessions change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pollableSignature, requestGateway])
 
   const visibleTasks = tasks.slice(0, 3)
@@ -75,19 +86,13 @@ export function MarketingTaskTray({ onOpenOperation, requestGateway }: Marketing
       className="pointer-events-none fixed bottom-5 right-5 z-[70] grid w-[min(23rem,calc(100vw-2rem))] gap-2"
     >
       {visibleTasks.map(task => (
-        <TaskCard key={task.id} onOpenOperation={onOpenOperation} task={task} />
+        <TaskCard key={task.id} onOpenResult={() => navigate(operationResultRoute(task))} task={task} />
       ))}
     </aside>
   )
 }
 
-function TaskCard({
-  onOpenOperation,
-  task
-}: {
-  onOpenOperation: (storedSessionId: string) => void
-  task: MarketingOperationTask
-}) {
+function TaskCard({ onOpenResult, task }: { onOpenResult: () => void; task: MarketingOperationTask }) {
   const settled = task.state === 'complete' || task.state === 'error'
 
   return (
@@ -113,23 +118,42 @@ function TaskCard({
               </button>
             ) : null}
           </div>
-          <p className="mt-2 line-clamp-2 text-xs leading-5 text-(--ui-text-secondary)">
-            {task.error || task.label}
-          </p>
-          {task.storedSessionId ? (
-            <Button
-              className="mt-3 h-8 rounded-full px-3 text-xs"
-              onClick={() => onOpenOperation(task.storedSessionId!)}
-              size="sm"
-              variant="outline"
-            >
-              查看执行 <ArrowUpRight className="ml-1 size-3.5" />
+          <p className="mt-2 line-clamp-2 text-xs leading-5 text-(--ui-text-secondary)">{task.error || task.label}</p>
+          {task.operationId ? (
+            <Button className="mt-3 h-8 rounded-full px-3 text-xs" onClick={onOpenResult} size="sm" variant="outline">
+              {task.state === 'complete' ? '查看结果' : '查看当前对象'} <ArrowUpRight className="ml-1 size-3.5" />
             </Button>
           ) : null}
         </div>
       </div>
     </article>
   )
+}
+
+function operationResultRoute(task: MarketingOperationTask): string {
+  const result = task.results?.[0]
+
+  if (task.kind.startsWith('video.')) {
+    return result?.object_type === 'video_production'
+      ? `${VIDEO_CREATION_ROUTE}?production=${encodeURIComponent(result.object_id)}`
+      : VIDEO_CREATION_ROUTE
+  }
+
+  if (task.kind.startsWith('content.')) {
+    return result?.object_type === 'content_asset'
+      ? `${ARTICLE_CREATION_ROUTE}?asset=${encodeURIComponent(result.object_id)}`
+      : ARTICLE_CREATION_ROUTE
+  }
+
+  if (task.kind.startsWith('materials.')) {
+    return MATERIAL_LIBRARY_ROUTE
+  }
+
+  if (task.kind.startsWith('autopilot.')) {
+    return MANAGED_ROUTE
+  }
+
+  return WORKBENCH_ROUTE
 }
 
 function TaskIcon({ state }: { state: MarketingOperationTask['state'] }) {

@@ -31,7 +31,7 @@
 | Human/social model | `human-projection-model-v0.2` 将存在固定为不可直接观测/打分的本体前提；创作者与行为受众保存马斯洛需求投影、荣格认知投影和 `preserve/confirm/expand/continue` 存在策略软假设；诊断键、永久人格标签和高于 `0.7` 的伪确定性被原生 owner 拒绝 | automated | 真实长期对话校准、用户纠错体验、跨场景有效期复查 |
 | Agent perception layer | `vision_analyze`、`browser_vision`、`video_analyze` 作为 Marketing Agent 的原生底层感知能力；主业务 toolset、受约束媒体代码 worker、默认委派和文件读取引导均已贯通，视频能力在产品运行时不可被渐进披露隐藏 | automated | 真人长视频、多格式/损坏文件、音频转写联动与跨模型视觉一致性验收 |
 | Four knowledge bases | Platform/Market/Account/Content 四库进入 Hermes `state.db`；赛道库接收真实证据和签名聚合规律；账号知识只接收 Receipt-backed accepted learning；用户/模型写入被拒绝 | automated | 海量采集、规则与市场时效巡检、候选治理 UI |
-| Desktop | `apps/desktop` 唯一 UI/Electron | automated build | 干净机安装和真实连续对话 |
+| Desktop | `apps/desktop` 唯一 UI/Electron；首轮经营、图文和视频动作提交结构化意图后由 Gateway 原子启动 Agent，结果回到原经营对象，不再跳新对话或要求二次发送 | automated | 开发机真人首半小时、Gateway 重启后的 operation 恢复、干净机安装 |
 | Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；新会话自动获得稳定 `prospect_*` 作用域；MCP 真实登录验证后原子迁移经营事实，旧 session 不变、successor 从首轮绑定真实账号；`accounts.json` 仅一次迁移 | automated | 真人二维码/验证码校准、successor UI 切换、多账号恢复、冲突合并审查与打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、真实登录验证、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放登录窗口，后续以同一持久 profile 后台恢复；删除时清理 profile | automated | 真人多平台登录/退出、Cookie 信号随平台变更的巡检 |
 | Owned account diagnosis | 微信公众号已验证最近 9 篇逐篇内容分析指标；抖音已验证公开 3 条、私密 1 条的作品口径；Hermes 将作品、指标、EvidenceRecord、透明执行基线和数据缺口按账号写入 `state.db`；Desktop 只读展示 | dev-runtime | 新空 profile 真人扫码、多账号恢复、分页完整性巡检；评分继续区分执行基线、内容解释和受众反馈 |
@@ -282,6 +282,18 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - 当前验证：Desktop TypeScript typecheck、目标 ESLint、Ruff、`git diff --check` 和正式 Vite build 通过；新导航/导演台/素材库/回执边界 React 定向 `16 passed`，素材库领域 `10 passed`，视频生产与经营闭环组合 `41 passed, 1 skipped`。这些是 automated 证据，不替代真人视觉、真实素材文件夹和整片审查。
 - 仍需真人视觉验收工作台、内容工厂、账号管理、托管与新对话五个入口；后续只根据真实使用反馈打磨信息密度，不恢复 Hermes 开发者控制台式信息架构。
 
+### FLOW-01 首个半小时与经营对象连续动线（automated，2026-07-17）
+
+- First-run Journey 固定为：选择账号或明确“暂不登录” → 输入经营目标 → 单次点击启动首次研究 → 形成首个内容经营对象 → 原地审核并作出第一次决定。模型供应商、API Key 和默认模型不属于这条旅程，本轮没有新增对应板块。
+- 工作台、图文和视频页面只调用 `marketing.operation.start/status`。账号、资产、生产任务、镜头、阶段、附件和用户输入以结构化意图交给 Gateway；Gateway 内部建立账号作用域 Agent session 并提交后端执行合同。Renderer 已删除 `prepare → session.create → prompt.submit` 编排，不展示或预填 prompt，也不要求用户再点发送。
+- 图文创作拥有独立 `/content/article` 工作区，选题/目标草稿按账号保留，任务完成后以 `content_asset` 结果引用回到同一资产列表和审核 Sheet；提出修改创建新版本，确认后可继续推进到发布准备。内容工厂入口不再跳普通 Chat。
+- Wayfinding 由稳定一级导航、当前账号标识、内容工厂返回入口、视频返回入口和任务结果路由共同承担。内部 `desktop-product` session 从普通对话列表过滤；Chat 保留为通用能力，不再成为经营按钮的默认目的地。
+- 页面返回状态：账号选择、首轮目标草稿、图文 brief、工作台时间范围/平台钻取/曲线模式、素材库 tab/filter/query、视频当前项目/镜头/检查器和左右栏折叠均保留；这些只属于 UI 展示状态，不复制内容、任务或生产事实。
+- 死胡同处理：账号空态可明确返回工作台并暂不登录；内容确认后提供继续推进；后台任务卡始终指向工作台、图文资产、视频导演台、素材库或托管对象，不再提供“查看执行”并把用户带回隐藏 Chat。
+- 代码路径：`agent/marketing/operation_entrypoints.py`、`tui_gateway/server.py`、`apps/desktop/src/app/desktop-controller.tsx`、`chat/sidebar/index.tsx`、`workbench/{operations,marketing-task-tray,index,first-run-journey,article-creation-view,business-surfaces,content-review-sheet,growth-dashboard,material-library-view,video-production-workbench}.tsx` 和 `store/marketing.ts`。
+- 自动化证据：结构化入口、缺失结果拒绝、隐藏 Agent 失败态和 Gateway start/status Python 专项 `9 passed`，相邻账号生命周期/内容资产/视频生产/Gateway 回归 `22 passed, 1 skipped`；首轮、图文、工作台、内容工厂、素材状态、视频和路由 React 定向 `25 passed`，Desktop 全量 `138` 个文件、`1,018/1,018` 通过；TypeScript typecheck、目标 ESLint、Ruff、`git diff --check` 与正式 Desktop production build/产物断言通过。构建仍保留既有单 chunk 约 `26.1 MB` 警告。
+- 当前证据只到 `automated`。未启动开发机真实 Agent 完成首个经营对象，未做 Electron 真人首半小时视觉/操作验收，未生成本轮安装包，也未验证 Gateway/应用重启后恢复 operation。因此 `dev-runtime`、`packaged` 和 `human-loop` 均不得标完成；下一步 owner 债务是 durable Hermes operation/task projection 与共享可校验 RPC contract。
+
 ### REPO-AUDIT-01 台账、Git、UI 与边界收敛（2026-07-17）
 
 - 审计起点工作树共有 183 个文件条目：93 个 tracked change、90 个 untracked file，其中 61 个路径归 `apps/`、28 个归 `agent/`、20 个归 `tests/`。它们跨后端领域、Gateway/MCP、Desktop、视频 renderer、Skill 与文档，不是可安全丢弃的单一 UI 草稿；禁止用 reset/checkout 清理。
@@ -291,7 +303,7 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - `@assistant-ui/store` 的安装树曾漂移为 `0.2.19`，与锁定的 `@assistant-ui/tap 0.5.16` 不兼容；根目录 `npm ci` 已恢复 lock/override 指定的 `0.2.13`，`npm ls`、正式构建与类型检查恢复通过。不得用工作区内临时 `npm install` 改写这组版本。
 - Gateway 曾重复注册 `marketing.account.context`，后声明会静默覆盖前 handler。重复项已删除，RPC 注册器现在遇到任何重复方法名立即失败；当前 143 个方法名全部唯一。Desktop 使用 21 个 `marketing.*` RPC，Gateway 暴露 31 个；其余入口未完成消息渠道/未来 UI/兼容调用方审计前不删除。
 - Electron 经营任务卡已从持久 `localStorage` 改为只存在内存的后端会话展示投影，重启后不再出现无法对应后端 owner 的“幽灵任务”。真正任务、资产、账号、发布和学习状态继续由 Hermes 原生 owner 持久化。
-- 当前最主要耦合债务不是 Repository 泄漏，而是任务协议泄漏：Desktop 三处重复执行 `marketing.operation.prepare → session.create → prompt.submit`，再轮询通用 `session.status` 并把 `idle` 推断为经营任务完成。下一轮只能在 Hermes 原生 task/operation owner 增加原子 start/status projection，随后删除 UI 编排；不得用新的 Electron Store 掩盖。
+- 原任务协议泄漏已由 `FLOW-01` 收口：Desktop 不再执行 `marketing.operation.prepare → session.create → prompt.submit`，只消费 Gateway 的原子 start/status 和领域对象结果引用。剩余债务是 operation projection 尚未持久化到可跨 Gateway/应用重启恢复的 Hermes task owner，不得用 Electron 持久任务列表掩盖。
 - UI 结构债务集中在 `desktop-controller.tsx`（约 1.6k 行）、`growth-dashboard.tsx`（约 1.2k 行）和 `video-production-workbench.tsx`（约 2.2k 行）。拆分目标是 typed query/command projection、任务启动和纯视图，不是按视觉卡片继续横向造 Store。完整边界记录在 [`NATIVE_ARCHITECTURE.md`](NATIVE_ARCHITECTURE.md)。
 - Python 首轮全量回归通过 `36,267` 项并暴露 `44` 项失败；失败全部归入跨平台路径/进程、systemd 能力、宿主代理污染、本机语言、测试替身漂移和三项 Web Provider 旧契约，没有发现营销 Repository 被 UI 反向依赖。每组修复均已定向回归通过；本轮没有为伪造“一次性全绿”再重复运行约 52 分钟的全量扫描。`scripts/run_tests.sh` 现固定英文测试语言，并为 loopback 设置 `NO_PROXY/no_proxy`，避免 macOS 系统代理劫持本地测试服务。
 - Desktop 继承测试债务已清零：Vitest `136` 个文件、`1,015/1,015` 通过；Electron/packaging `node:test` 为 `265 passed, 1 skipped`，跳过项是 Windows junction 平台限定。浏览器 MCP `23/23` 通过。Ruff、TypeScript、ESLint、`git diff --check`、正式 Vite production build 与产物断言均通过；npm 锁定树一致，root audit 为 `0 vulnerabilities`。当前 renderer 单 chunk 约 `26.1 MB`，仍有超过 `25 MB` 的构建警告，属于后续 bundle 拆分风险，不影响本轮构建成功。

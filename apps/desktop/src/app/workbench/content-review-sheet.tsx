@@ -147,6 +147,20 @@ export function ContentReviewSheet({
   const pendingChecks = strings(validation.pending_human_checks)
   const accepted = detail?.human_review_status === 'accepted'
 
+  const continueAsset = () => {
+    if (!detail) {
+      return
+    }
+
+    onStartOperation({
+      accountId,
+      kind: 'content.resume',
+      targetId: detail.id,
+      title: detail.title || detail.topic || '内容资产'
+    })
+    onOpenChange(false)
+  }
+
   return (
     <Sheet onOpenChange={onOpenChange} open={Boolean(asset)}>
       <SheetContent className="w-[min(96vw,72rem)] gap-0 p-0 sm:max-w-[72rem]">
@@ -287,6 +301,7 @@ export function ContentReviewSheet({
             value={note}
           />
           <div className="flex flex-wrap justify-end gap-2">
+            {accepted ? <Button onClick={continueAsset}>继续推进到发布准备</Button> : null}
             <Button
               disabled={!detail || !note.trim() || submitting !== null}
               onClick={() => void submitReview('changes_requested')}
@@ -294,13 +309,15 @@ export function ContentReviewSheet({
             >
               {submitting === 'changes_requested' ? '正在记录…' : '提出修改并继续'}
             </Button>
-            <Button
-              disabled={!detail || accepted || detail.status !== 'review_ready' || submitting !== null}
-              onClick={() => void submitReview('accepted')}
-            >
-              <CheckCircle2 className="size-4" />
-              {accepted ? '当前版本已确认' : submitting === 'accepted' ? '正在确认…' : '确认当前版本'}
-            </Button>
+            {!accepted ? (
+              <Button
+                disabled={!detail || detail.status !== 'review_ready' || submitting !== null}
+                onClick={() => void submitReview('accepted')}
+              >
+                <CheckCircle2 className="size-4" />
+                {submitting === 'accepted' ? '正在确认…' : '确认当前版本'}
+              </Button>
+            ) : null}
           </div>
         </SheetFooter>
       </SheetContent>

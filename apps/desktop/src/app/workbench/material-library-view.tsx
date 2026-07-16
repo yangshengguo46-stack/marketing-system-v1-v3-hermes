@@ -18,7 +18,7 @@ import {
   Upload
 } from '@/lib/icons'
 import { isRemoteGateway, mediaExternalUrl, mediaStreamUrl } from '@/lib/media'
-import { $selectedMarketingAccountId } from '@/store/marketing'
+import { $marketingMaterialViewState, $selectedMarketingAccountId } from '@/store/marketing'
 
 import { ProductPage } from './business-surfaces'
 import type { StartMarketingOperation } from './operations'
@@ -56,16 +56,26 @@ interface MaterialLibraryViewProps {
 
 export function MaterialLibraryView({ onStartOperation, requestGateway }: MaterialLibraryViewProps) {
   const accountId = useStore($selectedMarketingAccountId)
-  const [tab, setTab] = useState<LibraryTab>('temporary')
+  const viewState = useStore($marketingMaterialViewState)
+  const tab = viewState.tab as LibraryTab
   const [assets, setAssets] = useState<MaterialAsset[]>([])
-  const [filter, setFilter] = useState<MediaFilter>('all')
-  const [query, setQuery] = useState('')
+  const filter = viewState.filter as MediaFilter
+  const query = viewState.query
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
   const [promotingId, setPromotingId] = useState('')
   const [rightsConfirmed, setRightsConfirmed] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  const setTab = (value: LibraryTab) =>
+    $marketingMaterialViewState.set({ ...$marketingMaterialViewState.get(), tab: value })
+
+  const setFilter = (value: MediaFilter) =>
+    $marketingMaterialViewState.set({ ...$marketingMaterialViewState.get(), filter: value })
+
+  const setQuery = (value: string) =>
+    $marketingMaterialViewState.set({ ...$marketingMaterialViewState.get(), query: value })
 
   const refresh = useCallback(async () => {
     setLoading(true)

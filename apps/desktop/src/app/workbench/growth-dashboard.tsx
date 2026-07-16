@@ -1,7 +1,12 @@
+import { useStore } from '@nanostores/react'
 import { useState } from 'react'
 
 import { Activity, Clock, Eye, RefreshCw } from '@/lib/icons'
-import type { MarketingAccountSummary } from '@/store/marketing'
+import {
+  $marketingWorkbenchViewState,
+  type MarketingAccountSummary,
+  type MarketingWorkbenchViewState
+} from '@/store/marketing'
 
 interface PublishActionDetail {
   action?: {
@@ -118,10 +123,11 @@ export function GrowthDashboard({
   const connected = accounts.filter(account => account.auth_state === 'authenticated')
   const projections = connected.map(projectAccount)
   const platformItems = buildPlatformItems(projections)
-  const [range, setRange] = useState<RangeId>('all')
-  const [drillPlatform, setDrillPlatform] = useState<string | null>(null)
-  const [lineScope, setLineScope] = useState('all')
-  const [lineMode, setLineMode] = useState<'index' | 'raw'>('index')
+  const viewState = useStore($marketingWorkbenchViewState)
+  const range = viewState.range
+  const drillPlatform = viewState.drillPlatform || null
+  const lineScope = viewState.lineScope
+  const lineMode = viewState.lineMode
   const [spinning, setSpinning] = useState(false)
   const selectedAccount = connected.find(account => account.id === selectedAccountId) || connected[0] || null
   const selectedPlatform = selectedAccount?.platform || platformItems[0]?.id || ''
@@ -136,6 +142,10 @@ export function GrowthDashboard({
   const quality = dataQuality(projections)
   const latestObserved = latestObservation(projections)
 
+  const updateViewState = (patch: Partial<MarketingWorkbenchViewState>) => {
+    $marketingWorkbenchViewState.set({ ...$marketingWorkbenchViewState.get(), ...patch })
+  }
+
   const enterPlatform = (platform: string) => {
     if (spinning) {
       return
@@ -143,7 +153,7 @@ export function GrowthDashboard({
 
     setSpinning(true)
     window.setTimeout(() => {
-      setDrillPlatform(platform)
+      updateViewState({ drillPlatform: platform })
       setSpinning(false)
     }, 420)
   }
@@ -155,7 +165,7 @@ export function GrowthDashboard({
 
     setSpinning(true)
     window.setTimeout(() => {
-      setDrillPlatform(null)
+      updateViewState({ drillPlatform: '' })
       setSpinning(false)
     }, 420)
   }
@@ -189,7 +199,7 @@ export function GrowthDashboard({
                   } disabled:cursor-not-allowed disabled:opacity-35`}
                   disabled={disabled}
                   key={item.id}
-                  onClick={() => setRange(item.id)}
+                  onClick={() => updateViewState({ range: item.id })}
                   title={disabled ? '形成两次以上历史回执后可查看' : undefined}
                   type="button"
                 >
@@ -300,7 +310,7 @@ export function GrowthDashboard({
             <button
               aria-pressed={lineMode === 'index'}
               className={`rounded-full px-3 py-1.5 text-xs ${lineMode === 'index' ? 'bg-(--ui-sidebar-surface-background) shadow-sm' : 'text-(--ui-text-tertiary)'}`}
-              onClick={() => setLineMode('index')}
+              onClick={() => updateViewState({ lineMode: 'index' })}
               type="button"
             >
               增长指数
@@ -308,7 +318,7 @@ export function GrowthDashboard({
             <button
               aria-pressed={lineMode === 'raw'}
               className={`rounded-full px-3 py-1.5 text-xs ${lineMode === 'raw' ? 'bg-(--ui-sidebar-surface-background) shadow-sm' : 'text-(--ui-text-tertiary)'}`}
-              onClick={() => setLineMode('raw')}
+              onClick={() => updateViewState({ lineMode: 'raw' })}
               type="button"
             >
               实际规模
@@ -320,13 +330,17 @@ export function GrowthDashboard({
           <div className="min-w-0">
             <GrowthLineChart mode={lineMode} series={lineSeries} />
             <div className="mt-3 flex flex-wrap justify-center gap-1">
-              <ScopeButton active={lineScope === 'all'} label="总数据" onClick={() => setLineScope('all')} />
+              <ScopeButton
+                active={lineScope === 'all'}
+                label="总数据"
+                onClick={() => updateViewState({ lineScope: 'all' })}
+              />
               {platformItems.map(item => (
                 <ScopeButton
                   active={lineScope === item.id}
                   key={item.id}
                   label={item.label}
-                  onClick={() => setLineScope(item.id)}
+                  onClick={() => updateViewState({ lineScope: item.id })}
                 />
               ))}
             </div>

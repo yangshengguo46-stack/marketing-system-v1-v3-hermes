@@ -2,12 +2,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { I18nProvider } from '@/i18n/context'
-import { selectMarketingAccount } from '@/store/marketing'
+import { $marketingOperationTasks, selectMarketingAccount } from '@/store/marketing'
 
 import { AccountCenterView, ContentFactoryView, ManagedView, VideoCreationView } from './business-surfaces'
 
 afterEach(() => {
   cleanup()
+  $marketingOperationTasks.set([])
+  window.localStorage.clear()
   Reflect.deleteProperty(window, 'hermesDesktop')
 })
 
@@ -39,11 +41,9 @@ describe('Marketing OS business surfaces', () => {
   it('renders the product-owned business destinations without an internal high-end video lane', () => {
     selectMarketingAccount('prospect_default')
 
-    const { rerender } = render(
-      <ContentFactoryView onNewChat={vi.fn()} onStartOperation={onStartOperation} requestGateway={requestGateway} />
-    )
+    const { rerender } = render(<ContentFactoryView onOpenArticle={vi.fn()} onOpenVideo={vi.fn()} />)
 
-    expect(screen.queryByText('内容工厂')).toBeNull()
+    expect(screen.getByRole('heading', { name: '内容工厂' })).toBeTruthy()
     expect(screen.getByText('图文创作')).toBeTruthy()
     expect(screen.getByText('视频创作')).toBeTruthy()
     expect(screen.queryByText('素材中枢')).toBeNull()
@@ -58,17 +58,15 @@ describe('Marketing OS business surfaces', () => {
     expect(screen.getByText('托管')).toBeTruthy()
   })
 
-  it('opens article creation as a clean conversation without injecting a scripted prompt', () => {
+  it('opens article creation as a product workbench instead of a conversation', () => {
     selectMarketingAccount('prospect_default')
-    const onNewChat = vi.fn()
+    const onOpenArticle = vi.fn()
 
-    render(
-      <ContentFactoryView onNewChat={onNewChat} onStartOperation={onStartOperation} requestGateway={requestGateway} />
-    )
+    render(<ContentFactoryView onOpenArticle={onOpenArticle} onOpenVideo={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: /图文创作/ }))
 
-    expect(onNewChat).toHaveBeenCalledOnce()
-    expect(onNewChat).toHaveBeenCalledWith()
+    expect(onOpenArticle).toHaveBeenCalledOnce()
+    expect(onStartOperation).not.toHaveBeenCalled()
   })
 
   it('keeps content creation to two focused entrances without a redundant generic action', () => {
@@ -76,15 +74,7 @@ describe('Marketing OS business surfaces', () => {
     const onOpenArticle = vi.fn()
     const onOpenVideo = vi.fn()
 
-    render(
-      <ContentFactoryView
-        onNewChat={vi.fn()}
-        onOpenArticle={onOpenArticle}
-        onOpenVideo={onOpenVideo}
-        onStartOperation={onStartOperation}
-        requestGateway={requestGateway}
-      />
-    )
+    render(<ContentFactoryView onOpenArticle={onOpenArticle} onOpenVideo={onOpenVideo} />)
 
     fireEvent.click(screen.getByRole('button', { name: /图文创作/ }))
     fireEvent.click(screen.getByRole('button', { name: /视频创作/ }))
@@ -150,6 +140,7 @@ describe('Marketing OS business surfaces', () => {
     selectMarketingAccount('acct-1')
     const calls = vi.fn()
     const onBack = vi.fn()
+    const startOperation = vi.fn(() => 'video-setup-task')
     const selectPaths = vi.fn().mockResolvedValue(['/tmp/rain-night-script.md'])
 
     Object.defineProperty(window, 'hermesDesktop', {
@@ -198,32 +189,12 @@ describe('Marketing OS business surfaces', () => {
         return { assets } as T
       }
 
-      if (method === 'session.create') {
-        return { session_id: 'video-setup-session' } as T
-      }
-
-      if (method === 'file.attach') {
-        return { attached: true, ref_text: '@file:rain-night-script.md' } as T
-      }
-
-      if (method === 'marketing.operation.prepare') {
-        const operation = params || {}
-
-        return {
-          prompt: [JSON.stringify(operation), '生成结果都必须先进入 Hermes 原生素材库'].join('\n')
-        } as T
-      }
-
-      if (method === 'prompt.submit') {
-        return { status: 'streaming' } as T
-      }
-
       return {} as T
     }
 
     render(
       <I18nProvider configClient={null} initialLocale="zh">
-        <VideoCreationView onBack={onBack} requestGateway={requestGateway} />
+        <VideoCreationView onBack={onBack} onStartOperation={startOperation} requestGateway={requestGateway} />
       </I18nProvider>
     )
 
@@ -276,35 +247,34 @@ describe('Marketing OS business surfaces', () => {
     fireEvent.click(screen.getByRole('button', { name: '开始拆分' }))
 
     await waitFor(() =>
-      expect(calls).toHaveBeenCalledWith('session.create', {
-        cols: 96,
-        marketing_account_id: 'acct-1',
-        marketing_user_id: 'default',
-        source: 'desktop-product',
-        title: '视频创作设定'
+      expect(startOperation).toHaveBeenCalledWith({
+        accountId: 'acct-1',
+        attachments: [
+          {
+            dataUrl: undefined,
+            name: 'rain-night-script.md',
+            path: '/tmp/rain-night-script.md'
+          }
+        ],
+        kind: 'video.setup',
+        note: '雨夜里，一个女孩走进旧唱片店。',
+        selections: {
+          characters: 'character-linxi',
+          props: '',
+          scenes: '',
+          sound: 'voice-warm'
+        }
       })
     )
-    await waitFor(() =>
-      expect(calls).toHaveBeenCalledWith('file.attach', {
-        name: 'rain-night-script.md',
-        path: '/tmp/rain-night-script.md',
-        session_id: 'video-setup-session'
-      })
-    )
-    await waitFor(() => expect(calls).toHaveBeenCalledWith('prompt.submit', expect.anything()))
-    const prompt = calls.mock.calls.find(([method]) => method === 'prompt.submit')?.[1]?.text
-    expect(prompt).toContain('character-linxi')
-    expect(prompt).toContain('voice-warm')
-    expect(prompt).toContain('@file:rain-night-script.md')
-    expect(prompt).toContain('雨夜里，一个女孩走进旧唱片店。')
-    expect(prompt).toContain('生成结果都必须先进入 Hermes 原生素材库')
+    expect(calls).not.toHaveBeenCalledWith('session.create', expect.anything())
+    expect(calls).not.toHaveBeenCalledWith('prompt.submit', expect.anything())
     expect(await screen.findByText(/正在拆分文案并创建分镜/)).toBeTruthy()
   }, 15_000)
 
   it('renders a real ratio-aware video workbench and records the final review', async () => {
     selectMarketingAccount('acct-1')
     const calls = vi.fn()
-    const onOpenOperation = vi.fn()
+    const startOperation = vi.fn(() => 'video-operation-task')
 
     const summary = {
       canvas: { fps: 30, height: 1080, width: 1920 },
@@ -416,30 +386,10 @@ describe('Marketing OS business surfaces', () => {
         return { asset: { ...projection.output_asset, human_review_status: params?.decision } } as T
       }
 
-      if (method === 'marketing.operation.prepare') {
-        return {
-          prompt: 'backend-owned video operation',
-          title: '生成新版本 · 横屏品牌解释视频',
-          visible_text: '为「横屏品牌解释视频」生成新的镜头版本'
-        } as T
-      }
-
-      if (method === 'session.create') {
-        return { session_id: 'video-operation-live', stored_session_id: 'video-operation-stored' } as T
-      }
-
-      if (method === 'prompt.submit') {
-        return { status: 'streaming' } as T
-      }
-
-      if (method === 'session.status') {
-        return { status: 'working' } as T
-      }
-
       return {} as T
     }
 
-    render(<VideoCreationView onOpenOperation={onOpenOperation} requestGateway={requestGateway} />)
+    render(<VideoCreationView onStartOperation={startOperation} requestGateway={requestGateway} />)
 
     expect(await screen.findByRole('combobox', { name: '视频项目' })).toBeTruthy()
     expect(screen.getByLabelText('视频制作阶段')).toBeTruthy()
@@ -471,22 +421,15 @@ describe('Marketing OS business surfaces', () => {
     expect(screen.getByText('无需检查')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
-    expect(await screen.findByText('Agent 正在后台执行，离开当前页面也不会中断。')).toBeTruthy()
-    expect(calls).toHaveBeenCalledWith(
-      'marketing.operation.prepare',
-      expect.objectContaining({
-        account_id: 'acct-1',
-        kind: 'video.version.generate',
-        production_id: 'video-production-1',
-        scene_id: 'scene-hook'
-      })
-    )
-    expect(calls).toHaveBeenCalledWith('prompt.submit', {
-      session_id: 'video-operation-live',
-      text: 'backend-owned video operation'
+    expect(startOperation).toHaveBeenCalledWith({
+      accountId: 'acct-1',
+      kind: 'video.version.generate',
+      productionId: 'video-production-1',
+      sceneId: 'scene-hook',
+      title: '横屏品牌解释视频'
     })
-    fireEvent.click(screen.getByRole('button', { name: '查看执行' }))
-    expect(onOpenOperation).toHaveBeenCalledWith('video-operation-stored')
+    expect(calls).not.toHaveBeenCalledWith('marketing.operation.prepare', expect.anything())
+    expect(calls).not.toHaveBeenCalledWith('prompt.submit', expect.anything())
 
     fireEvent.click(screen.getByRole('button', { name: '确认成片' }))
     await waitFor(() =>

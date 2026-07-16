@@ -42,11 +42,11 @@ Memory/Skill     Marketing domain  MCP/Channels
 
 ## Desktop / Gateway 合同审计（2026-07-17）
 
-当前依赖方向是单向的：Desktop 通过 Gateway 读取或提交结构化意图，后端不导入 Desktop；账号、素材、内容、视频、发布和学习事实仍由 Hermes Repository 与 `state.db` 拥有。Renderer 当前消费 21 个 `marketing.*` RPC，Gateway 暴露 31 个；未被 Desktop 使用的 10 个入口可能供消息渠道、后续治理界面或兼容路径使用，未经调用方审计不得按“前端没用”删除。Gateway 注册器已改为重复方法名立即失败，避免后声明静默覆盖前 handler。
+当前依赖方向是单向的：Desktop 通过 Gateway 读取或提交结构化意图，后端不导入 Desktop；账号、素材、内容、视频、发布和学习事实仍由 Hermes Repository 与 `state.db` 拥有。Renderer 当前消费 22 个 `marketing.*` RPC，Gateway 暴露 33 个；未被 Desktop 使用的 11 个入口可能供消息渠道、后续治理界面或兼容路径使用，未经调用方审计不得按“前端没用”删除。Gateway 注册器已改为重复方法名立即失败，避免后声明静默覆盖前 handler。
 
-仍有一处明确的耦合债务：`desktop-controller.tsx` 与 `video-production-workbench.tsx` 三处重复编排 `marketing.operation.prepare → session.create → prompt.submit`，并由 `marketing-task-tray.tsx` / 视频工作台轮询通用 `session.status`，把 `idle` 推断为经营任务完成。这不会把业务事实写进 Electron，但把任务启动协议和完成语义泄漏给了 UI。短期 UI 任务卡只保留内存中的展示投影，不再写 `localStorage`；长期必须由 Hermes 提供原子的 `marketing.operation.start` 与 operation/run projection（或等价原生 task owner），Desktop 只提交稳定对象 ID、用户输入并展示后端状态。
+任务协议泄漏已在本轮收口：Desktop 只向 `marketing.operation.start` 提交账号、资产、生产任务、场景、阶段和用户真实输入，Gateway 在后端内部完成校验、附件原生化、账号作用域 session、Agent 启动和提示合同；Renderer 不再读取后端 prompt，不再调用 `session.create` / `prompt.submit`，也不再用通用 `session.status=idle` 猜测业务完成。`marketing.operation.status` 统一返回 `working / waiting / complete / error` 和新建或绑定的领域对象引用；`desktop-product` 内部 session 不进入普通 Chat 历史。UI 任务卡仍只是内存展示投影，页面切换依靠 operation id 继续读取后端状态，内容、视频和经营结果继续由原生领域 owner 持久化。
 
-第二处债务是手写合同与组件体积：Desktop 各页面自行声明 RPC payload，缺少共享的可校验 contract；`desktop-controller.tsx`、`growth-dashboard.tsx`、`video-production-workbench.tsx` 分别约 1.6k、1.2k、2.2k 行，数据加载、任务编排和视图混在同一文件。后续拆分必须按 native owner 的 query/command projection 切，不得借拆组件新建 Electron Store 或第二任务状态机。Electron 直接能力目前只用于用户文件/文件夹选择、拖入路径解析和远程附件读取，仍属于交互输入，不拥有素材导入、授权、复制或生产状态。
+剩余债务有两类。第一，operation projection 目前绑定 Gateway 活跃 session，尚未成为可在 Gateway/应用重启后恢复的持久 Hermes task projection；在补齐 durable owner 之前不能宣称重启恢复。第二，Desktop 各页面仍有手写 RPC payload，缺少共享的可校验 contract；`desktop-controller.tsx`、`growth-dashboard.tsx`、`video-production-workbench.tsx` 仍然较大。后续拆分必须按 native owner 的 query/command projection 切，不得借拆组件新建 Electron Store 或第二任务状态机。Electron 直接能力目前只用于用户文件/文件夹选择、拖入路径解析和远程附件读取，仍属于交互输入，不拥有素材导入、授权、复制或生产状态。
 
 ## 经营领域
 

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { selectMarketingAccount } from '@/store/marketing'
+import { $marketingMaterialViewState, selectMarketingAccount } from '@/store/marketing'
 
 import { MaterialLibraryView } from './material-library-view'
 
@@ -10,6 +10,7 @@ const initialHermesDesktop = desktopWindow.hermesDesktop
 
 afterEach(() => {
   cleanup()
+  $marketingMaterialViewState.set({ filter: 'all', query: '', tab: 'temporary' })
   selectMarketingAccount('prospect_default')
 
   if (initialHermesDesktop) {

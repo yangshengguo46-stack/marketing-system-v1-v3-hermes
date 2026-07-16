@@ -27,7 +27,7 @@ describe('Marketing OS workbench flow', () => {
       }
 
       if (method === 'marketing.account.context') {
-        return { lifecycle: { stage: 'active' } } as T
+        return { lifecycle: { business_goal: '持续经营 AI 教育账号', stage: 'active' } } as T
       }
 
       if (method === 'marketing.content.assets.list') {
@@ -71,7 +71,6 @@ describe('Marketing OS workbench flow', () => {
 
     render(
       <WorkbenchView
-        onNewChat={vi.fn()}
         onOpenAccounts={vi.fn()}
         onOpenContent={vi.fn()}
         onStartOperation={onStartOperation}

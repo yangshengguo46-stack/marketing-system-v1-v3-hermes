@@ -3,9 +3,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
-import { ArrowUpRight, BarChart3, Brain, CheckCircle2, ChevronRight, FileText, Plus, Zap } from '@/lib/icons'
+import { ArrowUpRight, BarChart3, Brain, CheckCircle2, ChevronRight, FileText, Zap } from '@/lib/icons'
 import { PRODUCT_NAME } from '@/product'
 import {
+  $marketingJourneyGoalDraft,
+  $marketingOperationTasks,
   $selectedMarketingAccountId,
   type MarketingAccountSummary,
   selectMarketingAccount,
@@ -14,6 +16,7 @@ import {
 import { $gatewayState } from '@/store/session'
 
 import { type ContentAssetSummary, ContentReviewSheet } from './content-review-sheet'
+import { FirstRunJourney } from './first-run-journey'
 import { GrowthDashboard } from './growth-dashboard'
 import type { StartMarketingOperation } from './operations'
 import { userFacingError } from './user-facing-copy'
@@ -71,20 +74,13 @@ interface PublishActionDetail {
 }
 
 interface WorkbenchViewProps {
-  onNewChat: () => void
   onOpenAccounts: () => void
   onOpenContent: () => void
   onStartOperation: StartMarketingOperation
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
 
-export function WorkbenchView({
-  onNewChat,
-  onOpenAccounts,
-  onOpenContent,
-  onStartOperation,
-  requestGateway
-}: WorkbenchViewProps) {
+export function WorkbenchView({ onOpenAccounts, onOpenContent, onStartOperation, requestGateway }: WorkbenchViewProps) {
   const [accounts, setAccounts] = useState<MarketingAccountsSummary | null>(null)
   const [context, setContext] = useState<AccountContext | null>(null)
   const [assets, setAssets] = useState<ContentAssetSummary[]>([])
@@ -94,12 +90,19 @@ export function WorkbenchView({
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [error, setError] = useState('')
   const selectedAccountId = useStore($selectedMarketingAccountId)
+  const operationTasks = useStore($marketingOperationTasks)
   const gatewayState = useStore($gatewayState)
 
-  const selectedAccount = useMemo(
-    () => accounts?.accounts.find(account => account.id === selectedAccountId) || accounts?.accounts[0] || null,
-    [accounts, selectedAccountId]
-  )
+  const selectedAccount = useMemo(() => {
+    if (selectedAccountId.startsWith('prospect_')) {
+      return null
+    }
+
+    return accounts?.accounts.find(account => account.id === selectedAccountId) || accounts?.accounts[0] || null
+  }, [accounts, selectedAccountId])
+
+  const scopeAccountId =
+    selectedAccount?.id || (selectedAccountId.startsWith('prospect_') ? selectedAccountId : 'prospect_default')
 
   const applyAccounts = useCallback((result: MarketingAccountsSummary) => {
     setAccounts(result)
@@ -139,33 +142,23 @@ export function WorkbenchView({
     }
   }, [applyAccounts, gatewayState, requestGateway])
 
-  useEffect(() => {
-    if (!selectedAccount?.id || selectedAccount.auth_state !== 'authenticated') {
-      setContext(null)
-      setAssets([])
-      setSelectedReviewAsset(null)
-      setPublishActionDetails([])
-      setPendingDecisions(0)
-
-      return
-    }
-
+  const refreshDetail = useCallback(() => {
     let active = true
     setLoadingDetail(true)
 
     void Promise.allSettled([
-      requestGateway<AccountContext>('marketing.account.context', { account_id: selectedAccount.id }),
+      requestGateway<AccountContext>('marketing.account.context', { account_id: scopeAccountId }),
       requestGateway<{ assets: ContentAssetSummary[] }>('marketing.content.assets.list', {
-        account_id: selectedAccount.id,
+        account_id: scopeAccountId,
         limit: 8
       }),
       requestGateway<{ total: number }>('marketing.learning.candidates.list', {
-        account_id: selectedAccount.id,
+        account_id: scopeAccountId,
         limit: 20,
         status: 'pending'
       }),
       requestGateway<{ actions: PublishActionSummary[] }>('marketing.publish.actions.list', {
-        account_id: selectedAccount.id,
+        account_id: scopeAccountId,
         limit: 20
       })
     ]).then(results => {
@@ -190,7 +183,7 @@ export function WorkbenchView({
         void Promise.allSettled(
           actions.slice(0, 8).map(action =>
             requestGateway<PublishActionDetail>('marketing.publish.action.get', {
-              account_id: selectedAccount.id,
+              account_id: scopeAccountId,
               action_id: action.id
             })
           )
@@ -213,9 +206,34 @@ export function WorkbenchView({
     return () => {
       active = false
     }
-  }, [requestGateway, selectedAccount?.auth_state, selectedAccount?.id])
+  }, [requestGateway, scopeAccountId])
 
-  const accountName = selectedAccount?.label || selectedAccount?.username || '你的账号'
+  useEffect(() => refreshDetail(), [refreshDetail])
+
+  const operationRefreshSignature = operationTasks
+    .filter(task => task.accountId === scopeAccountId && (task.operationId || task.state === 'complete'))
+    .map(task => `${task.id}:${task.state}:${task.operationId || ''}`)
+    .join('|')
+
+  useEffect(() => {
+    if (operationRefreshSignature) {
+      return refreshDetail()
+    }
+  }, [operationRefreshSignature, refreshDetail])
+
+  useEffect(() => {
+    if (context?.lifecycle?.business_goal && $marketingJourneyGoalDraft.get()) {
+      $marketingJourneyGoalDraft.set('')
+    }
+  }, [context?.lifecycle?.business_goal])
+
+  const accountName = selectedAccount?.label || selectedAccount?.username || '你的经营项目'
+  const hasBusinessGoal = Boolean(context?.lifecycle?.business_goal)
+
+  const hasFirstDecision = assets.some(asset =>
+    ['accepted', 'changes_requested'].includes(asset.human_review_status || '')
+  )
+
   const greeting = timeGreeting()
 
   return (
@@ -237,112 +255,132 @@ export function WorkbenchView({
             <Button className="rounded-full px-4" onClick={onOpenAccounts} variant="outline">
               管理账号
             </Button>
-            <Button className="rounded-full px-5 shadow-[0_8px_24px_rgba(239,91,85,0.2)]" onClick={() => onNewChat()}>
-              <Plus className="mr-1.5 size-4" />
-              新对话
-            </Button>
+            {hasBusinessGoal ? (
+              <Button className="rounded-full px-5 shadow-[0_8px_24px_rgba(239,91,85,0.2)]" onClick={onOpenContent}>
+                <FileText className="mr-1.5 size-4" />
+                创建内容
+              </Button>
+            ) : null}
           </div>
         </header>
 
-        <GrowthDashboard
-          accounts={accounts?.accounts || []}
-          actionDetails={publishActionDetails}
-          onRefresh={() => void refreshAccounts()}
-          onSelectAccount={selectMarketingAccount}
-          refreshing={loadingDetail}
-          selectedAccountId={selectedAccount?.id || ''}
-        />
+        {!loadingDetail && (!hasBusinessGoal || !hasFirstDecision) ? (
+          <FirstRunJourney
+            accounts={accounts?.accounts || []}
+            businessGoal={context?.lifecycle?.business_goal}
+            hasFirstAsset={assets.length > 0}
+            hasFirstDecision={hasFirstDecision}
+            onOpenAccounts={onOpenAccounts}
+            onReviewFirstAsset={() => setSelectedReviewAsset(assets[0] || null)}
+            onSelectAccount={selectMarketingAccount}
+            onStartOperation={onStartOperation}
+            selectedAccountId={scopeAccountId}
+          />
+        ) : null}
 
-        <section className="mt-5 overflow-hidden rounded-[26px] border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) shadow-[0_16px_48px_rgba(42,34,27,0.045)]">
-          <header className="flex flex-wrap items-end justify-between gap-3 border-b border-(--ui-stroke-tertiary) px-7 py-5">
-            <div>
-              <p className="text-xs text-(--ui-text-tertiary)">此刻最值得处理的事情</p>
-              <h2 className="mt-1 text-xl font-semibold tracking-[-0.035em]">今天的经营面</h2>
-            </div>
-            <button
-              className="flex items-center gap-1.5 text-sm font-medium text-(--ui-text-secondary) hover:text-foreground"
-              onClick={() =>
-                onStartOperation({
-                  accountId: selectedAccount?.id || 'prospect_default',
-                  kind: 'account.prioritize'
-                })
-              }
-              type="button"
-            >
-              排出今天的优先级 <ArrowUpRight className="size-4" />
-            </button>
-          </header>
+        {hasBusinessGoal ? (
+          <GrowthDashboard
+            accounts={accounts?.accounts || []}
+            actionDetails={publishActionDetails}
+            onRefresh={() => void refreshAccounts()}
+            onSelectAccount={selectMarketingAccount}
+            refreshing={loadingDetail}
+            selectedAccountId={selectedAccount?.id || ''}
+          />
+        ) : null}
 
-          <div className="grid xl:grid-cols-[1.08fr_0.92fr]">
-            <WorkbenchLane
-              action="进入内容工厂"
-              count={assets.length}
-              icon={<FileText className="size-4" />}
-              onAction={onOpenContent}
-              title="正在推进"
-            >
-              {assets.length ? (
-                <div className="divide-y divide-(--ui-stroke-tertiary)">
-                  {assets.slice(0, 4).map((asset, index) => (
-                    <button
-                      className="group flex w-full items-center gap-4 py-4 text-left"
-                      key={asset.id}
-                      onClick={() => setSelectedReviewAsset(asset)}
-                      type="button"
-                    >
-                      <span className="w-5 text-[0.66rem] font-semibold tabular-nums text-(--ui-text-quaternary)">
-                        {String(index + 1).padStart(2, '0')}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <strong className="block truncate text-sm font-medium">
-                          {asset.title || asset.topic || '未命名内容'}
-                        </strong>
-                        <small className="mt-1 block text-xs text-(--ui-text-tertiary)">
-                          {contentTypeLabel(asset.type)} · {statusLabel(asset.status)}
-                        </small>
-                      </span>
-                      <ChevronRight className="size-4 text-(--ui-text-quaternary) transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <EmptySignal detail="从一个想法开始，内容会在这里持续推进。" title="还没有正在制作的内容" />
-              )}
-            </WorkbenchLane>
-
-            <WorkbenchLane
-              action={pendingDecisions ? '一起判断' : '查看经营模型'}
-              count={pendingDecisions}
-              icon={<Brain className="size-4" />}
-              onAction={() =>
-                onStartOperation({
-                  accountId: selectedAccount?.id || 'prospect_default',
-                  kind: pendingDecisions ? 'learning.review' : 'account.model.review'
-                })
-              }
-              title="今日判断"
-            >
-              <div className="space-y-1">
-                <InsightRow
-                  detail={
-                    pendingDecisions
-                      ? `${pendingDecisions} 条策略学习需要确认，未经同意不会改变账号长期方向。`
-                      : '目前没有需要你审批的策略变化，会继续观察真实结果。'
-                  }
-                  icon={pendingDecisions ? <Zap className="size-4" /> : <CheckCircle2 className="size-4" />}
-                  title={pendingDecisions ? '有新的策略判断等待决定' : '经营策略保持稳定'}
-                  tone={pendingDecisions ? 'warm' : 'green'}
-                />
-                <InsightRow
-                  detail={radarDetail(context, selectedAccount)}
-                  icon={<BarChart3 className="size-4" />}
-                  title={radarTitle(context, selectedAccount)}
-                  tone="blue"
-                />
+        {hasBusinessGoal ? (
+          <section className="mt-5 overflow-hidden rounded-[26px] border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) shadow-[0_16px_48px_rgba(42,34,27,0.045)]">
+            <header className="flex flex-wrap items-end justify-between gap-3 border-b border-(--ui-stroke-tertiary) px-7 py-5">
+              <div>
+                <p className="text-xs text-(--ui-text-tertiary)">此刻最值得处理的事情</p>
+                <h2 className="mt-1 text-xl font-semibold tracking-[-0.035em]">今天的经营面</h2>
               </div>
-            </WorkbenchLane>
-          </div>
-        </section>
+              <button
+                className="flex items-center gap-1.5 text-sm font-medium text-(--ui-text-secondary) hover:text-foreground"
+                onClick={() =>
+                  onStartOperation({
+                    accountId: scopeAccountId,
+                    kind: 'account.prioritize'
+                  })
+                }
+                type="button"
+              >
+                排出今天的优先级 <ArrowUpRight className="size-4" />
+              </button>
+            </header>
+
+            <div className="grid xl:grid-cols-[1.08fr_0.92fr]">
+              <WorkbenchLane
+                action="进入内容工厂"
+                count={assets.length}
+                icon={<FileText className="size-4" />}
+                onAction={onOpenContent}
+                title="正在推进"
+              >
+                {assets.length ? (
+                  <div className="divide-y divide-(--ui-stroke-tertiary)">
+                    {assets.slice(0, 4).map((asset, index) => (
+                      <button
+                        className="group flex w-full items-center gap-4 py-4 text-left"
+                        key={asset.id}
+                        onClick={() => setSelectedReviewAsset(asset)}
+                        type="button"
+                      >
+                        <span className="w-5 text-[0.66rem] font-semibold tabular-nums text-(--ui-text-quaternary)">
+                          {String(index + 1).padStart(2, '0')}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <strong className="block truncate text-sm font-medium">
+                            {asset.title || asset.topic || '未命名内容'}
+                          </strong>
+                          <small className="mt-1 block text-xs text-(--ui-text-tertiary)">
+                            {contentTypeLabel(asset.type)} · {statusLabel(asset.status)}
+                          </small>
+                        </span>
+                        <ChevronRight className="size-4 text-(--ui-text-quaternary) transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptySignal detail="从一个想法开始，内容会在这里持续推进。" title="还没有正在制作的内容" />
+                )}
+              </WorkbenchLane>
+
+              <WorkbenchLane
+                action={pendingDecisions ? '一起判断' : '查看经营模型'}
+                count={pendingDecisions}
+                icon={<Brain className="size-4" />}
+                onAction={() =>
+                  onStartOperation({
+                    accountId: scopeAccountId,
+                    kind: pendingDecisions ? 'learning.review' : 'account.model.review'
+                  })
+                }
+                title="今日判断"
+              >
+                <div className="space-y-1">
+                  <InsightRow
+                    detail={
+                      pendingDecisions
+                        ? `${pendingDecisions} 条策略学习需要确认，未经同意不会改变账号长期方向。`
+                        : '目前没有需要你审批的策略变化，会继续观察真实结果。'
+                    }
+                    icon={pendingDecisions ? <Zap className="size-4" /> : <CheckCircle2 className="size-4" />}
+                    title={pendingDecisions ? '有新的策略判断等待决定' : '经营策略保持稳定'}
+                    tone={pendingDecisions ? 'warm' : 'green'}
+                  />
+                  <InsightRow
+                    detail={radarDetail(context, selectedAccount)}
+                    icon={<BarChart3 className="size-4" />}
+                    title={radarTitle(context, selectedAccount)}
+                    tone="blue"
+                  />
+                </div>
+              </WorkbenchLane>
+            </div>
+          </section>
+        ) : null}
 
         {error ? (
           <p className="mt-5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs text-red-500">
@@ -351,7 +389,7 @@ export function WorkbenchView({
         ) : null}
       </div>
       <ContentReviewSheet
-        accountId={selectedAccount?.id || ''}
+        accountId={scopeAccountId}
         asset={selectedReviewAsset}
         onOpenChange={open => {
           if (!open) {

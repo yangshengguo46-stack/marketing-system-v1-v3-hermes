@@ -21,6 +21,7 @@ _VIDEO_STAGES = frozenset({"setup", "storyboard", "dynamic", "edit", "final"})
 _OPERATION_KINDS = frozenset(
     {
         "account.analyze",
+        "account.bootstrap",
         "account.model.review",
         "account.prioritize",
         "autopilot.configure",
@@ -111,6 +112,7 @@ def _normalized_operation(
 
     title = " ".join(_optional_text(params, "title", limit=240).split())
     note = _optional_text(params, "note", limit=8_000)
+    business_goal = _optional_text(params, "business_goal", limit=500)
     stage = str(params.get("stage") or "").strip()
     version = params.get("version")
 
@@ -118,6 +120,8 @@ def _normalized_operation(
         operation["title"] = title
     if note:
         operation["note"] = note
+    if business_goal:
+        operation["business_goal"] = business_goal
     if stage:
         if stage not in _VIDEO_STAGES:
             raise ValueError("stage must be setup, storyboard, dynamic, edit, or final")
@@ -156,6 +160,7 @@ def _normalized_operation(
             raise ValueError("video.setup requires note or document_refs")
 
     required_fields = {
+        "account.bootstrap": ("business_goal",),
         "content.resume": ("target_id",),
         "content.revise": ("asset_id", "note"),
         "video.asset.select": ("production_id", "media_asset_id"),
@@ -186,6 +191,14 @@ def _operation_copy(operation: dict[str, Any]) -> tuple[str, str, str]:
             "今天的经营优先级",
             "读取当前账号经营模型、正在推进的内容、待确认学习和真实发布回执。说明证据后，选择今天最值得推进的一件事并立即推进；高风险动作仍须单独确认。",
         )
+    if kind == "account.bootstrap":
+        return (
+            "围绕经营目标启动首次研究",
+            "首次经营研究",
+            "读取已经由原生账号生命周期保存的 business_goal。连接账号时先采集可验证的账号与作品事实；"
+            "未连接账号时从用户目标、公开赛道和目标受众开始研究。持续把证据、经营模型和下一步写回原生 owner，"
+            "并尽快形成第一个可在产品界面审阅的经营对象。不要要求用户重新发送目标，也不要只回复一段建议。",
+        )
     if kind == "content.resume":
         return (
             f"继续推进{target}",
@@ -208,7 +221,9 @@ def _operation_copy(operation: dict[str, Any]) -> tuple[str, str, str]:
         return (
             "开始一篇新的图文作品",
             "图文创作",
-            "先在当前账号作用域建立真实、可持久化的图文内容对象，再通过对话补齐选题、受众、目标和素材。后续草稿、修订和审核必须回写原生 owner，不要只输出一段孤立文案。",
+            "把 note 作为用户已经提交的创作目标，立即读取经营上下文和可验证证据，并在当前账号作用域建立真实、"
+            "可持久化的图文内容对象。后续草稿、修订和审核必须回写原生 owner；不要要求用户重新发送目标，"
+            "也不要只输出一段孤立文案。需要用户判断时，把问题附着在这个内容对象上。",
         )
     if kind == "account.analyze":
         platform = str(operation.get("platform") or "")

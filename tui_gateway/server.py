@@ -191,6 +191,9 @@ _LONG_HANDLERS = frozenset(
         "complete.path",
         "complete.slash",
         "llm.oneshot",
+        # Product actions may stage local/remote attachments before launching
+        # the Agent turn. Keep that work off the transport reader thread.
+        "marketing.operation.start",
         # Pet RPCs hit the network (manifest fetch / spritesheet download) or do
         # per-frame PNG decode/encode (pet.cells): inline they serialize on the
         # reader thread, so picker previews trickle in one at a time and the
@@ -8521,6 +8524,14 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
     _emit("message.start", sid)
 
     def run():
+        def record_marketing_turn(status: str, error: str = "") -> None:
+            """Project a hidden Agent turn into its product-operation status."""
+
+            with session["history_lock"]:
+                if isinstance(session.get("marketing_operation"), dict):
+                    session["marketing_operation_turn_status"] = status
+                    session["marketing_operation_error"] = error
+
         approval_token = None
         session_tokens = []
         home_token = None  # per-turn HERMES_HOME override for a resumed remote profile
@@ -8570,13 +8581,14 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                     context_length=ctx_len,
                 )
                 if ctx.blocked:
+                    blocked_error = (
+                        "\n".join(ctx.warnings) or "Context injection refused."
+                    )
+                    record_marketing_turn("error", blocked_error)
                     _emit(
                         "error",
                         sid,
-                        {
-                            "message": "\n".join(ctx.warnings)
-                            or "Context injection refused."
-                        },
+                        {"message": blocked_error},
                     )
                     return
                 prompt = ctx.message
@@ -8759,6 +8771,13 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                 raw = str(result)
                 status = "complete"
 
+            turn_error = ""
+            if status == "error" and isinstance(result, dict):
+                turn_error = str(result.get("error") or raw or "Agent 执行失败")
+            elif status == "interrupted":
+                turn_error = "Agent 执行被中断，可以安全重试。"
+            record_marketing_turn(status, turn_error)
+
             payload = {"text": raw, "usage": _get_usage(agent), "status": status}
             if last_reasoning:
                 payload["reasoning"] = last_reasoning
@@ -8909,6 +8928,7 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
             print(
                 f"[gateway-turn] {type(e).__name__}: {e}", file=sys.stderr, flush=True
             )
+            record_marketing_turn("error", str(e))
             _emit("error", sid, {"message": str(e)})
         finally:
             try:
@@ -12946,6 +12966,323 @@ def _(rid, params: dict) -> dict:
     except ValueError as exc:
         return _err(rid, -32602, str(exc))
     return _ok(rid, result)
+
+
+def _marketing_operation_snapshot(kind: str, *, user_id: str, account_id: str) -> dict[str, list[str]]:
+    """Capture bounded object identities so a run can report what it produced."""
+
+    snapshot: dict[str, list[str]] = {"content_assets": [], "video_productions": []}
+    try:
+        if kind.startswith("content.") or kind == "account.bootstrap":
+            from agent.marketing.domains import ContentAssetRepository
+
+            result = ContentAssetRepository().list_summaries(
+                user_id=user_id,
+                account_id=account_id,
+                limit=50,
+            )
+            snapshot["content_assets"] = [
+                str(item.get("id") or "")
+                for item in result.get("assets", [])
+                if item.get("id")
+            ]
+        if kind.startswith("video."):
+            from agent.marketing.domains import VideoProductionRepository
+
+            result = VideoProductionRepository().list_review_summaries(
+                user_id=user_id,
+                account_id=account_id,
+                limit=50,
+            )
+            snapshot["video_productions"] = [
+                str(item.get("id") or "")
+                for item in result.get("productions", [])
+                if item.get("id")
+            ]
+    except Exception:
+        # Result discovery is a projection over domain truth. It must never stop
+        # the native Agent run when a bounded list cannot be read yet.
+        logger.debug("failed to snapshot Marketing OS operation objects", exc_info=True)
+    return snapshot
+
+
+def _marketing_operation_results(run: dict) -> list[dict[str, str]]:
+    kind = str(run.get("kind") or "")
+    account_id = str(run.get("account_id") or "")
+    user_id = str(run.get("user_id") or "default")
+    operation = run.get("operation") if isinstance(run.get("operation"), dict) else {}
+    baseline = run.get("baseline") if isinstance(run.get("baseline"), dict) else {}
+    results: list[dict[str, str]] = []
+
+    if project_id := str(run.get("project_id") or ""):
+        results.append(
+            {
+                "object_id": project_id,
+                "object_type": "strategy_project",
+                "title": "经营目标与首次研究",
+            }
+        )
+
+    if kind.startswith("account.") and account_id:
+        results.append(
+            {
+                "object_id": account_id,
+                "object_type": "account",
+                "title": "账号经营上下文",
+            }
+        )
+
+    if kind.startswith("content.") or kind == "account.bootstrap":
+        current = _marketing_operation_snapshot(kind, user_id=user_id, account_id=account_id)
+        before = set(baseline.get("content_assets") or [])
+        asset_ids = [item for item in current.get("content_assets", []) if item not in before]
+        bound_asset = str(operation.get("asset_id") or operation.get("target_id") or "")
+        if bound_asset and bound_asset not in asset_ids:
+            asset_ids.insert(0, bound_asset)
+        results.extend(
+            {
+                "object_id": asset_id,
+                "object_type": "content_asset",
+                "title": "内容资产",
+            }
+            for asset_id in asset_ids[:8]
+        )
+
+    if kind.startswith("video."):
+        current = _marketing_operation_snapshot(kind, user_id=user_id, account_id=account_id)
+        before = set(baseline.get("video_productions") or [])
+        production_ids = [item for item in current.get("video_productions", []) if item not in before]
+        bound_production = str(operation.get("production_id") or "")
+        if bound_production and bound_production not in production_ids:
+            production_ids.insert(0, bound_production)
+        results.extend(
+            {
+                "object_id": production_id,
+                "object_type": "video_production",
+                "title": "视频项目",
+            }
+            for production_id in production_ids[:8]
+        )
+
+    # Preserve order while preventing a bound object and a discovered object
+    # from producing duplicate result destinations.
+    unique: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for result in results:
+        identity = (result["object_type"], result["object_id"])
+        if identity not in seen:
+            seen.add(identity)
+            unique.append(result)
+    return unique
+
+
+def _marketing_operation_waiting(sid: str) -> bool:
+    with _prompt_lock:
+        return any(owner_sid == sid for owner_sid, _event in _pending.values())
+
+
+@method("marketing.operation.start")
+def _(rid, params: dict) -> dict:
+    """Atomically launch a structured product action without composer prefill."""
+
+    from agent.marketing.operation_entrypoints import prepare_marketing_operation
+
+    params = dict(params) if isinstance(params, dict) else {}
+    attachments = params.pop("attachments", []) or []
+    if not isinstance(attachments, list) or len(attachments) > 12:
+        return _err(rid, -32602, "attachments must be a list with at most 12 files")
+
+    account_id = str(params.get("account_id") or "").strip()
+    user_id = str(params.get("user_id") or "default").strip() or "default"
+    kind = str(params.get("kind") or "").strip()
+    prepared = None
+    project = None
+    sid = ""
+
+    try:
+        # Operations without staged files can be completely validated before a
+        # live session is allocated. Video setup prepares after file.attach has
+        # converted user-selected inputs into native @file references.
+        if not attachments:
+            prepared = prepare_marketing_operation(params)
+
+        if kind == "account.bootstrap":
+            from agent.marketing.domains import AccountLifecycleRepository
+
+            project = AccountLifecycleRepository().begin_project(
+                user_id=user_id,
+                account_id=account_id,
+                business_goal=str(params.get("business_goal") or ""),
+                constraints=(
+                    params.get("constraints")
+                    if isinstance(params.get("constraints"), dict)
+                    else None
+                ),
+            )
+
+        baseline = _marketing_operation_snapshot(
+            kind,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        create_response = _methods["session.create"](
+            rid,
+            {
+                "cols": 96,
+                "marketing_account_id": account_id,
+                "marketing_user_id": user_id,
+                "source": "desktop-product",
+                "title": (prepared or {}).get("title") or str(params.get("title") or "经营任务"),
+            },
+        )
+        if create_response.get("error"):
+            return create_response
+        created = create_response.get("result") or {}
+        sid = str(created.get("session_id") or "")
+        stored_session_id = str(created.get("stored_session_id") or "")
+        if not sid or not stored_session_id:
+            raise RuntimeError("native session owner returned no operation session")
+
+        document_refs = list(params.get("document_refs") or [])
+        for item in attachments:
+            if not isinstance(item, dict):
+                raise ValueError("each attachment must be an object")
+            attach_response = _methods["file.attach"](
+                rid,
+                {
+                    "data_url": str(item.get("data_url") or ""),
+                    "name": str(item.get("name") or ""),
+                    "path": str(item.get("path") or ""),
+                    "session_id": sid,
+                },
+            )
+            if attach_response.get("error"):
+                raise ValueError(str((attach_response.get("error") or {}).get("message") or "file attach failed"))
+            ref_text = str((attach_response.get("result") or {}).get("ref_text") or "")
+            if not ref_text:
+                raise RuntimeError("native file owner returned no attachment reference")
+            document_refs.append(ref_text)
+
+        if document_refs:
+            params["document_refs"] = document_refs
+        if prepared is None:
+            prepared = prepare_marketing_operation(params)
+
+        operation_id = f"marketing_operation_{uuid.uuid4().hex}"
+        run = {
+            "account_id": account_id,
+            "baseline": baseline,
+            "created_at": time.time(),
+            "kind": kind,
+            "operation": prepared.get("operation") or {},
+            "operation_id": operation_id,
+            "project_id": str((project or {}).get("id") or ""),
+            "stored_session_id": stored_session_id,
+            "title": str(prepared.get("title") or "经营任务"),
+            "user_id": user_id,
+            "visible_text": str(prepared.get("visible_text") or "Agent 正在执行"),
+        }
+        with _sessions_lock:
+            session = _sessions.get(sid)
+            if session is None:
+                raise RuntimeError("operation session disappeared before launch")
+            session["marketing_operation"] = run
+            session["pending_title"] = run["title"]
+
+        submit_response = _methods["prompt.submit"](
+            rid,
+            {"session_id": sid, "text": prepared["prompt"]},
+        )
+        if submit_response.get("error"):
+            _close_session_by_id(sid, end_reason="marketing_operation_start_failed")
+            return submit_response
+        return _ok(
+            rid,
+            {
+                "account_id": account_id,
+                "kind": kind,
+                "operation_id": operation_id,
+                "state": "working",
+                "title": run["title"],
+                "visible_text": run["visible_text"],
+            },
+        )
+    except (TypeError, ValueError) as exc:
+        if sid:
+            _close_session_by_id(sid, end_reason="marketing_operation_validation_failed")
+        return _err(rid, -32602, str(exc))
+    except Exception as exc:
+        if sid:
+            _close_session_by_id(sid, end_reason="marketing_operation_start_failed")
+        logger.exception("failed to launch Marketing OS operation")
+        return _err(rid, 5026, str(exc))
+
+
+@method("marketing.operation.status")
+def _(rid, params: dict) -> dict:
+    """Return business-task state and native result object references."""
+
+    operation_id = str((params or {}).get("operation_id") or "").strip()
+    if not operation_id:
+        return _err(rid, -32602, "operation_id is required")
+
+    sid = ""
+    session = None
+    with _sessions_lock:
+        for candidate_sid, candidate in _sessions.items():
+            run = candidate.get("marketing_operation")
+            if isinstance(run, dict) and run.get("operation_id") == operation_id:
+                sid = candidate_sid
+                session = candidate
+                break
+    if session is None:
+        return _err(rid, 4044, "Marketing OS operation not found")
+
+    run = session.get("marketing_operation") or {}
+    turn_status = str(session.get("marketing_operation_turn_status") or "")
+    error = str(
+        session.get("agent_error") or session.get("marketing_operation_error") or ""
+    )
+    results: list[dict[str, str]] = []
+    if session.get("agent_error"):
+        state = "error"
+    elif _marketing_operation_waiting(sid):
+        state = "waiting"
+    elif session.get("running"):
+        state = "working"
+    elif turn_status in {"error", "interrupted"}:
+        state = "error"
+        if not error:
+            error = "Agent 执行失败，原始业务输入已经保留，可以安全重试。"
+    else:
+        state = "complete"
+        results = _marketing_operation_results(run)
+        expected_result_type = {
+            "account.bootstrap": "content_asset",
+            "content.article.start": "content_asset",
+            "video.setup": "video_production",
+        }.get(str(run.get("kind") or ""))
+        if expected_result_type and not any(
+            result.get("object_type") == expected_result_type for result in results
+        ):
+            state = "error"
+            error = (
+                "Agent 已结束，但没有形成产品界面可见的经营对象；"
+                "原始业务输入已经保留，可以安全重试。"
+            )
+    return _ok(
+        rid,
+        {
+            "account_id": run.get("account_id"),
+            "error": error,
+            "kind": run.get("kind"),
+            "operation_id": operation_id,
+            "results": results,
+            "state": state,
+            "title": run.get("title"),
+            "visible_text": run.get("visible_text"),
+        },
+    )
 
 
 @method("marketing.accounts.list")

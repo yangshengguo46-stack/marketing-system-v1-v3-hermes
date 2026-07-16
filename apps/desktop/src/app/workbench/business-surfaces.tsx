@@ -3,8 +3,20 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { ArrowUpRight, Clock, FileText, Lock, MonitorPlay, Plus, RefreshCw, Trash2, Zap } from '@/lib/icons'
 import {
+  ArrowUpRight,
+  ChevronLeft,
+  Clock,
+  FileText,
+  Lock,
+  MonitorPlay,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Zap
+} from '@/lib/icons'
+import {
+  $marketingAccounts,
   $selectedMarketingAccountId,
   type MarketingAccountSummary,
   type MarketingPlatformSummary,
@@ -29,8 +41,9 @@ interface AccountCenterViewProps extends OperationSurfaceProps {
 }
 
 interface VideoCreationViewProps extends GatewaySurfaceProps {
+  initialProductionId?: string
   onBack?: () => void
-  onOpenOperation?: (storedSessionId: string) => void
+  onStartOperation: StartMarketingOperation
 }
 
 interface AccountsEnvelope {
@@ -45,61 +58,44 @@ interface PlatformsEnvelope {
 }
 
 export function ContentFactoryView({
-  onNewChat,
   onOpenArticle,
   onOpenVideo
-}: OperationSurfaceProps & {
-  onNewChat: () => void
-  onOpenArticle?: () => void
-  onOpenMaterials?: () => void
-  onOpenVideo?: () => void
+}: {
+  onOpenArticle: () => void
+  onOpenVideo: () => void
 }) {
   return (
-    <ProductPage action={null} showHeader={false} title="内容工厂">
-      <section className="grid min-h-[calc(100vh-var(--titlebar-height)-5rem)] place-items-center px-4 py-12">
+    <ProductPage
+      action={null}
+      description="选择生产类型后，后续研究、草稿、审核和结果都留在同一个内容对象里。"
+      title="内容工厂"
+    >
+      <section className="grid min-h-[calc(100vh-var(--titlebar-height)-12rem)] place-items-center px-4 py-12">
         <div className="flex flex-col items-center gap-8 sm:flex-row sm:gap-20">
-          <CreationEntry
-            icon={<FileText className="size-4" />}
-            onClick={() => {
-              if (onOpenArticle) {
-                onOpenArticle()
-
-                return
-              }
-
-              onNewChat()
-            }}
-            title="图文创作"
-          />
-          <CreationEntry
-            icon={<MonitorPlay className="size-4" />}
-            onClick={() => {
-              if (onOpenVideo) {
-                onOpenVideo()
-
-                return
-              }
-
-              onNewChat()
-            }}
-            title="视频创作"
-          />
+          <CreationEntry icon={<FileText className="size-4" />} onClick={onOpenArticle} title="图文创作" />
+          <CreationEntry icon={<MonitorPlay className="size-4" />} onClick={onOpenVideo} title="视频创作" />
         </div>
       </section>
     </ProductPage>
   )
 }
 
-export function VideoCreationView({ onBack, onOpenOperation, requestGateway }: VideoCreationViewProps) {
+export function VideoCreationView({
+  initialProductionId,
+  onBack,
+  onStartOperation,
+  requestGateway
+}: VideoCreationViewProps) {
   const accountId = useStore($selectedMarketingAccountId)
 
   return (
     <main className="flex h-full min-h-0 flex-col overflow-hidden bg-(--ui-chat-surface-background) text-foreground">
       <VideoProductionWorkbench
-        accountId={accountId || ''}
+        accountId={accountId || 'prospect_default'}
+        initialProductionId={initialProductionId}
         key={accountId || 'prospect_default'}
         onBack={onBack}
-        onOpenOperation={onOpenOperation}
+        onStartOperation={onStartOperation}
         requestGateway={requestGateway}
       />
     </main>
@@ -183,6 +179,7 @@ export function AccountCenterView({ onOpenWorkbench, onStartOperation, requestGa
           连接平台
         </Button>
       }
+      description="账号是经营上下文，不是开始使用的门槛；你也可以暂不登录，从目标开始。"
       title="账号管理"
     >
       <section>
@@ -292,7 +289,14 @@ export function AccountCenterView({ onOpenWorkbench, onStartOperation, requestGa
           </div>
         ) : (
           <SurfaceEmpty
-            detail="也可以不登录账号，先通过自然对话完成个人能力、赛道和目标受众建模。"
+            action={
+              onOpenWorkbench ? (
+                <Button onClick={onOpenWorkbench} variant="outline">
+                  暂不登录，回到工作台
+                </Button>
+              ) : null
+            }
+            detail="不登录也可以先设置经营目标，Agent 会从公开研究和明确标注的假设开始建立经营模型。"
             title="还没有连接内容平台"
           />
         )}
@@ -527,16 +531,29 @@ function AccountMetric({ label, value }: { label: string; value: number | null }
 export function ProductPage({
   action,
   children,
+  description,
   maxWidth = 'var(--mos-page-max-width)',
+  onBack,
+  parentLabel,
   showHeader = true,
   title
 }: {
   action: React.ReactNode
   children: React.ReactNode
+  description?: string
   maxWidth?: string
+  onBack?: () => void
+  parentLabel?: string
   showHeader?: boolean
   title: string
 }) {
+  const accountId = useStore($selectedMarketingAccountId)
+  const accounts = useStore($marketingAccounts)
+  const account = accounts.find(item => item.id === accountId)
+
+  const accountLabel =
+    account?.label || account?.username || (accountId.startsWith('prospect_') ? '未连接账号' : '当前经营对象')
+
   return (
     <main className="h-full overflow-y-auto bg-(--ui-chat-surface-background) text-foreground">
       <div
@@ -544,9 +561,26 @@ export function ProductPage({
         style={{ maxWidth }}
       >
         {showHeader ? (
-          <header className="flex min-h-10 items-center justify-between gap-8 border-b border-(--ui-stroke-quaternary) pb-4">
-            <h1 className="text-lg font-semibold tracking-[-0.035em]">{title}</h1>
-            {action}
+          <header className="flex min-h-10 flex-wrap items-end justify-between gap-5 border-b border-(--ui-stroke-quaternary) pb-4">
+            <div className="min-w-0">
+              {onBack && parentLabel ? (
+                <button
+                  className="mb-2 flex items-center gap-1 text-xs text-(--ui-text-tertiary) hover:text-foreground"
+                  onClick={onBack}
+                  type="button"
+                >
+                  <ChevronLeft className="size-3.5" /> {parentLabel}
+                </button>
+              ) : null}
+              <h1 className="text-lg font-semibold tracking-[-0.035em]">{title}</h1>
+              {description ? <p className="mt-1 text-xs text-(--ui-text-tertiary)">{description}</p> : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="max-w-56 truncate rounded-full bg-(--ui-fill-secondary) px-3 py-1.5 text-xs text-(--ui-text-secondary)">
+                {accountLabel}
+              </span>
+              {action}
+            </div>
           </header>
         ) : null}
         <div className={`mos-page-enter ${showHeader ? 'mt-7' : ''}`}>{children}</div>
@@ -584,12 +618,13 @@ function AutopilotSignal({ detail, icon, title }: { detail: string; icon: React.
   )
 }
 
-function SurfaceEmpty({ detail, title }: { detail: string; title: string }) {
+function SurfaceEmpty({ action, detail, title }: { action?: React.ReactNode; detail: string; title: string }) {
   return (
     <div className="grid min-h-64 place-items-center text-center">
       <div className="max-w-sm">
         <strong className="block text-sm">{title}</strong>
         <p className="mt-2 text-xs leading-5 text-(--ui-text-tertiary)">{detail}</p>
+        {action ? <div className="mt-5">{action}</div> : null}
       </div>
     </div>
   )

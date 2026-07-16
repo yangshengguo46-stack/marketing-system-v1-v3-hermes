@@ -202,6 +202,10 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
 const INTERNAL_SESSION_MARKERS = ['<marketing-turn-context', '<marketing_turn_context', '<system-context']
 
 function isProductConversation(session: SessionInfo): boolean {
+  if (session.source === 'desktop-product') {
+    return false
+  }
+
   const visibleText = `${session.title || ''}\n${session.preview || ''}`.trim().toLowerCase()
 
   return !INTERNAL_SESSION_MARKERS.some(marker => visibleText.startsWith(marker))

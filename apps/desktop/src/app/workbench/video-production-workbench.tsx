@@ -1,4 +1,5 @@
-import { type DragEvent, useCallback, useEffect, useState } from 'react'
+import { useStore } from '@nanostores/react'
+import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { ContextMenu } from '@/app/chat/composer/context-menu'
 import { PRIMARY_ICON_BTN } from '@/app/chat/composer/controls'
@@ -41,8 +42,9 @@ import {
 import { gatewayMediaDataUrl, isRemoteGateway, mediaExternalUrl, mediaStreamUrl } from '@/lib/media'
 import { readKey, writeKey } from '@/lib/storage'
 import { cn } from '@/lib/utils'
+import { $marketingOperationTasks, type MarketingOperationTask } from '@/store/marketing'
 
-import { type MarketingOperationIntent, prepareMarketingOperation } from './operations'
+import type { MarketingOperationIntent, StartMarketingOperation } from './operations'
 import { userFacingError } from './user-facing-copy'
 
 interface CanvasSpec {
@@ -170,15 +172,16 @@ interface VideoReviewProjection {
 
 interface VideoProductionWorkbenchProps {
   accountId: string
+  initialProductionId?: string
   onBack?: () => void
-  onOpenOperation?: (storedSessionId: string) => void
+  onStartOperation: StartMarketingOperation
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
 
 type DirectorStage = 'dynamic' | 'edit' | 'final' | 'setup' | 'storyboard'
 type InspectorTab = 'characters' | 'materials' | 'props' | 'scenes' | 'sound'
 type SetupCategory = 'characters' | 'props' | 'scenes' | 'sound'
-type StartVideoOperation = (intent: Omit<MarketingOperationIntent, 'accountId'>) => void
+type StartVideoOperation = (intent: Omit<MarketingOperationIntent, 'accountId'>) => string
 
 export interface VideoSetupDraft {
   documents: string[]
@@ -186,11 +189,13 @@ export interface VideoSetupDraft {
   selections: Record<SetupCategory, string>
 }
 
-interface VideoOperationProgress {
-  label: string
-  sessionId?: string
-  state: 'complete' | 'error' | 'starting' | 'waiting' | 'working'
-  storedSessionId?: string
+interface VideoWorkspaceViewState {
+  inspectorRailCollapsed: boolean
+  inspectorTab: InspectorTab
+  sceneRailCollapsed: boolean
+  selectedId: string
+  selectedSceneId: string
+  setupRailCollapsed: boolean
 }
 
 const DIRECTOR_STAGES: Array<{ id: DirectorStage; label: string }> = [
@@ -216,6 +221,7 @@ const VIDEO_COMPOSER_MENU_STATE: ChatBarState = {
 }
 
 const VIDEO_SETUP_DRAFT_PREFIX = 'marketing-os.desktop.video-setup-draft.v1'
+const VIDEO_WORKSPACE_VIEW_PREFIX = 'marketing-os.desktop.video-workspace-view.v1'
 
 function emptySetupSelections(): Record<SetupCategory, string> {
   return { characters: '', props: '', scenes: '', sound: '' }
@@ -263,16 +269,53 @@ export function clearVideoSetupDraft(accountId: string): void {
   writeKey(videoSetupDraftKey(accountId), null)
 }
 
+function videoWorkspaceViewKey(accountId: string): string {
+  return `${VIDEO_WORKSPACE_VIEW_PREFIX}:${accountId || 'prospect_default'}`
+}
+
+function readVideoWorkspaceView(accountId: string): VideoWorkspaceViewState {
+  const fallback: VideoWorkspaceViewState = {
+    inspectorRailCollapsed: false,
+    inspectorTab: 'materials',
+    sceneRailCollapsed: false,
+    selectedId: '',
+    selectedSceneId: '',
+    setupRailCollapsed: false
+  }
+
+  try {
+    const raw = readKey(videoWorkspaceViewKey(accountId))
+    const value = raw ? (JSON.parse(raw) as Partial<VideoWorkspaceViewState>) : {}
+    const tabs: InspectorTab[] = ['characters', 'materials', 'props', 'scenes', 'sound']
+
+    return {
+      inspectorRailCollapsed: value.inspectorRailCollapsed === true,
+      inspectorTab: tabs.includes(value.inspectorTab as InspectorTab)
+        ? (value.inspectorTab as InspectorTab)
+        : fallback.inspectorTab,
+      sceneRailCollapsed: value.sceneRailCollapsed === true,
+      selectedId: typeof value.selectedId === 'string' ? value.selectedId : '',
+      selectedSceneId: typeof value.selectedSceneId === 'string' ? value.selectedSceneId : '',
+      setupRailCollapsed: value.setupRailCollapsed === true
+    }
+  } catch {
+    return fallback
+  }
+}
+
 export function VideoProductionWorkbench({
   accountId,
+  initialProductionId,
   onBack,
-  onOpenOperation,
+  onStartOperation,
   requestGateway
 }: VideoProductionWorkbenchProps) {
+  const initialView = useMemo(() => readVideoWorkspaceView(accountId), [accountId])
+  const operationTasks = useStore($marketingOperationTasks)
   const [productions, setProductions] = useState<VideoProductionSummary[]>([])
-  const [selectedId, setSelectedId] = useState('')
+  const [selectedId, setSelectedId] = useState(initialProductionId || initialView.selectedId)
   const [detail, setDetail] = useState<VideoReviewProjection | null>(null)
-  const [selectedSceneId, setSelectedSceneId] = useState('')
+  const [selectedSceneId, setSelectedSceneId] = useState(initialView.selectedSceneId)
   const [loadingList, setLoadingList] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [detailRefreshToken, setDetailRefreshToken] = useState(0)
@@ -280,13 +323,20 @@ export function VideoProductionWorkbench({
   const [reviewNote, setReviewNote] = useState('')
   const [reviewing, setReviewing] = useState<'accepted' | 'changes_requested' | null>(null)
   const [activeStage, setActiveStage] = useState<DirectorStage>('setup')
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('materials')
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>(initialView.inspectorTab)
   const [setupCategory, setSetupCategory] = useState<SetupCategory | null>(null)
   const [setupAssets, setSetupAssets] = useState<MediaAssetProjection[]>([])
-  const [sceneRailCollapsed, setSceneRailCollapsed] = useState(false)
-  const [inspectorRailCollapsed, setInspectorRailCollapsed] = useState(false)
-  const [setupRailCollapsed, setSetupRailCollapsed] = useState(false)
-  const [operationProgress, setOperationProgress] = useState<VideoOperationProgress | null>(null)
+  const [sceneRailCollapsed, setSceneRailCollapsed] = useState(initialView.sceneRailCollapsed)
+  const [inspectorRailCollapsed, setInspectorRailCollapsed] = useState(initialView.inspectorRailCollapsed)
+  const [setupRailCollapsed, setSetupRailCollapsed] = useState(initialView.setupRailCollapsed)
+  const [operationTaskId, setOperationTaskId] = useState('')
+
+  const operationProgress =
+    operationTasks.find(task => task.id === operationTaskId) ||
+    operationTasks.find(task => task.accountId === accountId && task.kind.startsWith('video.')) ||
+    null
+
+  const settledSetupTaskId = useRef('')
 
   const [setupSelections, setSetupSelections] = useState<Record<SetupCategory, string>>(
     () => readVideoSetupDraft(accountId).selections
@@ -297,14 +347,19 @@ export function VideoProductionWorkbench({
   const [setupSubmitting, setSetupSubmitting] = useState(false)
   const [setupStatus, setSetupStatus] = useState('')
   const [setupError, setSetupError] = useState('')
+  const setupOperation = operationProgress?.kind === 'video.setup' ? operationProgress : null
 
-  const refresh = useCallback(async () => {
-    if (!accountId || accountId.startsWith('prospect_')) {
+  const setupRunning = Boolean(
+    setupSubmitting || (setupOperation && ['starting', 'waiting', 'working'].includes(setupOperation.state))
+  )
+
+  const refresh = useCallback(async (): Promise<VideoProductionSummary[]> => {
+    if (!accountId) {
       setProductions([])
       setSelectedId('')
       setDetail(null)
 
-      return
+      return []
     }
 
     setLoadingList(true)
@@ -319,11 +374,15 @@ export function VideoProductionWorkbench({
       const next = result.productions || []
       setProductions(next)
       setSelectedId(current => (next.some(item => item.id === current) ? current : next[0]?.id || ''))
+
+      return next
     } catch (cause) {
       setProductions([])
       setSelectedId('')
       setDetail(null)
       setError(userFacingError(cause, '视频项目读取失败，请稍后重试。'))
+
+      return []
     } finally {
       setLoadingList(false)
     }
@@ -332,54 +391,28 @@ export function VideoProductionWorkbench({
   const startOperation = useCallback<StartVideoOperation>(
     intent => {
       const scopedIntent = { ...intent, accountId: accountId || 'prospect_default' }
+      const taskId = onStartOperation(scopedIntent)
 
-      setOperationProgress({ label: operationStartingLabel(intent.kind), state: 'starting' })
-      void prepareMarketingOperation(requestGateway, scopedIntent)
-        .then(async operation => {
-          const created = await requestGateway<{ session_id: string; stored_session_id?: string }>('session.create', {
-            cols: 96,
-            marketing_account_id: scopedIntent.accountId,
-            marketing_user_id: 'default',
-            source: 'desktop-product',
-            title: operation.title
-          })
+      setOperationTaskId(taskId)
 
-          setOperationProgress({
-            label: operation.visible_text,
-            sessionId: created.session_id,
-            state: 'starting',
-            storedSessionId: created.stored_session_id
-          })
-          await requestGateway('prompt.submit', {
-            session_id: created.session_id,
-            text: operation.prompt
-          })
+      if (['video.revision', 'video.stage.modify'].includes(intent.kind)) {
+        setReviewNote('')
+      }
 
-          if (['video.revision', 'video.stage.modify'].includes(intent.kind)) {
-            setReviewNote('')
-          }
-
-          setOperationProgress({
-            label: operation.visible_text,
-            sessionId: created.session_id,
-            state: 'working',
-            storedSessionId: created.stored_session_id
-          })
-        })
-        .catch(cause => {
-          setOperationProgress(current => ({
-            ...current,
-            label: userFacingError(cause, '视频任务启动失败，请稍后重试。'),
-            state: 'error'
-          }))
-        })
+      return taskId
     },
-    [accountId, requestGateway]
+    [accountId, onStartOperation]
   )
 
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  useEffect(() => {
+    if (initialProductionId && productions.some(item => item.id === initialProductionId)) {
+      setSelectedId(initialProductionId)
+    }
+  }, [initialProductionId, productions])
 
   useEffect(() => {
     writeVideoSetupDraft(accountId, {
@@ -390,42 +423,41 @@ export function VideoProductionWorkbench({
   }, [accountId, setupDocuments, setupScript, setupSelections])
 
   useEffect(() => {
-    if (!operationProgress?.sessionId || !['waiting', 'working'].includes(operationProgress.state)) {
+    writeKey(
+      videoWorkspaceViewKey(accountId),
+      JSON.stringify({
+        inspectorRailCollapsed,
+        inspectorTab,
+        sceneRailCollapsed,
+        selectedId,
+        selectedSceneId,
+        setupRailCollapsed
+      } satisfies VideoWorkspaceViewState)
+    )
+  }, [
+    accountId,
+    inspectorRailCollapsed,
+    inspectorTab,
+    sceneRailCollapsed,
+    selectedId,
+    selectedSceneId,
+    setupRailCollapsed
+  ])
+
+  useEffect(() => {
+    if (operationProgress?.state !== 'complete') {
       return
     }
 
-    let cancelled = false
-
-    const poll = () => {
-      void requestGateway<{ status?: string }>('session.status', { session_id: operationProgress.sessionId })
-        .then(result => {
-          if (cancelled) {
-            return
-          }
-
-          if (result.status === 'idle') {
-            setOperationProgress(current => (current ? { ...current, state: 'complete' } : current))
-            setDetailRefreshToken(current => current + 1)
-            void refresh()
-
-            return
-          }
-
-          setOperationProgress(current =>
-            current ? { ...current, state: result.status === 'waiting' ? 'waiting' : 'working' } : current
-          )
-        })
-        .catch(() => undefined)
-    }
-
-    poll()
-    const timer = window.setInterval(poll, 1800)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [operationProgress?.sessionId, operationProgress?.state, refresh, requestGateway])
+    setDetailRefreshToken(current => current + 1)
+    void refresh().then(next => {
+      if (setupSubmitting && operationProgress.kind === 'video.setup' && !next.length) {
+        setSetupSubmitting(false)
+        setSetupStatus('')
+        setSetupError('Agent 已结束，但没有形成可见的视频项目；当前输入已保留，可以重新启动。')
+      }
+    })
+  }, [operationProgress?.kind, operationProgress?.state, refresh, setupSubmitting])
 
   useEffect(() => {
     if (productions.length) {
@@ -453,17 +485,32 @@ export function VideoProductionWorkbench({
   }, [accountId, productions.length, requestGateway])
 
   useEffect(() => {
-    if (!setupSubmitting || !accountId || accountId.startsWith('prospect_')) {
+    if (!setupRunning || !accountId) {
       return
     }
 
     const timer = window.setInterval(() => void refresh(), 2500)
 
     return () => window.clearInterval(timer)
-  }, [accountId, refresh, setupSubmitting])
+  }, [accountId, refresh, setupRunning])
 
   useEffect(() => {
-    if (productions.length && setupSubmitting) {
+    if (setupOperation?.state !== 'error') {
+      return
+    }
+
+    setSetupSubmitting(false)
+    setSetupStatus('')
+    setSetupError(setupOperation.error || '视频任务执行失败，当前输入和素材选择已经保留。')
+  }, [setupOperation?.error, setupOperation?.state])
+
+  useEffect(() => {
+    if (
+      productions.length &&
+      setupOperation?.state === 'complete' &&
+      settledSetupTaskId.current !== setupOperation.id
+    ) {
+      settledSetupTaskId.current = setupOperation.id
       setSetupSubmitting(false)
       setSetupStatus('拆分完成，已进入导演工作台。')
       clearVideoSetupDraft(accountId)
@@ -471,7 +518,7 @@ export function VideoProductionWorkbench({
       setSetupScript('')
       setSetupSelections(emptySetupSelections())
     }
-  }, [accountId, productions.length, setupSubmitting])
+  }, [accountId, productions.length, setupOperation?.id, setupOperation?.state])
 
   useEffect(() => {
     if (!selectedId || !accountId) {
@@ -612,7 +659,7 @@ export function VideoProductionWorkbench({
   }
 
   const submitSetup = async () => {
-    if ((!setupScript.trim() && !setupDocuments.length) || setupSubmitting) {
+    if ((!setupScript.trim() && !setupDocuments.length) || setupRunning) {
       return
     }
 
@@ -621,54 +668,24 @@ export function VideoProductionWorkbench({
     setSetupStatus('正在拆分文案并整理素材…')
 
     try {
-      const created = await requestGateway<{ session_id: string }>('session.create', {
-        cols: 96,
-        marketing_account_id: accountId || 'prospect_default',
-        marketing_user_id: 'default',
-        source: 'desktop-product',
-        title: '视频创作设定'
-      })
+      const attachments = await Promise.all(
+        setupDocuments.map(async path => ({
+          dataUrl: isRemoteGateway() ? await window.hermesDesktop?.readFileDataUrl(path) : undefined,
+          name: pathLabel(path),
+          path
+        }))
+      )
 
-      const documentRefs: string[] = []
-
-      for (const path of setupDocuments) {
-        const name = pathLabel(path)
-        const dataUrl = isRemoteGateway() ? await window.hermesDesktop?.readFileDataUrl(path) : undefined
-
-        const attached = await requestGateway<{ attached?: boolean; message?: string; ref_text?: string }>(
-          'file.attach',
-          {
-            ...(dataUrl ? { data_url: dataUrl } : {}),
-            name,
-            path,
-            session_id: created.session_id
-          }
-        )
-
-        if (!attached.attached || !attached.ref_text) {
-          throw new Error(attached.message || `${name} 读取失败。`)
-        }
-
-        documentRefs.push(attached.ref_text)
-      }
-
-      const operation = await prepareMarketingOperation(requestGateway, {
+      const taskId = onStartOperation({
         accountId: accountId || 'prospect_default',
-        documentRefs,
+        attachments,
         kind: 'video.setup',
         note: setupScript,
         selections: setupSelections
       })
 
-      await requestGateway('prompt.submit', {
-        session_id: created.session_id,
-        text: operation.prompt
-      })
-      setSetupStatus(
-        accountId && !accountId.startsWith('prospect_')
-          ? '正在拆分文案并创建分镜，完成后会自动进入导演工作台。'
-          : '已经开始拆分；连接账号后，作品会保存到对应账号。'
-      )
+      setOperationTaskId(taskId)
+      setSetupStatus('正在拆分文案并创建分镜，完成后会在当前经营对象中自动进入导演工作台。')
     } catch (cause) {
       setSetupSubmitting(false)
       setSetupStatus('')
@@ -698,7 +715,7 @@ export function VideoProductionWorkbench({
         activeCategory={setupCategory}
         assets={setupAssets}
         documents={setupDocuments}
-        error={setupError || error}
+        error={setupError || setupOperation?.error || error}
         onBack={onBack}
         onCategory={openSetupCategory}
         onDocumentDrop={dropSetupDocuments}
@@ -713,8 +730,8 @@ export function VideoProductionWorkbench({
         railCollapsed={setupRailCollapsed}
         script={setupScript}
         selections={setupSelections}
-        status={setupStatus}
-        submitting={setupSubmitting}
+        status={setupStatus || setupOperation?.label || ''}
+        submitting={setupRunning}
       />
     )
   }
@@ -841,11 +858,6 @@ export function VideoProductionWorkbench({
               {videoOperationStateLabel(operationProgress.state)}
             </span>
           </div>
-          {operationProgress.storedSessionId && onOpenOperation ? (
-            <Button onClick={() => onOpenOperation(operationProgress.storedSessionId!)} size="sm" variant="outline">
-              查看执行
-            </Button>
-          ) : null}
         </div>
       ) : null}
 
@@ -2127,27 +2139,12 @@ function stageLabel(stage: DirectorStage): string {
   return DIRECTOR_STAGES.find(item => item.id === stage)?.label || '设定'
 }
 
-function operationStartingLabel(kind: MarketingOperationIntent['kind']): string {
-  const labels: Partial<Record<MarketingOperationIntent['kind'], string>> = {
-    'video.asset.select': '正在切换镜头版本…',
-    'video.autopilot': '正在启动全自动推进…',
-    'video.export': '正在核对成片导出条件…',
-    'video.revision': '正在创建审片返修任务…',
-    'video.scene.add': '正在建立新镜头任务…',
-    'video.stage.confirm': '正在核对当前阶段…',
-    'video.stage.modify': '正在提交当前阶段修改…',
-    'video.version.generate': '正在创建新的镜头版本…'
-  }
-
-  return labels[kind] || '正在启动视频任务…'
-}
-
-function videoOperationStateLabel(state: VideoOperationProgress['state']): string {
+function videoOperationStateLabel(state: MarketingOperationTask['state']): string {
   return {
     complete: '执行完成，工作台已同步最新结果。',
     error: '任务没有启动，当前项目没有被修改。',
     starting: '正在绑定当前项目、阶段和镜头。',
-    waiting: 'Agent 正在等待确认；可以打开执行详情继续。',
+    waiting: 'Agent 正在等待你的决定，确认控件会留在当前经营界面。',
     working: 'Agent 正在后台执行，离开当前页面也不会中断。'
   }[state]
 }
