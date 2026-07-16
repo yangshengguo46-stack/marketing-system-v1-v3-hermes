@@ -1,0 +1,2192 @@
+import { type DragEvent, useCallback, useEffect, useState } from 'react'
+
+import { ContextMenu } from '@/app/chat/composer/context-menu'
+import { PRIMARY_ICON_BTN } from '@/app/chat/composer/controls'
+import type { ChatBarState } from '@/app/chat/composer/types'
+import { titlebarButtonClass } from '@/app/shell/titlebar'
+import {
+  composerFill,
+  composerSurfaceContent,
+  composerSurfaceFrame,
+  composerSurfaceGlass
+} from '@/components/chat/composer-dock'
+import { Button } from '@/components/ui/button'
+import { Codicon } from '@/components/ui/codicon'
+import {
+  AlertCircle,
+  AudioLines,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Download,
+  FileImage,
+  FileText,
+  Layers3,
+  Loader2,
+  Maximize,
+  Mic,
+  MonitorPlay,
+  Package,
+  Play,
+  Plus,
+  RefreshCw,
+  SlidersHorizontal,
+  Trash2,
+  Users,
+  X,
+  Zap
+} from '@/lib/icons'
+import { gatewayMediaDataUrl, isRemoteGateway, mediaExternalUrl, mediaStreamUrl } from '@/lib/media'
+import { readKey, writeKey } from '@/lib/storage'
+import { cn } from '@/lib/utils'
+
+import { type MarketingOperationIntent, prepareMarketingOperation } from './operations'
+import { userFacingError } from './user-facing-copy'
+
+interface CanvasSpec {
+  fps: number
+  height: number
+  width: number
+}
+
+export interface VideoProductionSummary {
+  canvas: CanvasSpec
+  created_at: string
+  duration: number
+  failure_code?: string | null
+  final_video_asset_id?: string | null
+  human_review_status: string
+  id: string
+  output_asset_id?: string | null
+  renderers: string[]
+  scene_count: number
+  settled_at?: string | null
+  source_asset_id: string
+  status: string
+  title: string
+  updated_at: string
+}
+
+interface VideoTextLayer {
+  role?: string
+  text?: string
+}
+
+interface VideoVisual {
+  fit?: string
+  media_asset_id?: string
+  source_in?: number
+}
+
+interface VideoScene {
+  duration: number
+  id: string
+  motion_intent?: string[]
+  purpose?: string
+  review_rules?: string[]
+  text?: VideoTextLayer[]
+  visuals?: VideoVisual[]
+}
+
+interface VideoProductionDetail {
+  approval_ref?: string | null
+  failure_code?: string | null
+  final_video_asset_id?: string | null
+  id: string
+  output_asset_id?: string | null
+  receipt?: {
+    summary?: {
+      technical?: {
+        quality_assurance?: VideoQualityReport
+      }
+    }
+  }
+  render_plan?: {
+    executable?: boolean
+    render_plan_sha256?: string
+    scenes?: Array<{
+      fallback_used?: boolean
+      reason?: string
+      renderer?: string
+      scene_id?: string
+      status?: string
+    }>
+  }
+  status: string
+  video_ir?: {
+    audio?: Record<string, unknown>
+    canvas?: CanvasSpec
+    captions?: Array<Record<string, unknown>>
+    ir_sha256?: string
+    review_rules?: string[]
+    scenes?: VideoScene[]
+  }
+}
+
+interface VideoQualityCheck {
+  evidence?: Record<string, unknown>
+  id: string
+  label: string
+  severity: 'critical' | 'major' | 'observation'
+  status: 'fail' | 'not_applicable' | 'pass'
+}
+
+interface VideoQualityReport {
+  analyzed_at?: string
+  checks: VideoQualityCheck[]
+  disposition: 'hold' | 'ready' | 'reject'
+  version: string
+}
+
+interface MediaAssetProjection {
+  id: string
+  media_type: 'audio' | 'image' | 'video'
+  mime_type?: string
+  name: string
+  playback_path?: string | null
+  provider?: string
+  rights_status: string
+  role: string
+  size_bytes: number
+  source_type: string
+}
+
+interface ContentAssetProjection {
+  human_review_status?: string
+  id: string
+  title?: string
+  version?: number
+}
+
+interface VideoReviewProjection {
+  media_assets: MediaAssetProjection[]
+  output_asset?: ContentAssetProjection | null
+  production: VideoProductionDetail
+  source_asset: ContentAssetProjection
+  summary: VideoProductionSummary
+}
+
+interface VideoProductionWorkbenchProps {
+  accountId: string
+  onBack?: () => void
+  onOpenOperation?: (storedSessionId: string) => void
+  requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
+}
+
+type DirectorStage = 'dynamic' | 'edit' | 'final' | 'setup' | 'storyboard'
+type InspectorTab = 'characters' | 'materials' | 'props' | 'scenes' | 'sound'
+type SetupCategory = 'characters' | 'props' | 'scenes' | 'sound'
+type StartVideoOperation = (intent: Omit<MarketingOperationIntent, 'accountId'>) => void
+
+export interface VideoSetupDraft {
+  documents: string[]
+  script: string
+  selections: Record<SetupCategory, string>
+}
+
+interface VideoOperationProgress {
+  label: string
+  sessionId?: string
+  state: 'complete' | 'error' | 'starting' | 'waiting' | 'working'
+  storedSessionId?: string
+}
+
+const DIRECTOR_STAGES: Array<{ id: DirectorStage; label: string }> = [
+  { id: 'setup', label: '设定' },
+  { id: 'storyboard', label: '分镜' },
+  { id: 'dynamic', label: '动态' },
+  { id: 'edit', label: '剪辑' },
+  { id: 'final', label: '成片' }
+]
+
+const COMMON_RATIOS = [
+  { height: 16, label: '9:16', width: 9 },
+  { height: 9, label: '16:9', width: 16 },
+  { height: 1, label: '1:1', width: 1 },
+  { height: 5, label: '4:5', width: 4 },
+  { height: 4, label: '3:4', width: 3 }
+]
+
+const VIDEO_COMPOSER_MENU_STATE: ChatBarState = {
+  model: { canSwitch: false, model: '', provider: '' },
+  tools: { enabled: true, label: '添加素材' },
+  voice: { active: false, enabled: false }
+}
+
+const VIDEO_SETUP_DRAFT_PREFIX = 'marketing-os.desktop.video-setup-draft.v1'
+
+function emptySetupSelections(): Record<SetupCategory, string> {
+  return { characters: '', props: '', scenes: '', sound: '' }
+}
+
+export function videoSetupDraftKey(accountId: string): string {
+  return `${VIDEO_SETUP_DRAFT_PREFIX}:${accountId || 'prospect_default'}`
+}
+
+export function readVideoSetupDraft(accountId: string): VideoSetupDraft {
+  const emptyDraft = { documents: [], script: '', selections: emptySetupSelections() }
+
+  try {
+    const raw = readKey(videoSetupDraftKey(accountId))
+
+    if (!raw) {
+      return emptyDraft
+    }
+
+    const parsed = JSON.parse(raw) as Partial<VideoSetupDraft>
+
+    const selections: Partial<Record<SetupCategory, string>> =
+      parsed.selections && typeof parsed.selections === 'object' ? parsed.selections : {}
+
+    return {
+      documents: Array.isArray(parsed.documents) ? parsed.documents.filter(item => typeof item === 'string') : [],
+      script: typeof parsed.script === 'string' ? parsed.script : '',
+      selections: {
+        characters: typeof selections.characters === 'string' ? selections.characters : '',
+        props: typeof selections.props === 'string' ? selections.props : '',
+        scenes: typeof selections.scenes === 'string' ? selections.scenes : '',
+        sound: typeof selections.sound === 'string' ? selections.sound : ''
+      }
+    }
+  } catch {
+    return emptyDraft
+  }
+}
+
+export function writeVideoSetupDraft(accountId: string, draft: VideoSetupDraft): void {
+  writeKey(videoSetupDraftKey(accountId), JSON.stringify(draft))
+}
+
+export function clearVideoSetupDraft(accountId: string): void {
+  writeKey(videoSetupDraftKey(accountId), null)
+}
+
+export function VideoProductionWorkbench({
+  accountId,
+  onBack,
+  onOpenOperation,
+  requestGateway
+}: VideoProductionWorkbenchProps) {
+  const [productions, setProductions] = useState<VideoProductionSummary[]>([])
+  const [selectedId, setSelectedId] = useState('')
+  const [detail, setDetail] = useState<VideoReviewProjection | null>(null)
+  const [selectedSceneId, setSelectedSceneId] = useState('')
+  const [loadingList, setLoadingList] = useState(false)
+  const [loadingDetail, setLoadingDetail] = useState(false)
+  const [detailRefreshToken, setDetailRefreshToken] = useState(0)
+  const [error, setError] = useState('')
+  const [reviewNote, setReviewNote] = useState('')
+  const [reviewing, setReviewing] = useState<'accepted' | 'changes_requested' | null>(null)
+  const [activeStage, setActiveStage] = useState<DirectorStage>('setup')
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('materials')
+  const [setupCategory, setSetupCategory] = useState<SetupCategory | null>(null)
+  const [setupAssets, setSetupAssets] = useState<MediaAssetProjection[]>([])
+  const [sceneRailCollapsed, setSceneRailCollapsed] = useState(false)
+  const [inspectorRailCollapsed, setInspectorRailCollapsed] = useState(false)
+  const [setupRailCollapsed, setSetupRailCollapsed] = useState(false)
+  const [operationProgress, setOperationProgress] = useState<VideoOperationProgress | null>(null)
+
+  const [setupSelections, setSetupSelections] = useState<Record<SetupCategory, string>>(
+    () => readVideoSetupDraft(accountId).selections
+  )
+
+  const [setupScript, setSetupScript] = useState(() => readVideoSetupDraft(accountId).script)
+  const [setupDocuments, setSetupDocuments] = useState<string[]>(() => readVideoSetupDraft(accountId).documents)
+  const [setupSubmitting, setSetupSubmitting] = useState(false)
+  const [setupStatus, setSetupStatus] = useState('')
+  const [setupError, setSetupError] = useState('')
+
+  const refresh = useCallback(async () => {
+    if (!accountId || accountId.startsWith('prospect_')) {
+      setProductions([])
+      setSelectedId('')
+      setDetail(null)
+
+      return
+    }
+
+    setLoadingList(true)
+    setError('')
+
+    try {
+      const result = await requestGateway<{ productions: VideoProductionSummary[] }>(
+        'marketing.video.productions.list',
+        { account_id: accountId, limit: 30 }
+      )
+
+      const next = result.productions || []
+      setProductions(next)
+      setSelectedId(current => (next.some(item => item.id === current) ? current : next[0]?.id || ''))
+    } catch (cause) {
+      setProductions([])
+      setSelectedId('')
+      setDetail(null)
+      setError(userFacingError(cause, '视频项目读取失败，请稍后重试。'))
+    } finally {
+      setLoadingList(false)
+    }
+  }, [accountId, requestGateway])
+
+  const startOperation = useCallback<StartVideoOperation>(
+    intent => {
+      const scopedIntent = { ...intent, accountId: accountId || 'prospect_default' }
+
+      setOperationProgress({ label: operationStartingLabel(intent.kind), state: 'starting' })
+      void prepareMarketingOperation(requestGateway, scopedIntent)
+        .then(async operation => {
+          const created = await requestGateway<{ session_id: string; stored_session_id?: string }>('session.create', {
+            cols: 96,
+            marketing_account_id: scopedIntent.accountId,
+            marketing_user_id: 'default',
+            source: 'desktop-product',
+            title: operation.title
+          })
+
+          setOperationProgress({
+            label: operation.visible_text,
+            sessionId: created.session_id,
+            state: 'starting',
+            storedSessionId: created.stored_session_id
+          })
+          await requestGateway('prompt.submit', {
+            session_id: created.session_id,
+            text: operation.prompt
+          })
+
+          if (['video.revision', 'video.stage.modify'].includes(intent.kind)) {
+            setReviewNote('')
+          }
+
+          setOperationProgress({
+            label: operation.visible_text,
+            sessionId: created.session_id,
+            state: 'working',
+            storedSessionId: created.stored_session_id
+          })
+        })
+        .catch(cause => {
+          setOperationProgress(current => ({
+            ...current,
+            label: userFacingError(cause, '视频任务启动失败，请稍后重试。'),
+            state: 'error'
+          }))
+        })
+    },
+    [accountId, requestGateway]
+  )
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  useEffect(() => {
+    writeVideoSetupDraft(accountId, {
+      documents: setupDocuments,
+      script: setupScript,
+      selections: setupSelections
+    })
+  }, [accountId, setupDocuments, setupScript, setupSelections])
+
+  useEffect(() => {
+    if (!operationProgress?.sessionId || !['waiting', 'working'].includes(operationProgress.state)) {
+      return
+    }
+
+    let cancelled = false
+
+    const poll = () => {
+      void requestGateway<{ status?: string }>('session.status', { session_id: operationProgress.sessionId })
+        .then(result => {
+          if (cancelled) {
+            return
+          }
+
+          if (result.status === 'idle') {
+            setOperationProgress(current => (current ? { ...current, state: 'complete' } : current))
+            setDetailRefreshToken(current => current + 1)
+            void refresh()
+
+            return
+          }
+
+          setOperationProgress(current =>
+            current ? { ...current, state: result.status === 'waiting' ? 'waiting' : 'working' } : current
+          )
+        })
+        .catch(() => undefined)
+    }
+
+    poll()
+    const timer = window.setInterval(poll, 1800)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [operationProgress?.sessionId, operationProgress?.state, refresh, requestGateway])
+
+  useEffect(() => {
+    if (productions.length) {
+      return
+    }
+
+    let cancelled = false
+    void requestGateway<{ assets: MediaAssetProjection[] }>('marketing.assets.list', {
+      account_id: accountId && !accountId.startsWith('prospect_') ? accountId : undefined
+    })
+      .then(result => {
+        if (!cancelled) {
+          setSetupAssets(result.assets || [])
+        }
+      })
+      .catch(cause => {
+        if (!cancelled) {
+          setSetupError(userFacingError(cause, '素材读取失败，请稍后重试。'))
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [accountId, productions.length, requestGateway])
+
+  useEffect(() => {
+    if (!setupSubmitting || !accountId || accountId.startsWith('prospect_')) {
+      return
+    }
+
+    const timer = window.setInterval(() => void refresh(), 2500)
+
+    return () => window.clearInterval(timer)
+  }, [accountId, refresh, setupSubmitting])
+
+  useEffect(() => {
+    if (productions.length && setupSubmitting) {
+      setSetupSubmitting(false)
+      setSetupStatus('拆分完成，已进入导演工作台。')
+      clearVideoSetupDraft(accountId)
+      setSetupDocuments([])
+      setSetupScript('')
+      setSetupSelections(emptySetupSelections())
+    }
+  }, [accountId, productions.length, setupSubmitting])
+
+  useEffect(() => {
+    if (!selectedId || !accountId) {
+      setDetail(null)
+
+      return
+    }
+
+    let cancelled = false
+    setLoadingDetail(true)
+    setError('')
+    void requestGateway<VideoReviewProjection>('marketing.video.production.get', {
+      account_id: accountId,
+      production_id: selectedId
+    })
+      .then(result => {
+        if (cancelled) {
+          return
+        }
+
+        setDetail(result)
+        setSelectedSceneId(current => {
+          const scenes = result.production.video_ir?.scenes || []
+
+          return scenes.some(scene => scene.id === current) ? current : scenes[0]?.id || ''
+        })
+        setActiveStage(inferDirectorStage(result.summary.status, result.summary.human_review_status))
+        setReviewNote('')
+      })
+      .catch(cause => {
+        if (!cancelled) {
+          setDetail(null)
+          setError(userFacingError(cause, '视频项目读取失败，请稍后重试。'))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingDetail(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [accountId, detailRefreshToken, requestGateway, selectedId])
+
+  const submitReview = async (decision: 'accepted' | 'changes_requested') => {
+    if (!detail?.output_asset?.id || (decision === 'changes_requested' && !reviewNote.trim())) {
+      return
+    }
+
+    setReviewing(decision)
+    setError('')
+
+    try {
+      const result = await requestGateway<{ asset: ContentAssetProjection }>('marketing.content.asset.review', {
+        account_id: accountId,
+        asset_id: detail.output_asset.id,
+        confirmed: true,
+        decision,
+        note: reviewNote.trim()
+      })
+
+      setDetail(current =>
+        current
+          ? {
+              ...current,
+              output_asset: result.asset,
+              summary: { ...current.summary, human_review_status: decision }
+            }
+          : current
+      )
+      setProductions(current =>
+        current.map(item => (item.id === selectedId ? { ...item, human_review_status: decision } : item))
+      )
+
+      if (decision === 'changes_requested') {
+        startOperation({
+          assetId: detail.output_asset.id,
+          kind: 'video.revision',
+          note: reviewNote.trim(),
+          productionId: detail.production.id,
+          title: detail.summary.title
+        })
+      }
+    } catch (cause) {
+      setError(userFacingError(cause, '保存审片结果失败，请稍后重试。'))
+    } finally {
+      setReviewing(null)
+    }
+  }
+
+  const pickSetupPaths = async (options: Parameters<NonNullable<typeof window.hermesDesktop>['selectPaths']>[0]) => {
+    setSetupError('')
+
+    try {
+      const paths = (await window.hermesDesktop?.selectPaths(options)) || []
+
+      setSetupDocuments(current => [...new Set([...current, ...paths])])
+    } catch (cause) {
+      setSetupError(userFacingError(cause, '素材选择失败，请重试。'))
+    }
+  }
+
+  const pickSetupDocuments = () =>
+    pickSetupPaths({
+      directories: false,
+      filters: [{ name: '文案与脚本', extensions: ['doc', 'docx', 'md', 'pdf', 'rtf', 'txt'] }],
+      multiple: true,
+      title: '选择文案或脚本文档'
+    })
+
+  const pickSetupFolders = () => pickSetupPaths({ directories: true, multiple: true, title: '选择素材文件夹' })
+
+  const pickSetupImages = () =>
+    pickSetupPaths({
+      directories: false,
+      filters: [{ name: '图片', extensions: ['avif', 'gif', 'heic', 'jpeg', 'jpg', 'png', 'webp'] }],
+      multiple: true,
+      title: '选择图片素材'
+    })
+
+  const dropSetupDocuments = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setSetupError('')
+
+    const paths = Array.from(event.dataTransfer.files)
+      .map(file => window.hermesDesktop?.getPathForFile(file) || '')
+      .filter(Boolean)
+
+    if (!paths.length) {
+      setSetupError('没有读取到文档路径，请使用“添加文档”选择文件。')
+
+      return
+    }
+
+    setSetupDocuments(current => [...new Set([...current, ...paths])])
+  }
+
+  const submitSetup = async () => {
+    if ((!setupScript.trim() && !setupDocuments.length) || setupSubmitting) {
+      return
+    }
+
+    setSetupSubmitting(true)
+    setSetupError('')
+    setSetupStatus('正在拆分文案并整理素材…')
+
+    try {
+      const created = await requestGateway<{ session_id: string }>('session.create', {
+        cols: 96,
+        marketing_account_id: accountId || 'prospect_default',
+        marketing_user_id: 'default',
+        source: 'desktop-product',
+        title: '视频创作设定'
+      })
+
+      const documentRefs: string[] = []
+
+      for (const path of setupDocuments) {
+        const name = pathLabel(path)
+        const dataUrl = isRemoteGateway() ? await window.hermesDesktop?.readFileDataUrl(path) : undefined
+
+        const attached = await requestGateway<{ attached?: boolean; message?: string; ref_text?: string }>(
+          'file.attach',
+          {
+            ...(dataUrl ? { data_url: dataUrl } : {}),
+            name,
+            path,
+            session_id: created.session_id
+          }
+        )
+
+        if (!attached.attached || !attached.ref_text) {
+          throw new Error(attached.message || `${name} 读取失败。`)
+        }
+
+        documentRefs.push(attached.ref_text)
+      }
+
+      const operation = await prepareMarketingOperation(requestGateway, {
+        accountId: accountId || 'prospect_default',
+        documentRefs,
+        kind: 'video.setup',
+        note: setupScript,
+        selections: setupSelections
+      })
+
+      await requestGateway('prompt.submit', {
+        session_id: created.session_id,
+        text: operation.prompt
+      })
+      setSetupStatus(
+        accountId && !accountId.startsWith('prospect_')
+          ? '正在拆分文案并创建分镜，完成后会自动进入导演工作台。'
+          : '已经开始拆分；连接账号后，作品会保存到对应账号。'
+      )
+    } catch (cause) {
+      setSetupSubmitting(false)
+      setSetupStatus('')
+      setSetupError(userFacingError(cause, '提交失败，请稍后重试。'))
+    }
+  }
+
+  const openSetupCategory = (category: SetupCategory) => {
+    setSetupCategory(category)
+    setSetupRailCollapsed(false)
+  }
+
+  const selectSetupAsset = (category: SetupCategory, assetId: string) => {
+    setSetupSelections(current => ({ ...current, [category]: assetId }))
+    setSetupCategory(null)
+    setSetupRailCollapsed(true)
+  }
+
+  const toggleSetupRail = () => {
+    setSetupCategory(null)
+    setSetupRailCollapsed(current => !current)
+  }
+
+  if (!productions.length) {
+    return (
+      <VideoSetupWorkspace
+        activeCategory={setupCategory}
+        assets={setupAssets}
+        documents={setupDocuments}
+        error={setupError || error}
+        onBack={onBack}
+        onCategory={openSetupCategory}
+        onDocumentDrop={dropSetupDocuments}
+        onPickDocuments={() => void pickSetupDocuments()}
+        onPickFolders={() => void pickSetupFolders()}
+        onPickImages={() => void pickSetupImages()}
+        onRemoveDocument={path => setSetupDocuments(current => current.filter(item => item !== path))}
+        onScript={setSetupScript}
+        onSelect={selectSetupAsset}
+        onSubmit={() => void submitSetup()}
+        onToggleRail={toggleSetupRail}
+        railCollapsed={setupRailCollapsed}
+        script={setupScript}
+        selections={setupSelections}
+        status={setupStatus}
+        submitting={setupSubmitting}
+      />
+    )
+  }
+
+  const production = detail?.production
+  const summary = detail?.summary || productions.find(item => item.id === selectedId) || productions[0]
+  const scenes = production?.video_ir?.scenes || []
+  const selectedScene = scenes.find(scene => scene.id === selectedSceneId) || scenes[0]
+  const canvas = production?.video_ir?.canvas || summary?.canvas || { width: 1080, height: 1920, fps: 30 }
+
+  const totalDuration =
+    scenes.reduce((total, scene) => total + Number(scene.duration || 0), 0) || summary?.duration || 1
+
+  const finalMedia = detail?.media_assets.find(asset => asset.id === production?.final_video_asset_id)
+  const quality = production?.receipt?.summary?.technical?.quality_assurance
+  const selectedVisualId = selectedScene?.visuals?.[0]?.media_asset_id
+  const selectedVisual = detail?.media_assets.find(asset => asset.id === selectedVisualId)
+  const scenePlan = production?.render_plan?.scenes?.find(item => item.scene_id === selectedScene?.id)
+  const ratio = ratioLabel(canvas)
+  const accepted = detail?.output_asset?.human_review_status === 'accepted'
+
+  const directorColumns = inspectorRailCollapsed
+    ? sceneRailCollapsed
+      ? 'xl:grid-cols-[3.5rem_minmax(0,1fr)]'
+      : 'xl:grid-cols-[15rem_minmax(0,1fr)]'
+    : sceneRailCollapsed
+      ? 'xl:grid-cols-[3.5rem_minmax(0,1fr)_20rem]'
+      : 'xl:grid-cols-[15rem_minmax(0,1fr)_20rem]'
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-(--ui-chat-surface-background)">
+      <header className="grid min-h-[calc(var(--titlebar-height)+2.5rem)] items-center gap-3 border-b border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) px-4 pt-(--titlebar-height) pb-2.5 lg:grid-cols-[15rem_minmax(0,1fr)_auto] lg:px-5">
+        <div className="flex min-w-0 items-center gap-2">
+          <BackButton onBack={onBack} />
+          <span className="h-5 w-px shrink-0 bg-(--ui-stroke-tertiary)" />
+          <label className="flex min-w-0 items-center gap-2">
+            <select
+              aria-label="视频项目"
+              className="min-w-0 max-w-48 appearance-none truncate bg-transparent text-base font-semibold tracking-[-0.03em] outline-none"
+              onChange={event => setSelectedId(event.target.value)}
+              value={selectedId}
+            >
+              {productions.map(item => (
+                <option key={item.id} value={item.id}>
+                  {item.title}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="size-3.5 shrink-0 text-(--ui-text-tertiary)" />
+          </label>
+        </div>
+
+        <StageRail activeStage={activeStage} onSelect={setActiveStage} />
+
+        <div className="flex items-center justify-end gap-1.5">
+          <button
+            className="hidden h-9 items-center gap-1.5 rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) px-3 text-[0.68rem] font-medium text-(--ui-text-secondary) transition hover:border-(--ui-stroke-primary) hover:text-foreground sm:flex"
+            onClick={() =>
+              startOperation({
+                kind: 'video.autopilot',
+                productionId: summary?.id || selectedId,
+                title: summary?.title || '当前视频'
+              })
+            }
+            type="button"
+          >
+            <Zap className="size-3.5" /> 全自动
+          </button>
+          <button
+            className="hidden h-9 items-center gap-1.5 rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) px-3 text-[0.68rem] font-medium text-(--ui-text-secondary) transition hover:border-(--ui-stroke-primary) hover:text-foreground sm:flex"
+            disabled={!finalMedia?.playback_path}
+            onClick={() =>
+              startOperation({
+                kind: 'video.export',
+                productionId: summary?.id || selectedId,
+                title: summary?.title || '当前视频'
+              })
+            }
+            type="button"
+          >
+            <Download className="size-3.5" /> 导出
+          </button>
+          <button
+            aria-label="刷新视频生产任务"
+            className="grid size-9 place-items-center rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) text-(--ui-text-tertiary) transition hover:border-(--ui-stroke-primary) hover:text-foreground"
+            disabled={loadingList}
+            onClick={() => void refresh()}
+            type="button"
+          >
+            <RefreshCw className={`size-3.5 ${loadingList ? 'animate-spin' : ''}`} />
+          </button>
+          <WorkspaceRailToggle
+            collapsed={inspectorRailCollapsed}
+            onToggle={() => setInspectorRailCollapsed(current => !current)}
+            railName="项目素材栏"
+          />
+        </div>
+      </header>
+
+      {error ? (
+        <div className="mx-5 mt-4 flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+          <AlertCircle className="size-4" /> {error}
+        </div>
+      ) : null}
+
+      {operationProgress ? (
+        <div
+          aria-live="polite"
+          className={`mx-5 mt-4 flex items-center gap-3 rounded-xl border px-3 py-2.5 text-xs ${operationProgress.state === 'error' ? 'border-red-500/20 bg-red-500/5 text-red-700' : 'border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) text-(--ui-text-secondary)'}`}
+          role="status"
+        >
+          {operationProgress.state === 'complete' ? (
+            <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
+          ) : operationProgress.state === 'error' ? (
+            <AlertCircle className="size-4 shrink-0" />
+          ) : operationProgress.state === 'waiting' ? (
+            <Clock className="size-4 shrink-0 text-amber-600" />
+          ) : (
+            <Loader2 className="size-4 shrink-0 animate-spin text-(--ui-accent)" />
+          )}
+          <div className="min-w-0 flex-1">
+            <strong className="block truncate font-medium text-foreground">{operationProgress.label}</strong>
+            <span className="mt-0.5 block text-[0.64rem] text-(--ui-text-tertiary)">
+              {videoOperationStateLabel(operationProgress.state)}
+            </span>
+          </div>
+          {operationProgress.storedSessionId && onOpenOperation ? (
+            <Button onClick={() => onOpenOperation(operationProgress.storedSessionId!)} size="sm" variant="outline">
+              查看执行
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className={`grid min-h-0 flex-1 ${directorColumns}`}>
+        <aside className="flex min-h-0 flex-col border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) transition-[width] xl:border-r xl:border-b-0">
+          <div
+            className={`flex h-12 items-center border-b border-(--ui-stroke-tertiary) ${sceneRailCollapsed ? 'justify-center px-1' : 'justify-between px-3'}`}
+          >
+            {!sceneRailCollapsed ? (
+              <span className="flex items-center gap-2 text-[0.68rem] font-semibold text-(--ui-text-secondary)">
+                <Layers3 className="size-3.5" /> 镜头列表
+              </span>
+            ) : (
+              <Layers3 className="size-4 text-(--ui-text-tertiary)" />
+            )}
+            <div className="flex items-center gap-1">
+              {!sceneRailCollapsed ? (
+                <button
+                  aria-label="新建镜头"
+                  className="grid size-7 place-items-center rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) text-(--ui-text-tertiary) hover:text-foreground"
+                  onClick={() =>
+                    startOperation({
+                      kind: 'video.scene.add',
+                      productionId: summary?.id || selectedId,
+                      title: summary?.title || '当前视频'
+                    })
+                  }
+                  type="button"
+                >
+                  <Plus className="size-3.5" />
+                </button>
+              ) : null}
+              <button
+                aria-expanded={!sceneRailCollapsed}
+                aria-label={sceneRailCollapsed ? '展开镜头列表' : '折叠镜头列表'}
+                className="grid size-7 place-items-center rounded-lg text-(--ui-text-tertiary) transition hover:bg-(--ui-row-hover-background) hover:text-foreground"
+                onClick={() => setSceneRailCollapsed(current => !current)}
+                type="button"
+              >
+                {sceneRailCollapsed ? <ChevronRight className="size-3.5" /> : <ChevronLeft className="size-3.5" />}
+              </button>
+            </div>
+          </div>
+          {!sceneRailCollapsed ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+              {loadingDetail ? (
+                <div className="flex items-center gap-2 px-2 py-4 text-xs text-[#8d8479]">
+                  <Loader2 className="size-4 animate-spin" /> 读取镜头
+                </div>
+              ) : (
+                <div className="grid gap-2.5">
+                  {scenes.map((scene, index) => {
+                    const sceneAsset = detail?.media_assets.find(
+                      asset => asset.id === scene.visuals?.[0]?.media_asset_id
+                    )
+
+                    return (
+                      <button
+                        className={`group relative flex min-w-0 items-center gap-2.5 rounded-xl border p-1.5 text-left transition ${
+                          scene.id === selectedScene?.id
+                            ? 'border-[#ef704f] bg-[#fff9f1] shadow-[0_8px_22px_-18px_rgba(105,70,45,.7)]'
+                            : 'border-[#ddd4c7] bg-[#fbf8f1] hover:border-[#c9bdad]'
+                        }`}
+                        key={scene.id}
+                        onClick={() => setSelectedSceneId(scene.id)}
+                        type="button"
+                      >
+                        <span className="relative h-[4.45rem] w-[6.6rem] shrink-0 overflow-hidden rounded-lg bg-[linear-gradient(145deg,#29363b,#9f6755)]">
+                          {sceneAsset?.media_type === 'image' ? <SceneImage asset={sceneAsset} /> : null}
+                          <span
+                            className={`absolute left-1 top-1 rounded px-1.5 py-0.5 font-mono text-[0.56rem] text-white ${scene.id === selectedScene?.id ? 'bg-[#ef704f]' : 'bg-black/45'}`}
+                          >
+                            {String(index + 1).padStart(2, '0')}
+                          </span>
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <strong className="block truncate text-[0.72rem] font-semibold text-[#4f483f]">
+                            {scene.purpose || `镜头 ${index + 1}`}
+                          </strong>
+                          <small className="mt-1 block truncate text-[0.6rem] text-[#978d80]">
+                            {formatDuration(scene.duration)} ·{' '}
+                            {rendererLabel(
+                              production?.render_plan?.scenes?.find(item => item.scene_id === scene.id)?.renderer
+                            )}
+                          </small>
+                        </span>
+                        {scene.id === selectedScene?.id ? (
+                          <span className="size-1.5 shrink-0 rounded-full bg-[#ef704f]" />
+                        ) : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          ) : null}
+          {!sceneRailCollapsed ? (
+            <div className="flex h-11 items-center justify-between border-t border-(--ui-stroke-tertiary) px-3 text-(--ui-text-tertiary)">
+              <button
+                aria-label="删除当前镜头"
+                className="grid size-7 place-items-center rounded-lg hover:bg-black/5"
+                type="button"
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+              <span className="text-[0.6rem]">
+                {scenes.length} 个镜头 · {formatDuration(totalDuration)}
+              </span>
+            </div>
+          ) : null}
+        </aside>
+
+        <main className="min-w-0 border-b border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) p-2.5 sm:p-3 xl:border-r xl:border-b-0">
+          <div className="overflow-hidden rounded-[14px] border border-[#d4ccbf] bg-[#1b1b1b] shadow-[0_18px_42px_-32px_rgba(54,42,31,.65)]">
+            <div className="grid min-h-[22rem] place-items-center sm:min-h-[28rem]">
+              <div
+                className="relative grid max-h-[36rem] place-items-center overflow-hidden bg-[radial-gradient(circle_at_70%_20%,rgba(236,123,90,0.55),transparent_30%),linear-gradient(145deg,#17283a,#4d2930_58%,#a55743)] text-white"
+                style={previewFrameStyle(canvas)}
+              >
+                {finalMedia?.playback_path ? (
+                  <video
+                    className="size-full object-contain"
+                    controls
+                    key={finalMedia.playback_path}
+                    src={playbackUrl(finalMedia.playback_path)}
+                  />
+                ) : selectedVisual?.playback_path && selectedVisual.media_type === 'image' ? (
+                  <SceneImage asset={selectedVisual} />
+                ) : (
+                  <div className="absolute inset-0 opacity-20 [background-image:linear-gradient(rgba(255,255,255,.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.08)_1px,transparent_1px)] [background-size:28px_28px]" />
+                )}
+                {!finalMedia?.playback_path ? (
+                  <div className="relative z-10 max-w-[78%] text-center [text-shadow:0_2px_18px_rgba(0,0,0,.55)]">
+                    <span className="text-[0.62rem] font-bold tracking-[0.14em] text-white/65">{ratio}</span>
+                    <strong className="mt-2 block text-lg sm:text-xl">
+                      {selectedScene?.text?.find(layer => layer.role === 'headline')?.text ||
+                        selectedScene?.purpose ||
+                        summary?.title}
+                    </strong>
+                    <small className="mt-2 block text-[0.68rem] leading-relaxed text-white/70">
+                      {selectedVisual?.name || '镜头画面尚未生成'}
+                    </small>
+                  </div>
+                ) : null}
+                <span className="absolute right-2.5 bottom-2.5 z-20 rounded bg-black/45 px-1.5 py-1 font-mono text-[0.58rem]">
+                  {formatDuration(selectedScene?.duration || totalDuration)}
+                </span>
+              </div>
+            </div>
+            <div className="flex h-10 items-center justify-between bg-[#f8f4eb] px-3 text-[#6e665c]">
+              <span className="flex items-center gap-3 text-[0.65rem]">
+                <Play className="size-3.5 fill-current" />
+                {formatDuration(Math.min(selectedScene?.duration || 0, 5))} /{' '}
+                {formatDuration(selectedScene?.duration || totalDuration)}
+              </span>
+              <span className="flex items-center gap-2 text-[0.62rem]">
+                <MetaChip label={ratio} />
+                <MetaChip label={`${canvas.width}×${canvas.height}`} />
+                <MetaChip label={`${canvas.fps} FPS`} />
+                <Maximize className="size-3.5" />
+              </span>
+            </div>
+          </div>
+
+          <VersionStrip
+            assets={detail?.media_assets || []}
+            onStartOperation={startOperation}
+            scene={selectedScene}
+            selectedAsset={selectedVisual}
+            summary={summary}
+          />
+
+          <DirectorCommandBox
+            accepted={accepted}
+            activeStage={activeStage}
+            completed={summary?.status === 'completed' && Boolean(detail?.output_asset?.id)}
+            onReview={decision => void submitReview(decision)}
+            onReviewNote={setReviewNote}
+            onStartOperation={startOperation}
+            reviewing={reviewing}
+            reviewNote={reviewNote}
+            scene={selectedScene}
+            summary={summary}
+          />
+
+          <Timeline
+            assets={detail?.media_assets || []}
+            audio={production?.video_ir?.audio || {}}
+            captions={production?.video_ir?.captions || []}
+            onSelect={setSelectedSceneId}
+            scenes={scenes}
+            selectedSceneId={selectedScene?.id || ''}
+            totalDuration={totalDuration}
+          />
+        </main>
+
+        {!inspectorRailCollapsed ? (
+          <DirectorInspector
+            accepted={accepted}
+            activeStage={activeStage}
+            activeTab={inspectorTab}
+            assets={detail?.media_assets || []}
+            canvas={canvas}
+            completed={summary?.status === 'completed' && Boolean(detail?.output_asset?.id)}
+            onConfirm={() => {
+              if (summary?.status === 'completed' && detail?.output_asset?.id) {
+                void submitReview('accepted')
+              } else {
+                startOperation({
+                  kind: 'video.stage.confirm',
+                  productionId: summary?.id || selectedId,
+                  sceneId: selectedScene?.id,
+                  stage: activeStage,
+                  title: summary?.title || '当前视频'
+                })
+              }
+            }}
+            onTab={setInspectorTab}
+            quality={quality}
+            rendered={summary?.status === 'completed'}
+            scene={selectedScene}
+            scenePlan={scenePlan}
+            scenes={scenes}
+            summary={summary}
+            totalDuration={totalDuration}
+          />
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+function VersionStrip({
+  assets,
+  onStartOperation,
+  scene,
+  selectedAsset,
+  summary
+}: {
+  assets: MediaAssetProjection[]
+  onStartOperation: StartVideoOperation
+  scene?: VideoScene
+  selectedAsset?: MediaAssetProjection
+  summary?: VideoProductionSummary
+}) {
+  const alternatives = assets
+    .filter(asset => asset.media_type !== 'audio' && ['broll', 'scene', 'storyboard'].includes(asset.role))
+    .sort((left, right) => (left.id === selectedAsset?.id ? -1 : right.id === selectedAsset?.id ? 1 : 0))
+    .slice(0, 4)
+
+  return (
+    <section className="mt-2.5 flex min-h-16 items-center gap-2.5 overflow-x-auto border-y border-[#ded6c9] px-2 py-2">
+      <strong className="mr-1 shrink-0 text-[0.66rem] font-semibold text-[#6d645a]">版本</strong>
+      {alternatives.length ? (
+        alternatives.map((asset, index) => (
+          <button
+            aria-label={`使用版本 ${index + 1} ${asset.name}`}
+            className={`relative h-12 w-20 shrink-0 overflow-hidden rounded-lg border bg-[#29363b] transition ${asset.id === selectedAsset?.id ? 'border-[#ef704f] ring-1 ring-[#ef704f]' : 'border-[#cfc5b6] hover:border-[#a99d8d]'}`}
+            key={asset.id}
+            onClick={() =>
+              onStartOperation({
+                kind: 'video.asset.select',
+                mediaAssetId: asset.id,
+                productionId: summary?.id || '',
+                sceneId: scene?.id,
+                title: summary?.title || '当前视频'
+              })
+            }
+            type="button"
+          >
+            {asset.media_type === 'image' ? (
+              <SceneImage asset={asset} />
+            ) : (
+              <MonitorPlay className="m-auto size-5 text-white/55" />
+            )}
+            <span className="absolute bottom-1 right-1 rounded bg-black/45 px-1 py-0.5 font-mono text-[0.5rem] text-white">
+              V{index + 1}
+            </span>
+          </button>
+        ))
+      ) : (
+        <span className="text-[0.62rem] text-[#a0978a]">当前镜头还没有可切换版本</span>
+      )}
+      <button
+        className="flex h-12 shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-[#cfc5b6] px-3 text-[0.62rem] text-[#796f63] transition hover:border-[#ef704f]/50 hover:text-[#dc603f]"
+        onClick={() =>
+          onStartOperation({
+            kind: 'video.version.generate',
+            productionId: summary?.id || '',
+            sceneId: scene?.id,
+            title: summary?.title || '当前视频'
+          })
+        }
+        type="button"
+      >
+        <Plus className="size-3.5" /> 生成新版本
+      </button>
+    </section>
+  )
+}
+
+function DirectorCommandBox({
+  accepted,
+  activeStage,
+  completed,
+  onStartOperation,
+  onReview,
+  onReviewNote,
+  reviewNote,
+  reviewing,
+  scene,
+  summary
+}: {
+  accepted: boolean
+  activeStage: DirectorStage
+  completed: boolean
+  onStartOperation: StartVideoOperation
+  onReview: (decision: 'accepted' | 'changes_requested') => void
+  onReviewNote: (note: string) => void
+  reviewNote: string
+  reviewing: 'accepted' | 'changes_requested' | null
+  scene?: VideoScene
+  summary?: VideoProductionSummary
+}) {
+  const target = `${stageLabel(activeStage)} · ${scene?.purpose || summary?.title || '整个作品'}`
+
+  return (
+    <section className="mt-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+        <h3 className="text-[0.7rem] font-semibold text-(--ui-text-secondary)">
+          <span className="mr-1.5 text-(--ui-accent)">当前目标</span>· {target}
+        </h3>
+        {completed ? (
+          <span
+            className={`rounded-full px-2.5 py-1 text-[0.62rem] font-semibold ${accepted ? 'bg-emerald-500/10 text-emerald-700' : 'bg-amber-500/10 text-amber-700'}`}
+          >
+            {accepted ? '成片已确认' : '等待完整审片'}
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-2 rounded-2xl">
+        <div className={composerSurfaceFrame}>
+          <div
+            aria-hidden
+            className={cn(
+              'pointer-events-none absolute inset-0 -z-10 rounded-[inherit]',
+              composerFill,
+              composerSurfaceGlass
+            )}
+          />
+          <div className={composerSurfaceContent}>
+            <div className="grid w-full grid-cols-[1fr_auto] items-center gap-(--composer-control-gap)">
+              <textarea
+                aria-label="视频修改意见"
+                className="min-h-(--composer-input-min-height) max-h-(--composer-input-max-height) min-w-0 resize-none overflow-y-auto bg-transparent px-1 py-1 text-[length:var(--conversation-text-font-size)] leading-(--conversation-line-height) outline-none [field-sizing:content] placeholder:text-(--ui-text-tertiary)"
+                onChange={event => onReviewNote(event.target.value)}
+                placeholder={`直接说你想怎样修改当前${scene ? '镜头' : '作品'}……`}
+                rows={1}
+                value={reviewNote}
+              />
+              <Button
+                aria-label={completed ? '局部修改' : '提交修改'}
+                className={PRIMARY_ICON_BTN}
+                disabled={!reviewNote.trim() || reviewing !== null}
+                onClick={() => {
+                  if (completed) {
+                    onReview('changes_requested')
+                  } else {
+                    onStartOperation({
+                      kind: 'video.stage.modify',
+                      note: reviewNote.trim(),
+                      productionId: summary?.id || '',
+                      sceneId: scene?.id,
+                      stage: activeStage,
+                      title: summary?.title || '当前视频'
+                    })
+                  }
+                }}
+                size="icon"
+                type="button"
+              >
+                <Codicon name="arrow-up" size="0.875rem" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+      {accepted ? (
+        <p className="mt-2 rounded-lg bg-emerald-500/8 px-3 py-2 text-[0.66rem] text-emerald-700">
+          当前成片已经确认，发布后的数据会回到总工作台。
+        </p>
+      ) : null}
+    </section>
+  )
+}
+
+function DirectorInspector({
+  accepted,
+  activeTab,
+  activeStage,
+  assets,
+  canvas,
+  completed,
+  onConfirm,
+  onTab,
+  quality,
+  rendered,
+  scene,
+  scenePlan,
+  scenes,
+  summary,
+  totalDuration
+}: {
+  accepted: boolean
+  activeTab: InspectorTab
+  activeStage: DirectorStage
+  assets: MediaAssetProjection[]
+  canvas: CanvasSpec
+  completed: boolean
+  onConfirm: () => void
+  onTab: (tab: InspectorTab) => void
+  quality?: VideoQualityReport
+  rendered: boolean
+  scene?: VideoScene
+  scenePlan?: { fallback_used?: boolean; renderer?: string }
+  scenes: VideoScene[]
+  summary?: VideoProductionSummary
+  totalDuration: number
+}) {
+  const tabs: Array<{ id: InspectorTab; icon: typeof FileImage; label: string }> = [
+    { id: 'characters', icon: Users, label: '角色' },
+    { id: 'scenes', icon: Layers3, label: '场景' },
+    { id: 'props', icon: Package, label: '道具' },
+    { id: 'sound', icon: AudioLines, label: '声音' },
+    { id: 'materials', icon: FileImage, label: '素材' }
+  ]
+
+  const activeIndex = DIRECTOR_STAGES.findIndex(stage => stage.id === activeStage)
+  const currentStage = DIRECTOR_STAGES[Math.max(0, activeIndex)]
+  const nextStage = DIRECTOR_STAGES[Math.min(DIRECTOR_STAGES.length - 1, Math.max(0, activeIndex) + 1)]
+
+  const confirmLabel = completed
+    ? accepted
+      ? '成片已确认'
+      : '确认成片'
+    : `确认${currentStage.label}并进入${nextStage.label}`
+
+  return (
+    <aside className="flex min-h-0 flex-col bg-(--ui-chat-surface-background)">
+      <header className="flex h-12 items-center justify-between border-b border-(--ui-stroke-tertiary) px-3.5">
+        <h3 className="text-[0.7rem] font-semibold text-(--ui-text-secondary)">项目参考素材</h3>
+        <SlidersHorizontal className="size-3.5 text-(--ui-text-tertiary)" />
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div className="grid gap-2.5">
+          {tabs.map(tab => (
+            <button
+              aria-label={tab.label}
+              className={`grid min-h-20 grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border p-1.5 text-left transition ${activeTab === tab.id ? 'border-(--ui-accent) bg-(--ui-row-active-background)' : 'border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) hover:border-(--ui-stroke-primary)'}`}
+              key={tab.id}
+              onClick={() => onTab(tab.id)}
+              type="button"
+            >
+              <ReferenceThumb asset={assets.find(asset => assetMatchesTab(asset, tab.id))} icon={tab.icon} />
+              <span className="min-w-0">
+                <strong className="block text-[0.72rem] font-semibold text-foreground">{tab.label}</strong>
+                <small className="mt-1 block truncate text-[0.58rem] text-(--ui-text-tertiary)">
+                  {assets.find(asset => assetMatchesTab(asset, tab.id))?.name || '等待绑定'}
+                </small>
+              </span>
+              {assets.some(asset => assetMatchesTab(asset, tab.id)) ? (
+                <CheckCircle2 className="size-4 text-(--ui-accent)" />
+              ) : (
+                <Plus className="size-4 text-(--ui-text-tertiary)" />
+              )}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'scenes' ? (
+          <dl className="mt-3 space-y-2 rounded-xl border border-[#ded6c9] bg-[#fffdf8] p-3 text-[0.64rem]">
+            <InfoRow label="当前镜头" value={scene?.purpose || '未选择'} />
+            <InfoRow label="生成方式" value={rendererLabel(scenePlan?.renderer)} />
+            <InfoRow label="动态意图" value={scene?.motion_intent?.join(' / ') || '直接剪辑'} />
+            <InfoRow label="画面填充" value={fitLabel(scene?.visuals?.[0]?.fit)} />
+          </dl>
+        ) : null}
+
+        <section className="mt-4 border-t border-[#ded6c9] pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs font-semibold">作品状态</h3>
+            <ProductionStatus status={summary?.status || 'prepared'} />
+          </div>
+          <div className="mt-2.5 grid grid-cols-2 gap-2">
+            <StatBox label="画幅" value={ratioLabel(canvas)} />
+            <StatBox label="镜头" value={`${scenes.length || summary?.scene_count || 0}`} />
+            <StatBox label="时长" value={formatDuration(totalDuration)} />
+            <StatBox label="制作方式" value={`${summary?.renderers?.length || 0}`} />
+          </div>
+        </section>
+
+        <section className="mt-4 border-t border-[#ded6c9] pt-3">
+          <QualityAssurance rendered={rendered} report={quality} />
+        </section>
+      </div>
+
+      <div className="border-t border-[#d8d0c2] bg-[#faf7ef] p-3">
+        <Button
+          className="h-12 w-full rounded-xl bg-[#f06443] text-sm font-semibold shadow-[0_12px_28px_-18px_rgba(225,83,48,.75)] hover:bg-[#df5838]"
+          disabled={accepted || quality?.disposition === 'reject'}
+          onClick={onConfirm}
+        >
+          {accepted ? <CheckCircle2 className="mr-2 size-4" /> : <Zap className="mr-2 size-4" />}
+          {confirmLabel}
+        </Button>
+      </div>
+    </aside>
+  )
+}
+
+function ReferenceThumb({ asset, icon: Icon }: { asset?: MediaAssetProjection; icon: typeof FileImage }) {
+  return (
+    <span className="grid h-[4.5rem] overflow-hidden rounded-lg bg-[#e4ddd1] text-[#81776b]">
+      {asset?.media_type === 'image' ? <SceneImage asset={asset} /> : null}
+      {asset?.media_type === 'audio' ? (
+        <span className="grid size-full place-items-center bg-[repeating-linear-gradient(90deg,transparent_0_4px,rgba(100,131,104,.55)_4px_6px,transparent_6px_9px)]">
+          <AudioLines className="size-5 rounded-full bg-[#f4efe5] p-0.5 text-[#648368]" />
+        </span>
+      ) : null}
+      {!asset || asset.media_type === 'video' ? <Icon className="m-auto size-5 opacity-55" /> : null}
+    </span>
+  )
+}
+
+function QualityAssurance({ report, rendered }: { rendered: boolean; report?: VideoQualityReport }) {
+  const labels = {
+    hold: '需人工复核',
+    ready: '自动质检通过',
+    reject: '技术拒收'
+  }
+
+  if (!report) {
+    return (
+      <>
+        <div className="flex items-center gap-2">
+          <AlertCircle className="size-4 text-(--ui-text-quaternary)" />
+          <h3 className="text-sm font-semibold">自动媒体质检</h3>
+        </div>
+        <p className="mt-2 text-[0.68rem] leading-relaxed text-(--ui-text-tertiary)">
+          {rendered
+            ? '这条旧成片没有自动质检报告，需要人工完整审片。'
+            : '渲染完成后将自动检查黑场、冻结、响度和技术规格。'}
+        </p>
+      </>
+    )
+  }
+
+  const tone = {
+    hold: 'text-amber-700',
+    ready: 'text-emerald-700',
+    reject: 'text-red-700'
+  }[report.disposition]
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          {report.disposition === 'ready' ? (
+            <CheckCircle2 className="size-4 text-emerald-600" />
+          ) : (
+            <AlertCircle className={`size-4 ${tone}`} />
+          )}
+          <h3 className="text-sm font-semibold">自动媒体质检</h3>
+        </div>
+        <span className={`text-[0.62rem] font-semibold ${tone}`}>{labels[report.disposition]}</span>
+      </div>
+      <div className="mt-3 grid gap-1.5">
+        {report.checks.map(check => (
+          <div
+            className="flex items-center justify-between gap-3 rounded-lg bg-(--ui-button-hover-background) px-2.5 py-2 text-[0.66rem]"
+            key={check.id}
+          >
+            <span className="truncate text-(--ui-text-secondary)">{check.label}</span>
+            <span className={check.status === 'fail' ? 'font-semibold text-red-700' : 'text-(--ui-text-quaternary)'}>
+              {qualityCheckLabel(check)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
+function qualityCheckLabel(check: VideoQualityCheck): string {
+  if (check.status === 'not_applicable') {
+    return '无需检查'
+  }
+
+  if (check.status === 'pass') {
+    return '通过'
+  }
+
+  const evidence = check.evidence || {}
+
+  if (check.id === 'black_frames' || check.id === 'frozen_frames') {
+    return `最长 ${Number(evidence.longest_seconds || 0).toFixed(1)}s`
+  }
+
+  if (check.id === 'audio_loudness' && typeof evidence.integrated_lufs === 'number') {
+    return `${evidence.integrated_lufs.toFixed(1)} LUFS`
+  }
+
+  return check.severity === 'critical' ? '未通过' : '需复核'
+}
+
+interface VideoSetupWorkspaceProps {
+  activeCategory: SetupCategory | null
+  assets: MediaAssetProjection[]
+  documents: string[]
+  error: string
+  onBack?: () => void
+  onCategory: (category: SetupCategory) => void
+  onDocumentDrop: (event: DragEvent<HTMLDivElement>) => void
+  onPickDocuments: () => void
+  onPickFolders: () => void
+  onPickImages: () => void
+  onRemoveDocument: (path: string) => void
+  onScript: (script: string) => void
+  onSelect: (category: SetupCategory, assetId: string) => void
+  onSubmit: () => void
+  script: string
+  selections: Record<SetupCategory, string>
+  status: string
+  submitting: boolean
+  railCollapsed: boolean
+  onToggleRail: () => void
+}
+
+const SETUP_CATEGORIES: Array<{ id: SetupCategory; icon: typeof Users; label: string }> = [
+  { id: 'characters', icon: Users, label: '人物' },
+  { id: 'sound', icon: AudioLines, label: '声音' },
+  { id: 'scenes', icon: Layers3, label: '场景' },
+  { id: 'props', icon: Package, label: '道具' }
+]
+
+function VideoSetupWorkspace({
+  activeCategory,
+  assets,
+  documents,
+  error,
+  onBack,
+  onCategory,
+  onDocumentDrop,
+  onPickDocuments,
+  onPickFolders,
+  onPickImages,
+  onRemoveDocument,
+  onScript,
+  onSelect,
+  onSubmit,
+  script,
+  selections,
+  status,
+  submitting,
+  railCollapsed,
+  onToggleRail
+}: VideoSetupWorkspaceProps) {
+  const category = SETUP_CATEGORIES.find(item => item.id === activeCategory)
+  const categoryAssets = activeCategory ? assets.filter(asset => setupAssetMatches(asset, activeCategory)) : []
+
+  return (
+    <section
+      className={cn(
+        'grid min-h-0 flex-1 grid-rows-[var(--video-workbench-topbar-height)_minmax(0,1fr)] overflow-hidden bg-(--ui-chat-surface-background) [--video-workbench-topbar-height:2.75rem]',
+        !railCollapsed && 'lg:grid-cols-[minmax(0,1fr)_7rem]'
+      )}
+    >
+      <header className="grid h-(--video-workbench-topbar-height) min-w-0 items-center border-b border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) px-3 lg:grid-cols-[7rem_minmax(0,1fr)_7rem]">
+        <BackButton onBack={onBack} />
+        <StageRail activeStage="setup" compact />
+        <span />
+      </header>
+
+      <WorkspaceRailToggle collapsed={railCollapsed} onToggle={onToggleRail} railName="设定素材栏" />
+
+      <main className="flex min-h-0 min-w-0 flex-col bg-(--ui-chat-surface-background)">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          {!railCollapsed && category ? (
+            <section
+              aria-label={`${category.label}库`}
+              className="grid content-start grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-3"
+            >
+              <button
+                aria-label={`交给 AI 生成${category.label}`}
+                className="grid h-40 place-items-center rounded-xl border border-dashed border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) p-3 text-center transition hover:border-(--ui-stroke-primary) hover:bg-(--ui-row-hover-background)"
+                onClick={() => onSelect(category.id, '')}
+                type="button"
+              >
+                <span>
+                  <Zap className="mx-auto size-5 text-(--ui-accent)" />
+                  <strong className="mt-2 block text-xs text-foreground">AI 生成</strong>
+                </span>
+              </button>
+              {categoryAssets.map(asset => (
+                <button
+                  aria-label={`选择${category.label} ${asset.name}`}
+                  className={`h-40 overflow-hidden rounded-xl border bg-(--ui-bg-primary) text-left transition ${selections[category.id] === asset.id ? 'border-(--ui-accent) ring-1 ring-(--ui-accent)' : 'border-(--ui-stroke-tertiary) hover:border-(--ui-stroke-primary)'}`}
+                  key={asset.id}
+                  onClick={() => onSelect(category.id, asset.id)}
+                  type="button"
+                >
+                  <span className="grid h-[7.75rem] bg-(--ui-bg-quaternary)">
+                    <ReferenceThumb asset={asset} icon={category.icon} />
+                  </span>
+                  <span className="block truncate px-2.5 py-2 text-[0.66rem] font-semibold text-foreground">
+                    {asset.name}
+                  </span>
+                </button>
+              ))}
+            </section>
+          ) : null}
+        </div>
+
+        <VideoSetupComposer
+          documents={documents}
+          error={error}
+          onDocumentDrop={onDocumentDrop}
+          onPickDocuments={onPickDocuments}
+          onPickFolders={onPickFolders}
+          onPickImages={onPickImages}
+          onRemoveDocument={onRemoveDocument}
+          onScript={onScript}
+          onSubmit={onSubmit}
+          script={script}
+          status={status}
+          submitting={submitting}
+        />
+      </main>
+
+      {!railCollapsed ? (
+        <aside className="flex min-h-0 flex-col border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) lg:col-start-2 lg:row-span-2 lg:row-start-1">
+          <nav
+            aria-label="视频设定素材"
+            className="grid gap-1.5 px-2 pt-[calc(var(--video-workbench-topbar-height)+0.75rem)] pb-2"
+          >
+            {SETUP_CATEGORIES.map(item => {
+              const Icon = item.icon
+              const selectedAsset = assets.find(asset => asset.id === selections[item.id])
+
+              return (
+                <button
+                  aria-label={item.label}
+                  className={`flex min-h-14 flex-col items-center justify-center gap-1.5 rounded-xl border px-1 text-center transition ${activeCategory === item.id ? 'border-(--ui-accent) bg-(--ui-row-active-background) text-(--ui-accent)' : 'border-transparent text-(--ui-text-secondary) hover:border-(--ui-stroke-tertiary) hover:bg-(--ui-row-hover-background)'}`}
+                  key={item.id}
+                  onClick={() => onCategory(item.id)}
+                  type="button"
+                >
+                  <SetupCategoryThumbnail asset={selectedAsset} icon={Icon} label={item.label} />
+                  <strong className="text-[0.65rem]">{item.label}</strong>
+                </button>
+              )
+            })}
+          </nav>
+        </aside>
+      ) : null}
+    </section>
+  )
+}
+
+function VideoSetupComposer({
+  documents,
+  error,
+  onDocumentDrop,
+  onPickDocuments,
+  onPickFolders,
+  onPickImages,
+  onRemoveDocument,
+  onScript,
+  onSubmit,
+  script,
+  status,
+  submitting
+}: Pick<
+  VideoSetupWorkspaceProps,
+  | 'documents'
+  | 'error'
+  | 'onDocumentDrop'
+  | 'onPickDocuments'
+  | 'onPickFolders'
+  | 'onPickImages'
+  | 'onRemoveDocument'
+  | 'onScript'
+  | 'onSubmit'
+  | 'script'
+  | 'status'
+  | 'submitting'
+>) {
+  const canSubmit = Boolean(script.trim() || documents.length) && !submitting
+
+  return (
+    <div className="relative shrink-0 bg-[linear-gradient(to_bottom,transparent,color-mix(in_srgb,var(--dt-background)_10%,transparent))] pt-2 pb-[var(--composer-shell-pad-block-end)]">
+      <div
+        className="mx-auto w-[min(var(--composer-width),calc(100%-2rem))] max-w-full rounded-2xl"
+        onDragOver={event => event.preventDefault()}
+        onDrop={onDocumentDrop}
+      >
+        <div className={composerSurfaceFrame}>
+          <div
+            aria-hidden
+            className={cn(
+              'pointer-events-none absolute inset-0 -z-10 rounded-[inherit]',
+              composerFill,
+              composerSurfaceGlass
+            )}
+          />
+          <div className={composerSurfaceContent}>
+            {documents.length ? (
+              <div className="flex max-w-full flex-wrap gap-1.5 px-1 pt-1">
+                {documents.map(path => (
+                  <span
+                    className="flex max-w-56 items-center gap-1.5 rounded-full bg-(--ui-bg-quaternary) py-1 pl-2.5 pr-1 text-[0.62rem] text-(--ui-text-secondary)"
+                    key={path}
+                  >
+                    <FileText className="size-3.5 shrink-0" />
+                    <span className="truncate">{pathLabel(path)}</span>
+                    <button
+                      aria-label={`移除 ${pathLabel(path)}`}
+                      className="grid size-5 shrink-0 place-items-center rounded-full hover:bg-black/5"
+                      onClick={() => onRemoveDocument(path)}
+                      type="button"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+
+            {status ? <p className="px-1 text-[0.66rem] text-(--ui-text-secondary)">{status}</p> : null}
+            {error ? <p className="px-1 text-[0.66rem] text-red-600">{error}</p> : null}
+
+            <div className="grid w-full grid-cols-[auto_1fr_auto] items-center gap-(--composer-control-gap)">
+              <ContextMenu
+                onInsertText={text => onScript(script ? `${script}\n${text}` : text)}
+                onPickFiles={onPickDocuments}
+                onPickFolders={onPickFolders}
+                onPickImages={onPickImages}
+                state={VIDEO_COMPOSER_MENU_STATE}
+              />
+              <textarea
+                aria-label="视频文案"
+                className="min-h-(--composer-input-min-height) max-h-(--composer-input-max-height) min-w-0 resize-none overflow-y-auto bg-transparent px-1 py-1 text-[length:var(--conversation-text-font-size)] leading-(--conversation-line-height) text-foreground outline-none [field-sizing:content] placeholder:text-(--ui-text-tertiary)"
+                onChange={event => onScript(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault()
+
+                    if (canSubmit) {
+                      onSubmit()
+                    }
+                  }
+                }}
+                placeholder="输入文案或描述你想做的视频，也可以把脚本文档直接拖到这里……"
+                rows={1}
+                value={script}
+              />
+              <Button
+                aria-label="开始拆分"
+                className={PRIMARY_ICON_BTN}
+                disabled={!canSubmit}
+                onClick={onSubmit}
+                size="icon"
+                type="button"
+              >
+                {submitting ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Codicon name="arrow-up" size="0.875rem" />
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function BackButton({ onBack }: { onBack?: () => void }) {
+  return (
+    <button
+      className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-sm font-medium text-(--ui-text-secondary) transition hover:bg-(--ui-row-hover-background) hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      disabled={!onBack}
+      onClick={onBack}
+      type="button"
+    >
+      <ChevronLeft className="size-4" /> 返回
+    </button>
+  )
+}
+
+function WorkspaceRailToggle({
+  collapsed,
+  onToggle,
+  railName
+}: {
+  collapsed: boolean
+  onToggle: () => void
+  railName: string
+}) {
+  return (
+    <Button
+      aria-expanded={!collapsed}
+      aria-label={`${collapsed ? '展开' : '折叠'}${railName}`}
+      className={cn(
+        titlebarButtonClass,
+        'fixed top-(--titlebar-controls-top) right-[calc(var(--titlebar-tools-right)+var(--titlebar-control-size)+1.25rem)] z-70 bg-transparent select-none [-webkit-app-region:no-drag]'
+      )}
+      onClick={onToggle}
+      size="icon-titlebar"
+      type="button"
+      variant="ghost"
+    >
+      <Codicon name="layout-sidebar-right" />
+    </Button>
+  )
+}
+
+function SetupCategoryThumbnail({
+  asset,
+  icon: Icon,
+  label
+}: {
+  asset?: MediaAssetProjection
+  icon: typeof Users
+  label: string
+}) {
+  if (!asset) {
+    return <Icon className="size-[1.15rem] shrink-0" />
+  }
+
+  return (
+    <span
+      aria-label={`${label}已选择 ${asset.name}`}
+      className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-primary)"
+      role="img"
+      title={asset.name}
+    >
+      <Icon className="size-4 text-(--ui-text-tertiary)" />
+      {asset.media_type === 'image' ? (
+        <span className="absolute inset-0">
+          <SceneImage asset={asset} />
+        </span>
+      ) : null}
+      {asset.media_type === 'video' && asset.playback_path ? (
+        <video
+          className="absolute inset-0 size-full object-cover"
+          muted
+          preload="metadata"
+          src={playbackUrl(asset.playback_path)}
+        />
+      ) : null}
+      {asset.media_type === 'audio' ? (
+        <span className="absolute inset-0 grid place-items-center bg-[repeating-linear-gradient(90deg,#d7e1d3_0_3px,#76907b_3px_5px,#d7e1d3_5px_8px)]">
+          <AudioLines className="size-4 rounded-full bg-(--ui-bg-primary) p-0.5 text-(--ui-text-secondary)" />
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+function StageRail({
+  activeStage,
+  compact = false,
+  onSelect
+}: {
+  activeStage: DirectorStage
+  compact?: boolean
+  onSelect?: (stage: DirectorStage) => void
+}) {
+  const activeIndex = DIRECTOR_STAGES.findIndex(stage => stage.id === activeStage)
+
+  return (
+    <nav aria-label="视频制作阶段" className="hidden items-center justify-center lg:flex">
+      {DIRECTOR_STAGES.map((stage, index) => (
+        <span className="flex items-center" key={stage.id}>
+          <button
+            className={`relative font-semibold transition ${compact ? 'px-2.5 py-1 text-sm' : 'px-3 py-2 text-[0.78rem]'} ${index === activeIndex ? 'text-(--ui-accent)' : index < activeIndex ? 'text-(--ui-text-secondary)' : 'text-(--ui-text-tertiary) hover:text-foreground'}`}
+            disabled={!onSelect}
+            onClick={() => onSelect?.(stage.id)}
+            type="button"
+          >
+            {stage.label}
+            {index === activeIndex ? (
+              <span className="absolute inset-x-2 -bottom-1 h-0.5 rounded-full bg-(--ui-accent)" />
+            ) : null}
+          </button>
+          {index < DIRECTOR_STAGES.length - 1 ? (
+            <ChevronRight className={`${compact ? 'mx-0 size-3.5' : 'mx-1 size-4'} text-(--ui-text-tertiary)`} />
+          ) : null}
+        </span>
+      ))}
+    </nav>
+  )
+}
+
+function Timeline({
+  assets,
+  audio,
+  captions,
+  onSelect,
+  scenes,
+  selectedSceneId,
+  totalDuration
+}: {
+  assets: MediaAssetProjection[]
+  audio: Record<string, unknown>
+  captions: Array<Record<string, unknown>>
+  onSelect: (sceneId: string) => void
+  scenes: VideoScene[]
+  selectedSceneId: string
+  totalDuration: number
+}) {
+  const selectedIndex = Math.max(
+    0,
+    scenes.findIndex(scene => scene.id === selectedSceneId)
+  )
+
+  const elapsed = scenes.slice(0, selectedIndex).reduce((sum, scene) => sum + Number(scene.duration || 0), 0)
+  const playheadLeft = 8 + (elapsed / Math.max(totalDuration, 1)) * 88
+
+  return (
+    <section className="relative mt-2.5 overflow-hidden rounded-[14px] border border-[#d8d0c2] bg-[#f8f4eb] p-2.5">
+      <div className="flex justify-between pl-14 font-mono text-[0.5rem] text-[#9c9285]">
+        <span>00:00</span>
+        <span>{formatDuration(totalDuration * 0.25)}</span>
+        <span>{formatDuration(totalDuration * 0.5)}</span>
+        <span>{formatDuration(totalDuration * 0.75)}</span>
+        <span>{formatDuration(totalDuration)}</span>
+      </div>
+      <span
+        className="pointer-events-none absolute bottom-2 top-6 z-20 w-px bg-[#ef704f]"
+        style={{ left: `${playheadLeft}%` }}
+      >
+        <span className="absolute -left-1.5 -top-1 size-3 rotate-45 rounded-[2px] bg-[#ef704f]" />
+      </span>
+      <div className="mt-2 grid grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-2">
+        <strong className="flex items-center gap-1 text-[0.58rem] text-[#6e655b]">
+          <MonitorPlay className="size-3" /> 视频
+        </strong>
+        <div className="flex h-10 gap-0.5 overflow-hidden rounded-lg">
+          {scenes.map((scene, index) => (
+            <button
+              className={`relative min-w-8 overflow-hidden border border-black/10 bg-[#3f4a4d] text-[0.56rem] font-semibold text-white transition ${
+                scene.id === selectedSceneId ? 'z-10 ring-2 ring-[#ef704f] ring-inset' : ''
+              }`}
+              key={scene.id}
+              onClick={() => onSelect(scene.id)}
+              style={{ width: `${Math.max(8, (scene.duration / totalDuration) * 100)}%` }}
+              type="button"
+            >
+              {(() => {
+                const asset = assets.find(item => item.id === scene.visuals?.[0]?.media_asset_id)
+
+                return asset?.media_type === 'image' ? <SceneImage asset={asset} /> : null
+              })()}
+              <span className="absolute inset-x-1 bottom-1 truncate text-left [text-shadow:0_1px_3px_rgba(0,0,0,.8)]">
+                {String(index + 1).padStart(2, '0')}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-1.5 grid grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-2">
+        <strong className="flex items-center gap-1 text-[0.58rem] text-[#6e655b]">
+          <Mic className="size-3" /> 对白
+        </strong>
+        <div className="flex h-6 overflow-hidden rounded-md bg-[#cfd8c8] text-[0.52rem] text-[#52634f]">
+          {scenes.map(scene => (
+            <span
+              className="grid place-items-center border-r border-white/45 px-2"
+              key={scene.id}
+              style={{ width: `${Math.max(8, (scene.duration / totalDuration) * 100)}%` }}
+            >
+              {scene.purpose || '镜头对白'}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="mt-1.5 grid grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-2">
+        <strong className="flex items-center gap-1 text-[0.58rem] text-[#6e655b]">
+          <AudioLines className="size-3" /> 音乐
+        </strong>
+        <div className="flex h-6 items-center overflow-hidden rounded-md bg-[#c8d5e7] px-2 text-[0.52rem] text-[#536a86] [background-image:repeating-linear-gradient(90deg,transparent_0_5px,rgba(83,106,134,.3)_5px_7px,transparent_7px_10px)]">
+          {Object.values(audio).some(Boolean) ? '音乐 / 旁白轨已绑定' : '声音轨待生成或选择'}
+        </div>
+      </div>
+      <div className="mt-1.5 grid grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-2">
+        <strong className="flex items-center gap-1 text-[0.58rem] text-[#6e655b]">
+          <FileImage className="size-3" /> 字幕
+        </strong>
+        <div className="flex h-6 items-center rounded-md bg-[#e8dcc6] px-2 text-[0.52rem] text-[#806f55]">
+          {captions.length ? `${captions.length} 条字幕已进入时间线` : '字幕轨待生成'}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function SceneImage({ asset }: { asset: MediaAssetProjection }) {
+  const [source, setSource] = useState('')
+  useEffect(() => {
+    if (!asset.playback_path) {
+      return
+    }
+
+    let cancelled = false
+
+    const reader = isRemoteGateway()
+      ? gatewayMediaDataUrl(asset.playback_path)
+      : window.hermesDesktop?.readFileDataUrl(asset.playback_path)
+
+    void reader
+      ?.then(value => {
+        if (!cancelled) {
+          setSource(value)
+        }
+      })
+      .catch(() => undefined)
+
+    return () => {
+      cancelled = true
+    }
+  }, [asset.playback_path])
+
+  return source ? <img alt={asset.name} className="size-full object-cover" src={source} /> : null
+}
+
+function ProductionStatus({ status }: { status: string }) {
+  const labels: Record<string, string> = {
+    approved: '已批准',
+    completed: '已出片',
+    failed: '需恢复',
+    prepared: '待批准',
+    running: '渲染中'
+  }
+
+  return (
+    <span
+      className={`rounded-full px-2 py-1 text-[0.58rem] font-semibold ${
+        status === 'completed'
+          ? 'bg-emerald-600/10 text-emerald-700'
+          : status === 'failed'
+            ? 'bg-red-600/10 text-red-700'
+            : status === 'running'
+              ? 'bg-amber-600/10 text-amber-700'
+              : 'bg-(--ui-button-hover-background) text-(--ui-text-tertiary)'
+      }`}
+    >
+      {status === 'running' ? <Clock className="mr-1 inline size-3" /> : null}
+      {labels[status] || status}
+    </span>
+  )
+}
+
+function MetaChip({ label }: { label: string }) {
+  return (
+    <span className="rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-background)/65 px-2 py-1 text-[0.62rem] text-(--ui-text-tertiary)">
+      {label}
+    </span>
+  )
+}
+
+function StatBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-(--ui-button-hover-background) px-3 py-2.5">
+      <small className="block text-[0.58rem] text-(--ui-text-quaternary)">{label}</small>
+      <strong className="mt-1 block truncate text-xs">{value}</strong>
+    </div>
+  )
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <dt className="shrink-0 text-(--ui-text-quaternary)">{label}</dt>
+      <dd className="min-w-0 text-right text-(--ui-text-secondary)">{value}</dd>
+    </div>
+  )
+}
+
+export function ratioLabel(canvas: CanvasSpec): string {
+  const ratio = canvas.width / canvas.height
+  const preset = COMMON_RATIOS.find(item => Math.abs(ratio - item.width / item.height) < 0.015)
+
+  if (preset) {
+    return preset.label
+  }
+
+  const divisor = greatestCommonDivisor(canvas.width, canvas.height)
+
+  return `${Math.round(canvas.width / divisor)}:${Math.round(canvas.height / divisor)}`
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+  let a = Math.max(1, Math.round(left))
+  let b = Math.max(1, Math.round(right))
+
+  while (b) {
+    ;[a, b] = [b, a % b]
+  }
+
+  return a
+}
+
+export function previewFrameStyle(canvas: CanvasSpec) {
+  const ratio = canvas.width / canvas.height
+
+  return {
+    aspectRatio: `${canvas.width} / ${canvas.height}`,
+    width: ratio >= 1.35 ? 'min(100%, 52rem)' : ratio >= 0.9 ? 'min(78%, 32rem)' : 'min(58%, 21rem)'
+  }
+}
+
+function playbackUrl(path: string): string {
+  return isRemoteGateway() ? mediaExternalUrl(path) : mediaStreamUrl(path)
+}
+
+function formatDuration(seconds: number): string {
+  const safe = Math.max(0, Number(seconds || 0))
+  const minutes = Math.floor(safe / 60)
+  const remainder = safe - minutes * 60
+
+  return minutes ? `${minutes}:${remainder.toFixed(1).padStart(4, '0')}` : `${remainder.toFixed(1)}s`
+}
+
+function rendererLabel(renderer?: string): string {
+  return (
+    {
+      ffmpeg_timeline_v1: 'FFmpeg',
+      hyperframes_scene_v1: 'HyperFrames',
+      remotion_scene_v1: 'Remotion'
+    }[renderer || ''] || '待生成'
+  )
+}
+
+function fitLabel(fit?: string): string {
+  return (
+    {
+      contain: '完整显示',
+      cover: '铺满画面',
+      fill: '拉伸填满'
+    }[fit || ''] || '铺满画面'
+  )
+}
+
+function inferDirectorStage(status: string, reviewStatus: string): DirectorStage {
+  if (status === 'completed' || reviewStatus === 'accepted' || reviewStatus === 'changes_requested') {
+    return 'final'
+  }
+
+  if (status === 'running') {
+    return 'edit'
+  }
+
+  if (status === 'approved') {
+    return 'dynamic'
+  }
+
+  if (status === 'prepared') {
+    return 'storyboard'
+  }
+
+  return 'setup'
+}
+
+function stageLabel(stage: DirectorStage): string {
+  return DIRECTOR_STAGES.find(item => item.id === stage)?.label || '设定'
+}
+
+function operationStartingLabel(kind: MarketingOperationIntent['kind']): string {
+  const labels: Partial<Record<MarketingOperationIntent['kind'], string>> = {
+    'video.asset.select': '正在切换镜头版本…',
+    'video.autopilot': '正在启动全自动推进…',
+    'video.export': '正在核对成片导出条件…',
+    'video.revision': '正在创建审片返修任务…',
+    'video.scene.add': '正在建立新镜头任务…',
+    'video.stage.confirm': '正在核对当前阶段…',
+    'video.stage.modify': '正在提交当前阶段修改…',
+    'video.version.generate': '正在创建新的镜头版本…'
+  }
+
+  return labels[kind] || '正在启动视频任务…'
+}
+
+function videoOperationStateLabel(state: VideoOperationProgress['state']): string {
+  return {
+    complete: '执行完成，工作台已同步最新结果。',
+    error: '任务没有启动，当前项目没有被修改。',
+    starting: '正在绑定当前项目、阶段和镜头。',
+    waiting: 'Agent 正在等待确认；可以打开执行详情继续。',
+    working: 'Agent 正在后台执行，离开当前页面也不会中断。'
+  }[state]
+}
+
+function assetMatchesTab(asset: MediaAssetProjection, tab: InspectorTab): boolean {
+  const role = `${asset.role || ''} ${asset.name || ''}`.toLowerCase()
+
+  if (tab === 'sound') {
+    return asset.media_type === 'audio'
+  }
+
+  if (tab === 'characters') {
+    return /character|avatar|person|人物|角色/.test(role)
+  }
+
+  if (tab === 'props') {
+    return /prop|product|object|道具|产品/.test(role)
+  }
+
+  if (tab === 'scenes') {
+    return asset.media_type !== 'audio' && /scene|background|location|场景|背景/.test(role)
+  }
+
+  return asset.media_type !== 'audio'
+}
+
+function setupAssetMatches(asset: MediaAssetProjection, category: SetupCategory): boolean {
+  if (category !== 'scenes') {
+    return assetMatchesTab(asset, category)
+  }
+
+  const role = `${asset.role || ''} ${asset.name || ''}`.toLowerCase()
+
+  return (
+    asset.media_type !== 'audio' &&
+    !/character|avatar|person|portrait|host|人物|角色|主播|prop|product|object|道具|产品/.test(role)
+  )
+}
+
+function pathLabel(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path
+}

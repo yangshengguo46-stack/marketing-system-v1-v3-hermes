@@ -22,6 +22,9 @@ from urllib.parse import urlsplit
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.evidence import EvidenceRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
+from agent.marketing.domains.human_model import (
+    build_human_projection_model,
+)
 from agent.marketing.intelligence.influence_score import (
     INFLUENCE_SCORE_VERSION,
     apply_influence_weight_adjustment,
@@ -472,6 +475,7 @@ class AccountStrategyRepository(MarketingDomainRepository):
         evidence_refs: list[str],
         confidence: float,
         observed_at: str | None = None,
+        source_candidate_id: str = "",
     ) -> dict[str, Any]:
         if dimension not in BENCHMARK_DIMENSIONS:
             raise ValueError("unsupported benchmark observation dimension")
@@ -503,7 +507,15 @@ class AccountStrategyRepository(MarketingDomainRepository):
                     _json(value, field="observation", limit=20_000),
                     _json(refs, field="evidence_refs", limit=12_000),
                     _json(
-                        {"source_kind": "verified_evidence", "evidence_refs": refs},
+                        {
+                            "source_kind": "verified_evidence",
+                            "evidence_refs": refs,
+                            **(
+                                {"source_learning_candidate_id": source_candidate_id}
+                                if source_candidate_id
+                                else {}
+                            ),
+                        },
                         field="provenance", limit=12_000,
                     ),
                     _confidence(confidence),
@@ -518,6 +530,122 @@ class AccountStrategyRepository(MarketingDomainRepository):
             user_id=user_id, account_id=account_id, project_id=project_id,
             observation_id=observation_id,
         )
+
+    def apply_public_benchmark_learning(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        candidate_id: str,
+        proposal: dict[str, Any],
+        evidence_refs: list[str],
+        confidence: float,
+    ) -> dict[str, Any]:
+        """Idempotently project one explicitly accepted public observation."""
+
+        kind = str(proposal.get("kind") or "")
+        if kind not in {
+            "public_benchmark_account_candidate",
+            "public_benchmark_observation",
+        }:
+            raise ValueError("unsupported public benchmark learning kind")
+        project_id = str(proposal.get("project_id") or "").strip()
+        projection = proposal.get("benchmark_projection") or {}
+        public_source = proposal.get("public_source") or {}
+        creator = public_source.get("creator") or {}
+        observations = projection.get("observation_dimensions") or {}
+        if not project_id or not isinstance(observations, dict) or not observations:
+            raise ValueError("public benchmark learning is incomplete")
+        source_marker = f'%"source_learning_candidate_id":"{candidate_id}"%'
+        benchmark_id = str(proposal.get("benchmark_id") or "").strip()
+        if kind == "public_benchmark_account_candidate":
+            with self._connection() as db:
+                existing = db.execute(
+                    """SELECT id FROM benchmark_accounts
+                    WHERE project_id=? AND user_id=? AND target_account_id=?
+                    AND metadata_json LIKE ? ORDER BY created_at LIMIT 1""",
+                    (project_id, user_id, account_id, source_marker),
+                ).fetchone()
+            if existing is not None:
+                benchmark_id = existing["id"]
+            else:
+                handle = str(
+                    creator.get("handle")
+                    or creator.get("platform_account_id")
+                    or creator.get("name")
+                    or ""
+                ).strip()
+                benchmark = self.add_benchmark_account(
+                    user_id=user_id,
+                    account_id=account_id,
+                    project_id=project_id,
+                    platform=str(public_source.get("platform") or ""),
+                    account_handle=handle,
+                    account_name=str(creator.get("name") or ""),
+                    platform_account_id=str(creator.get("platform_account_id") or ""),
+                    profile_url=str(creator.get("profile_url") or ""),
+                    role=str(projection.get("suggested_role") or ""),
+                    selection_reason=str(projection.get("selection_reason") or ""),
+                    match_dimensions=projection.get("match_dimensions") or {},
+                    evidence_refs=evidence_refs,
+                    metadata={
+                        "source_learning_candidate_id": candidate_id,
+                        "source_kind": "public_content_natural_experiment",
+                    },
+                )
+                benchmark_id = benchmark["id"]
+        else:
+            self.get_benchmark_account(
+                user_id=user_id,
+                account_id=account_id,
+                project_id=project_id,
+                benchmark_id=benchmark_id,
+            )
+
+        created = []
+        for dimension, value in observations.items():
+            with self._connection() as db:
+                existing = db.execute(
+                    """SELECT id FROM benchmark_observations
+                    WHERE benchmark_account_id=? AND dimension=? AND provenance_json LIKE ?
+                    ORDER BY created_at LIMIT 1""",
+                    (benchmark_id, dimension, source_marker),
+                ).fetchone()
+            if existing is not None:
+                created.append(
+                    self.get_benchmark_observation(
+                        user_id=user_id,
+                        account_id=account_id,
+                        project_id=project_id,
+                        observation_id=existing["id"],
+                    )
+                )
+                continue
+            created.append(
+                self.add_benchmark_observation(
+                    user_id=user_id,
+                    account_id=account_id,
+                    project_id=project_id,
+                    benchmark_id=benchmark_id,
+                    dimension=dimension,
+                    value=value if isinstance(value, dict) else {"value": value},
+                    evidence_refs=evidence_refs,
+                    confidence=min(float(confidence), 0.7),
+                    source_candidate_id=candidate_id,
+                )
+            )
+        return {
+            "benchmark": self.get_benchmark_account(
+                user_id=user_id,
+                account_id=account_id,
+                project_id=project_id,
+                benchmark_id=benchmark_id,
+            ),
+            "observations": created,
+            "selection_guardrail": (
+                "A new public benchmark remains a candidate until separately selected by the user."
+            ),
+        }
 
     def get_benchmark_account(
         self, *, user_id: str, account_id: str, project_id: str, benchmark_id: str
@@ -1174,6 +1302,19 @@ def _creator_profile(value: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
             raise ValueError(f"profile field {key} must be an object")
         payload[key] = raw
+    payload["human_projection_model"] = build_human_projection_model(
+        need_projections=value.get("need_projection_hypotheses"),
+        cognitive_projections=(
+            value.get("cognitive_projection_hypotheses")
+            if value.get("cognitive_projection_hypotheses") is not None
+            else value.get("cognitive_style_hypotheses")
+        ),
+        existence_strategies=(
+            value.get("existence_strategy_hypotheses")
+            if value.get("existence_strategy_hypotheses") is not None
+            else value.get("existence_hypotheses")
+        ),
+    )
     if not any(payload[key] for key in ("experiences", "skills", "proof_assets")):
         raise ValueError("profile requires experience, skill, or proof assets")
     return payload
@@ -1370,6 +1511,22 @@ def _audience_record(row) -> dict[str, Any]:
         "behavior_signals_json", "exclusions_json", "data_gaps_json",
     ):
         value[key.removesuffix("_json")] = json.loads(value.pop(key) or "[]")
+    legacy_strategies = json.loads(value.pop("existence_hypotheses_json", "[]") or "[]")
+    legacy_cognition = json.loads(
+        value.pop("cognitive_style_hypotheses_json", "[]") or "[]"
+    )
+    strategies = json.loads(
+        value.pop("existence_strategy_hypotheses_json", "[]") or "[]"
+    )
+    needs = json.loads(value.pop("need_projection_hypotheses_json", "[]") or "[]")
+    cognition = json.loads(
+        value.pop("cognitive_projection_hypotheses_json", "[]") or "[]"
+    )
+    value["human_projection_model"] = build_human_projection_model(
+        need_projections=needs,
+        cognitive_projections=cognition or legacy_cognition,
+        existence_strategies=strategies or legacy_strategies,
+    )
     return value
 
 

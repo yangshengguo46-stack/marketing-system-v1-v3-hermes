@@ -18,6 +18,14 @@ from agent.marketing.domains.short_video_signals import ShortVideoSignalReposito
 from agent.marketing.intelligence.content_feature_snapshot import (
     build_content_feature_snapshot,
 )
+from agent.marketing.intelligence.audience_reaction_simulation import (
+    build_social_reaction_simulation,
+)
+from agent.marketing.intelligence.content_prediction import attach_prediction_dimensions
+from agent.marketing.intelligence.social_system_simulation import (
+    build_social_system_simulation,
+)
+from agent.marketing.intelligence.store import OperatingLoopRepository
 
 
 ASSET_TYPES = {"script", "video", "image", "caption"}
@@ -56,6 +64,7 @@ class ContentAssetRepository(MarketingDomainRepository):
                 "objective": objective,
                 "platforms": platforms,
                 "constraints": plan.get("constraints") or {},
+                "audience_model": plan.get("audience_model") or {},
                 "experiment_id": experiment_id,
             },
             ensure_ascii=False,
@@ -126,11 +135,20 @@ class ContentAssetRepository(MarketingDomainRepository):
         hook: str = "",
         evidence_refs: list[str] | None = None,
         memory_refs: list[str] | None = None,
+        reaction_scenarios: list[dict[str, Any]] | None = None,
+        revision_of: str = "",
     ) -> dict[str, Any]:
         if production_kind == "article_soft":
             raise ValueError(
                 "article_soft drafts must use the validated article bundle path"
             )
+        parent_id, asset_version = self._faceless_revision_parent(
+            revision_of=revision_of,
+            user_id=user_id,
+            account_id=account_id,
+            plan_id=plan_id,
+            platform=platform,
+        )
         return self._save_draft(
             user_id=user_id,
             account_id=account_id,
@@ -144,7 +162,136 @@ class ContentAssetRepository(MarketingDomainRepository):
             hook=hook,
             evidence_refs=evidence_refs,
             memory_refs=memory_refs,
+            reaction_scenarios=reaction_scenarios,
+            parent_id=parent_id,
+            asset_version=asset_version,
         )
+
+    def create_faceless_render_revision(
+        self,
+        *,
+        parent_asset_id: str,
+        user_id: str,
+        account_id: str,
+        production: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create the immutable, reviewable version produced by a render job."""
+
+        production_id = str(production.get("production_id") or "").strip()
+        if not production_id or len(production_id) > 200:
+            raise ValueError("render production_id is required")
+        with self._connection() as db:
+            prior_rows = db.execute(
+                """SELECT * FROM content_assets
+                WHERE user_id=? AND account_id=? AND type='video'
+                ORDER BY created_at ASC""",
+                (user_id, account_id),
+            ).fetchall()
+        for row in prior_rows:
+            prior_content = json.loads(row["content_json"] or "{}")
+            prior_production = prior_content.get("production") or {}
+            if prior_production.get("production_id") == production_id:
+                return _record(row)
+
+        parent = self.get(
+            asset_id=parent_asset_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        previous = parent.get("content") if isinstance(parent.get("content"), dict) else {}
+        if previous.get("_production_kind") != "faceless_video":
+            raise ValueError("render revision parent is not a faceless video asset")
+        plan_id = str(previous.get("_production_plan_id") or "").strip()
+        if not plan_id:
+            raise ValueError("render revision parent has no production plan")
+        parent_id, asset_version = self._faceless_revision_parent(
+            revision_of=parent_asset_id,
+            user_id=user_id,
+            account_id=account_id,
+            plan_id=plan_id,
+            platform=str(parent.get("platform") or ""),
+        )
+        payload = {
+            key: value
+            for key, value in previous.items()
+            if not str(key).startswith("_") and key != "feature_snapshot"
+        }
+        payload["schema"] = "marketing.faceless_video.v1"
+        payload["production"] = production
+        payload["review_status"] = "ready_for_human_review"
+        validation = (
+            dict(payload.get("validation"))
+            if isinstance(payload.get("validation"), dict)
+            else {}
+        )
+        validation.update(
+            {
+                "version": "marketing.faceless_video_validation.v1",
+                "ready": True,
+                "issues": [],
+                "pending_human_checks": [
+                    "pacing and account fit",
+                    "caption timing and readability",
+                    "visual rights and final preview",
+                    "voice and background sound balance",
+                ],
+            }
+        )
+        payload["validation"] = validation
+        prediction = previous.get("prediction")
+        reaction = (
+            prediction.get("social_reaction_simulation")
+            if isinstance(prediction, dict)
+            and isinstance(prediction.get("social_reaction_simulation"), dict)
+            else {}
+        )
+        return self._save_draft(
+            user_id=user_id,
+            account_id=account_id,
+            title=str(parent.get("title") or "不露脸视频"),
+            plan_id=plan_id,
+            asset_type="video",
+            platform=str(parent.get("platform") or ""),
+            production_kind="faceless_video",
+            content=payload,
+            topic=str(parent.get("topic") or ""),
+            hook=str(parent.get("hook") or ""),
+            evidence_refs=list(previous.get("_provenance_evidence_refs") or []),
+            memory_refs=list(previous.get("_provenance_memory_refs") or []),
+            reaction_scenarios=list(reaction.get("scenarios") or []),
+            asset_status="review_ready",
+            plan_checkpoint_status="review_ready",
+            parent_id=parent_id,
+            asset_version=asset_version,
+        )
+
+    def _faceless_revision_parent(
+        self,
+        *,
+        revision_of: str,
+        user_id: str,
+        account_id: str,
+        plan_id: str,
+        platform: str,
+    ) -> tuple[str | None, int]:
+        revision_value = str(revision_of or "").strip()
+        if not revision_value:
+            return None, 1
+        parent = self.get(
+            asset_id=revision_value,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        content = parent.get("content") if isinstance(parent.get("content"), dict) else {}
+        if content.get("_production_kind") != "faceless_video":
+            raise ValueError("faceless revision parent has the wrong production kind")
+        if content.get("_production_plan_id") != str(plan_id or "").strip():
+            raise ValueError("faceless revision must keep the same production plan")
+        if parent.get("platform") != platform or parent.get("type") not in {"script", "video"}:
+            raise ValueError("faceless revision must keep the same platform and asset lane")
+        if parent.get("status") in {"superseded", "approved", "published"}:
+            raise ValueError(f"faceless revision cannot branch from {parent.get('status')}")
+        return str(parent["id"]), int(parent.get("version") or 1) + 1
 
     def get_production_plan(
         self, *, plan_id: str, user_id: str, account_id: str
@@ -174,6 +321,7 @@ class ContentAssetRepository(MarketingDomainRepository):
         topic: str = "",
         hook: str = "",
         revision_of: str = "",
+        reaction_scenarios: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         plan_id_value = _bounded_text(plan_id, "plan_id", 120)
         with self._connection() as db:
@@ -238,6 +386,7 @@ class ContentAssetRepository(MarketingDomainRepository):
             hook=hook,
             evidence_refs=evidence_refs,
             memory_refs=[],
+            reaction_scenarios=reaction_scenarios,
             allow_multi_article=True,
             asset_status="review_ready" if ready else "draft",
             plan_checkpoint_status="review_ready" if ready else "draft_created",
@@ -260,6 +409,7 @@ class ContentAssetRepository(MarketingDomainRepository):
         hook: str = "",
         evidence_refs: list[str] | None = None,
         memory_refs: list[str] | None = None,
+        reaction_scenarios: list[dict[str, Any]] | None = None,
         allow_multi_article: bool = False,
         asset_status: str = "draft",
         plan_checkpoint_status: str = "draft_created",
@@ -301,6 +451,14 @@ class ContentAssetRepository(MarketingDomainRepository):
         encoded = _bounded_json(payload, "content", 500_000)
         now = _now()
         asset_id = f"asset_{uuid.uuid4().hex}"
+        try:
+            persisted_preflight = OperatingLoopRepository(self.paths).latest_preflight_for_plan(
+                plan_id=plan_id_value,
+                user_id=user_id,
+                account_id=account_id,
+            )
+        except ValueError:
+            persisted_preflight = None
         with self._transaction() as db:
             plan_row = db.execute(
                 """SELECT * FROM content_production_plans
@@ -323,6 +481,60 @@ class ContentAssetRepository(MarketingDomainRepository):
             experiment_id = str(plan_row["experiment_id"] or "").strip() or None
             payload["_experiment_id"] = experiment_id
             plan_payload = json.loads(plan_row["plan_json"])
+            audience_context = plan_payload.get("audience_model") or {}
+            social_reaction_simulation = build_social_reaction_simulation(
+                scenarios=reaction_scenarios,
+                audience_context=audience_context,
+                content_context={
+                    "title": title_value,
+                    "topic": topic,
+                    "hook": hook,
+                    "objective": plan_row["objective"],
+                },
+                platforms=plan_platforms,
+                evidence_refs=[item["id"] for item in verified_evidence],
+            )
+            prediction = payload.get("prediction")
+            if not isinstance(prediction, dict):
+                prediction = {}
+            prediction = dict(prediction)
+            if persisted_preflight is not None:
+                preflight_scores = persisted_preflight.get("scores") or {}
+                normalized_scores = {
+                    "topic": float(preflight_scores.get("audience_fit") or 0) * 10,
+                    "hook": float(preflight_scores.get("platform_fit") or 0) * 10,
+                    "pacing": float(preflight_scores.get("production_feasibility") or 0) * 10,
+                    "density": float(preflight_scores.get("evidence_strength") or 0) * 10,
+                    "viewpoint": float(preflight_scores.get("strategy_fit") or 0) * 10,
+                    "cta": float(preflight_scores.get("audience_fit") or 0) * 10,
+                    "sound_fit": float(preflight_scores.get("sound_fit") or 0) * 10,
+                }
+                prediction["confidence"] = str(prediction.get("confidence") or "low")
+                prediction["platforms"] = list(
+                    prediction.get("platforms") or plan_platforms
+                )
+                prediction["basis"] = list(
+                    dict.fromkeys(
+                        [
+                            *(prediction.get("basis") or []),
+                            f"preflight:{persisted_preflight['id']}",
+                            str(persisted_preflight.get("formula_version") or ""),
+                        ]
+                    )
+                )
+                prediction = attach_prediction_dimensions(
+                    prediction,
+                    kind=production_kind,
+                    scores=normalized_scores,
+                    evidence_ready=bool(verified_evidence),
+                )
+            prediction["social_reaction_simulation"] = social_reaction_simulation
+            prediction["social_system_simulation"] = build_social_system_simulation(
+                prediction=prediction,
+                reaction=social_reaction_simulation,
+                plan=plan_payload,
+            )
+            payload["prediction"] = prediction
             sound_plan = payload.get("sound_plan")
             if production_kind == "faceless_video":
                 sound_plan = _validated_sound_plan(
@@ -344,7 +556,7 @@ class ContentAssetRepository(MarketingDomainRepository):
                 hook=hook,
                 account_id=account_id,
                 platforms=plan_platforms,
-                audience_context=plan_payload.get("account_scope") or {},
+                audience_context=audience_context,
                 evidence=verified_evidence,
                 structure={
                     "content_schema": payload.get("schema") or asset_type,
@@ -352,6 +564,7 @@ class ContentAssetRepository(MarketingDomainRepository):
                 },
                 material_context=payload.get("material_manifest") or {},
                 sound_context=sound_plan if isinstance(sound_plan, dict) else None,
+                prediction=prediction,
                 risks=(payload.get("validation") or {}).get("issues") or [],
             )
             encoded = _bounded_json(payload, "content", 500_000)
@@ -418,6 +631,59 @@ class ContentAssetRepository(MarketingDomainRepository):
         if row is None:
             raise KeyError("content asset not found in account scope")
         return _record(row)
+
+    def record_human_review(
+        self,
+        *,
+        asset_id: str,
+        user_id: str,
+        account_id: str,
+        decision: str,
+        note: str = "",
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        """Persist the user's decision for this immutable asset version."""
+
+        if confirmed is not True:
+            raise ValueError("explicit human review confirmation is required")
+        decision_value = str(decision or "").strip().lower()
+        if decision_value not in {"accepted", "changes_requested"}:
+            raise ValueError("human review decision must be accepted or changes_requested")
+        note_value = str(note or "").strip()[:2_000]
+        if decision_value == "changes_requested" and not note_value:
+            raise ValueError("changes_requested requires a review note")
+        with self._transaction() as db:
+            row = db.execute(
+                """SELECT status,human_review_status,human_review_note FROM content_assets
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (asset_id, user_id, account_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("content asset not found in account scope")
+            if row["status"] in {"superseded", "approved", "published"}:
+                raise ValueError(f"content asset cannot be reviewed from {row['status']}")
+            if decision_value == "accepted" and row["status"] != "review_ready":
+                raise ValueError("only a review_ready asset can be accepted by the user")
+            if (
+                row["human_review_status"] != decision_value
+                or row["human_review_note"] != note_value
+            ):
+                reviewed_at = _now()
+                db.execute(
+                    """UPDATE content_assets
+                    SET human_review_status=?,human_review_note=?,human_reviewed_at=?,updated_at=?
+                    WHERE id=? AND user_id=? AND account_id=?""",
+                    (
+                        decision_value,
+                        note_value,
+                        reviewed_at,
+                        reviewed_at,
+                        asset_id,
+                        user_id,
+                        account_id,
+                    ),
+                )
+        return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
 
     def list(
         self,
@@ -498,6 +764,9 @@ class ContentAssetRepository(MarketingDomainRepository):
                         "topic",
                         "hook",
                         "version",
+                        "human_review_status",
+                        "human_review_note",
+                        "human_reviewed_at",
                         "created_at",
                         "updated_at",
                     )
@@ -529,6 +798,9 @@ class ContentAssetRepository(MarketingDomainRepository):
                     topic TEXT,
                     hook TEXT,
                     version INTEGER NOT NULL DEFAULT 1,
+                    human_review_status TEXT NOT NULL DEFAULT 'pending',
+                    human_review_note TEXT NOT NULL DEFAULT '',
+                    human_reviewed_at TEXT,
                     content_json TEXT NOT NULL DEFAULT '{}',
                     metrics_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
@@ -687,6 +959,10 @@ def _validated_sound_plan(
                 "rights_status": sound["rights_status"],
             }
         )
+    elif mode in {"custom_licensed", "original_music"}:
+        music_asset_id = str(value.get("music_asset_id") or "").strip()
+        if music_asset_id:
+            result["music_asset_id"] = music_asset_id[:160]
     return result
 
 

@@ -65,14 +65,19 @@ export interface I18nContextValue {
   t: Translations
 }
 
+// Components rendered outside the app provider (primarily focused unit tests)
+// use English in test mode so inherited behavioral assertions stay copy-neutral.
+// The real app is always provider-wrapped and still defaults to Chinese.
+const CONTEXT_FALLBACK_LOCALE: Locale = import.meta.env.MODE === 'test' ? 'en' : DEFAULT_LOCALE
+
 const I18nContext = createContext<I18nContextValue>({
   configLoadError: null,
   isLoadingConfig: false,
   isSavingLocale: false,
-  locale: DEFAULT_LOCALE,
+  locale: CONTEXT_FALLBACK_LOCALE,
   saveError: null,
   setLocale: async () => {},
-  t: TRANSLATIONS[DEFAULT_LOCALE]
+  t: TRANSLATIONS[CONTEXT_FALLBACK_LOCALE]
 })
 
 export interface I18nProviderProps {

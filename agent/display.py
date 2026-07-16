@@ -426,7 +426,7 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
         "search_files": "pattern", "browser_navigate": "url",
         "browser_click": "ref", "browser_type": "text",
         "image_generate": "prompt", "text_to_speech": "text",
-        "vision_analyze": "question",
+        "vision_analyze": "question", "video_analyze": "question",
         "skill_view": "name", "skills_list": "category",
         "cronjob": "action",
         "execute_code": "code", "delegate_task": "goal",
@@ -1275,6 +1275,9 @@ def get_cute_tool_message(
         return _wrap(f"┊ 🔊 speak     {_trunc(args.get('text', ''), 30)}  {dur}")
     if tool_name == "vision_analyze":
         return _wrap(f"┊ 👁️  vision    {_trunc(args.get('question', ''), 30)}  {dur}")
+    if tool_name == "video_analyze":
+        mode = args.get("analysis_mode", "auto")
+        return _wrap(f"┊ 🎬 inspect   {_trunc(args.get('question', ''), 27)} [{mode}] {dur}")
     if tool_name == "send_message":
         return _wrap(f"┊ 📨 send      {args.get('target', '?')}: \"{_trunc(args.get('message', ''), 25)}\"  {dur}")
     if tool_name == "cronjob":
@@ -1306,5 +1309,4 @@ def get_cute_tool_message(
 # =========================================================================
 # Honcho session line (one-liner with clickable OSC 8 hyperlink)
 # =========================================================================
-
 

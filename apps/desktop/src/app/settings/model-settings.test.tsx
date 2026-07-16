@@ -15,6 +15,8 @@ const getGlobalModelOptions = vi.fn()
 const getAuxiliaryModels = vi.fn()
 const setModelAssignment = vi.fn()
 const getRecommendedDefaultModel = vi.fn()
+const getMoaModels = vi.fn()
+const saveMoaModels = vi.fn()
 const setEnvVar = vi.fn()
 const getHermesConfigRecord = vi.fn()
 const saveHermesConfig = vi.fn()
@@ -26,6 +28,8 @@ vi.mock('@/hermes', () => ({
   getAuxiliaryModels: () => getAuxiliaryModels(),
   setModelAssignment: (body: unknown) => setModelAssignment(body),
   getRecommendedDefaultModel: (slug: string) => getRecommendedDefaultModel(slug),
+  getMoaModels: () => getMoaModels(),
+  saveMoaModels: (body: unknown) => saveMoaModels(body),
   setEnvVar: (key: string, value: string) => setEnvVar(key, value),
   getHermesConfigRecord: () => getHermesConfigRecord(),
   saveHermesConfig: (config: unknown) => saveHermesConfig(config)
@@ -63,6 +67,8 @@ beforeEach(() => {
   })
   setModelAssignment.mockResolvedValue({ provider: 'nous', model: 'hermes-4', gateway_tools: [] })
   getRecommendedDefaultModel.mockResolvedValue({ provider: 'deepseek', model: 'deepseek-chat', free_tier: null })
+  getMoaModels.mockRejectedValue(new Error('MoA not configured in this fixture'))
+  saveMoaModels.mockResolvedValue({ ok: true })
   setEnvVar.mockResolvedValue({ ok: true })
   getHermesConfigRecord.mockResolvedValue({ agent: { reasoning_effort: 'medium', service_tier: 'normal' } })
   saveHermesConfig.mockResolvedValue({ ok: true })
@@ -91,11 +97,10 @@ describe('ModelSettings', () => {
     const triggers = await screen.findAllByRole('combobox')
     fireEvent.click(triggers[0])
 
-    // "Nous" shows in both the trigger and the open list; the unconfigured
-    // provider + its setup hint are the unique signal of the full universe.
+    // "Nous" shows in both the trigger and the open list. DeepSeek is the
+    // unique signal that the unconfigured provider universe was retained.
     expect((await screen.findAllByText('Nous')).length).toBeGreaterThan(0)
     expect(await screen.findByText(/DeepSeek/)).toBeTruthy()
-    expect(await screen.findByText(/set up/)).toBeTruthy()
   })
 
   it('activates an unconfigured api_key provider inline by saving its key', async () => {

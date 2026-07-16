@@ -18,6 +18,9 @@ from agent.marketing.intelligence import (
 )
 from agent.marketing.intelligence.influence_score import build_influence_score
 from agent.marketing.intelligence.content_prediction import build_prediction_dimensions
+from agent.marketing.intelligence.audience_reaction_simulation import (
+    build_social_reaction_simulation,
+)
 from agent.marketing.intelligence.content_retro import reconcile, retro_to_dict
 from agent.marketing.intelligence.content_rubric import OPINION_VIDEO_RUBRIC, score_content
 from agent.marketing.intelligence.learning_governance import (
@@ -75,7 +78,14 @@ def _saved_plan(tmp_path, *, strategy_ready=True):
     return paths, saved
 
 
-def _review_ready_asset(tmp_path, *, strategy_ready=True, suffix="1"):
+def _review_ready_asset(
+    tmp_path,
+    *,
+    strategy_ready=True,
+    suffix="1",
+    with_reaction=False,
+    human_reviewed=True,
+):
     paths, plan = _saved_plan(tmp_path, strategy_ready=strategy_ready)
     loop = OperatingLoopRepository(paths)
     preflight = create_content_production_preflight(
@@ -98,6 +108,55 @@ def _review_ready_asset(tmp_path, *, strategy_ready=True, suffix="1"):
         },
         "feature_snapshot": {"version": "test"},
     }
+    if with_reaction:
+        scenarios = [
+            {
+                "cohort": cohort,
+                "cohort_relation": relation,
+                "stance": stance,
+                "need_projection": {
+                    "confirm": "belonging",
+                    "preserve": "safety",
+                    "expand": "self_actualization",
+                }[direction],
+                "cognitive_projection": {
+                    "confirm": "Fe",
+                    "preserve": "Ti",
+                    "expand": "Te",
+                }[direction],
+                "existence_strategy": direction,
+                "likelihood_band": "medium",
+                "trigger": trigger,
+                "rationale": rationale,
+                "likely_comment_themes": [theme],
+                "synthetic_comment_examples": [example],
+                "evidence_basis": [],
+                "disconfirming_signals": [f"真实评论没有{theme}主题"],
+            }
+            for cohort, relation, stance, direction, trigger, rationale, theme, example in (
+                (
+                    "目标职场读者", "target", "experience_sharing", "confirm",
+                    "可复现工作流", "读者可能分享自己的实践", "实践经验", "我也试过类似流程。",
+                ),
+                (
+                    "谨慎读者", "adjacent", "skeptical", "preserve",
+                    "效率承诺", "读者可能先检查成本", "证据边界", "复核成本怎么算？",
+                ),
+                (
+                    "行动型读者", "target", "action_seeking", "expand",
+                    "明确步骤", "读者可能询问第一步", "执行方法", "从哪个任务开始？",
+                ),
+            )
+        ]
+        content["prediction"] = {
+            "social_reaction_simulation": build_social_reaction_simulation(
+                scenarios=scenarios,
+                audience_context=plan.get("audience_model") or {},
+                content_context={"title": "测试文章", "topic": "AI 工作流"},
+                platforms=["zhihu"],
+                evidence_refs=[],
+            )
+        }
     with ContentAssetRepository(paths)._transaction() as db:
         db.execute(
             """INSERT INTO content_assets
@@ -112,6 +171,14 @@ def _review_ready_asset(tmp_path, *, strategy_ready=True, suffix="1"):
                 now,
                 now,
             ),
+        )
+    if human_reviewed:
+        ContentAssetRepository(paths).record_human_review(
+            asset_id=asset_id,
+            user_id="default",
+            account_id="acct-1",
+            decision="accepted",
+            confirmed=True,
         )
     return paths, plan, preflight, asset_id
 
@@ -130,6 +197,37 @@ def test_exploratory_draft_cannot_enter_publish_approval(tmp_path):
             platform="zhihu",
             provider="playwright_mcp",
         )
+
+
+def test_publish_prepare_requires_human_acceptance_of_current_asset_version(tmp_path):
+    paths, _plan, _preflight, asset_id = _review_ready_asset(
+        tmp_path, human_reviewed=False
+    )
+
+    with pytest.raises(ValueError, match="human review acceptance"):
+        PublishingRepository(paths).prepare_action(
+            user_id="default",
+            account_id="acct-1",
+            asset_id=asset_id,
+            platform="zhihu",
+            provider="playwright_mcp",
+        )
+
+    reviewed = ContentAssetRepository(paths).record_human_review(
+        asset_id=asset_id,
+        user_id="default",
+        account_id="acct-1",
+        decision="accepted",
+        confirmed=True,
+    )
+    assert reviewed["human_review_status"] == "accepted"
+    assert PublishingRepository(paths).prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+    )["status"] == "prepared"
 
 
 def test_influence_formula_keeps_missing_dimensions_explicit():
@@ -554,6 +652,52 @@ def test_unknown_publish_is_queryable_and_can_recover_without_retry(tmp_path):
     assert [item["label"] for item in due] == ["1h", "6h", "24h", "3d", "7d"]
 
 
+def test_publish_projection_is_bounded_scoped_and_gateway_readable(
+    tmp_path, monkeypatch
+):
+    paths, _plan, _preflight, asset_id = _review_ready_asset(tmp_path)
+    publishing = PublishingRepository(paths)
+    action = publishing.prepare_action(
+        user_id="default",
+        account_id="acct-1",
+        asset_id=asset_id,
+        platform="zhihu",
+        provider="playwright_mcp",
+    )
+    projection = publishing.get_action_projection(
+        action_id=action["id"], user_id="default", account_id="acct-1"
+    )
+    listed = publishing.list_action_summaries(
+        user_id="default", account_id="acct-1"
+    )
+
+    assert projection["summary"]["status"] == "prepared"
+    assert projection["summary"]["title"]
+    assert projection["receipt"] is None
+    assert projection["metric_checkpoints"] == []
+    assert "approval_ref" not in projection["action"]
+    assert "session_id" not in projection["action"]
+    assert listed["actions"][0]["id"] == action["id"]
+    with pytest.raises(KeyError, match="account scope"):
+        publishing.get_action_projection(
+            action_id=action["id"], user_id="default", account_id="acct-2"
+        )
+
+    monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
+    monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
+    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(paths.agent_db))
+    from tui_gateway import server
+
+    response = server._methods["marketing.publish.actions.list"](
+        "publish-list", {"account_id": "acct-1"}
+    )
+    opened = server._methods["marketing.publish.action.get"](
+        "publish-get", {"account_id": "acct-1", "action_id": action["id"]}
+    )
+    assert response["result"]["actions"][0]["id"] == action["id"]
+    assert opened["result"]["summary"]["status"] == "prepared"
+
+
 def test_three_verified_unknown_recoveries_can_become_one_native_skill(
     tmp_path, monkeypatch
 ):
@@ -707,8 +851,50 @@ class _NotReadyMetricProvider:
         }
 
 
-def _published_for_metric_loop(tmp_path, *, provider: str):
-    paths, _plan, _preflight, asset_id = _review_ready_asset(tmp_path)
+class _ObservedReactionMetricProvider:
+    name = "metric_reaction_test"
+
+    def collect_metrics(self, action, checkpoint):
+        simulation = action["request"]["prediction"]["social_reaction_simulation"]
+        return {
+            "state": "observed",
+            "social_reaction_observation": {
+                "sample_size": 9,
+                "scenario_matches": [
+                    {
+                        "scenario_id": simulation["scenarios"][0]["id"],
+                        "count": 4,
+                        "observed_themes": ["实践经验"],
+                    },
+                    {
+                        "scenario_id": simulation["scenarios"][1]["id"],
+                        "count": 2,
+                        "observed_themes": ["证据边界"],
+                    },
+                ],
+                "unexpected_clusters": [
+                    {
+                        "stance": "oppositional",
+                        "need_projection": "safety",
+                        "cognitive_projection": "Ni",
+                        "existence_strategy": "preserve",
+                        "theme": "岗位替代焦虑",
+                        "count": 2,
+                    }
+                ],
+                "question_patterns": ["复核成本如何计算"],
+                "objection_patterns": ["缺少长期样本"],
+                "data_gaps": ["仅采样可见高赞评论"],
+            },
+            "verification_source": "creator_center_anonymous_comment_clusters",
+            "observed_at": checkpoint["due_at"],
+        }
+
+
+def _published_for_metric_loop(tmp_path, *, provider: str, with_reaction=False):
+    paths, _plan, _preflight, asset_id = _review_ready_asset(
+        tmp_path, with_reaction=with_reaction
+    )
     publishing = PublishingRepository(paths)
     action = publishing.prepare_action(
         user_id="default",
@@ -786,6 +972,46 @@ def test_metric_not_ready_is_retried_without_zero_receipt(tmp_path):
         assert checkpoint["attempt_count"] == 1
         assert checkpoint["last_error"] == "platform_snapshot_lagging"
         assert OperatingLoopRepository(paths).list_learning_candidates(account_id="acct-1") == []
+    finally:
+        clear_metric_providers()
+
+
+def test_metric_loop_reconciles_anonymous_social_reaction_clusters(tmp_path):
+    clear_metric_providers()
+    register_metric_provider(_ObservedReactionMetricProvider())
+    try:
+        paths, publishing, _action, first = _published_for_metric_loop(
+            tmp_path, provider="metric_reaction_test", with_reaction=True
+        )
+        result = MetricLoopRunner(paths).run_due(as_of=first["due_at"], limit=1)
+        checkpoint = publishing.get_metric_checkpoint(first["id"])
+        loop = OperatingLoopRepository(paths)
+        receipt = loop.get_receipt(checkpoint["metric_receipt_id"])
+        candidate = loop.get_learning_candidate(result["reconciled"][0]["candidate_id"])
+        reaction_retro = candidate["proposal"]["social_reaction_retro"]
+        causal_reflection = candidate["proposal"]["causal_reflection"]
+
+        assert reaction_retro["status"] == "compared"
+        assert reaction_retro["coverage"] == pytest.approx(2 / 3, rel=1e-3)
+        assert reaction_retro["unexpected_clusters"][0]["theme"] == "岗位替代焦虑"
+        projection_retro = reaction_retro["projection_chain_retro"]
+        assert projection_retro["dimensions"]["existence_strategy"][
+            "scenario_coverage"
+        ] == {
+            "confirm": 1.0,
+            "preserve": 1.0,
+            "expand": 0.0,
+        }
+        assert causal_reflection["prediction_error"]["reaction_surprises"][
+            "projection_chain_retro"
+        ]["status"] == "compared_as_anonymous_projection_clusters"
+        observation = receipt["summary"]["social_reaction_observation"]
+        assert observation["aggregation"] == "anonymous_clusters_only"
+        assert "privacy_notice" in observation
+        assert "comments" not in observation
+        assert causal_reflection["causal_claim_allowed"] is False
+        assert causal_reflection["counterfactual"]["status"] == "unavailable"
+        assert causal_reflection["observation"]["reaction_status"] == "compared"
     finally:
         clear_metric_providers()
 

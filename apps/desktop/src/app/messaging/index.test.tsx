@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { MessagingPlatformInfo } from '@/types/hermes'
 
+import { MessagingView } from './index'
+
 const getMessagingPlatforms = vi.fn()
 const updateMessagingPlatform = vi.fn()
 const openExternalLink = vi.fn()
@@ -51,9 +53,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function renderMessaging() {
-  const { MessagingView } = await import('./index')
-
+function renderMessaging() {
   return render(
     <MemoryRouter>
       <MessagingView />

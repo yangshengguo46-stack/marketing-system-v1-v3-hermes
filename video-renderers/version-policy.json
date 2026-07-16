@@ -1,0 +1,20 @@
+{
+  "version": "marketing.video.renderer_pins.v1",
+  "dependencies": {
+    "@remotion/cli": "4.0.488",
+    "gsap": "3.14.2",
+    "hyperframes": "0.7.57",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "remotion": "4.0.488"
+  },
+  "remotion_upgrade_gate": {
+    "locked_version": "4.0.488",
+    "blocked_major": 5,
+    "requires": [
+      "explicit_user_approval",
+      "license_review",
+      "renderer_regression"
+    ]
+  }
+}

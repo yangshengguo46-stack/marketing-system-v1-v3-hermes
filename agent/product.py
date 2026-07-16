@@ -43,12 +43,21 @@ PRODUCT_RAW_CODE_TOOLSETS = frozenset(
 PRODUCT_CODE_PURPOSES = frozenset(
     {"code_generated_media", "content_rendering", "structured_data_transform"}
 )
+PRODUCT_PERCEPTION_TOOLS = frozenset(
+    {"vision_analyze", "video_analyze", "browser_vision"}
+)
 
 
 def is_product_code_tool(name: str) -> bool:
     """Return whether *name* belongs behind the Marketing OS code boundary."""
 
     return str(name or "").strip() in PRODUCT_CODE_TOOLS
+
+
+def is_product_perception_tool(name: str) -> bool:
+    """Return whether *name* is a foundational Marketing OS perception tool."""
+
+    return str(name or "").strip() in PRODUCT_PERCEPTION_TOOLS
 
 
 def normalize_product_delegation_toolsets(
@@ -64,7 +73,7 @@ def normalize_product_delegation_toolsets(
 
     values = [str(item).strip() for item in (requested or ()) if str(item).strip()]
     if not values:
-        return ["marketing", "web", "browser", "vision", "image_gen"], None
+        return ["marketing", "web", "browser", "vision", "video", "image_gen"], None
     raw = sorted(set(values) & PRODUCT_RAW_CODE_TOOLSETS)
     if raw:
         return values, (
@@ -129,6 +138,7 @@ PRODUCT_ARCHITECTURE_PRINCIPLES = (
     "Electron is presentation and interaction only; it never owns product state, automation, accounts, browsers or tasks.",
     "One Hermes-native runtime owns conversation, tasks, memory, skills and marketing workflows.",
     "Account operations, audience modeling, evidence, content and learning are native Agent capabilities, never external attachments.",
+    "Image, page and video understanding form one native perception layer available before research, creation, simulation and review.",
     "Both Hermes core code and Marketing OS enhancements may be decomposed or rewritten.",
     "Preserve product philosophy and verified user outcomes, not historical directories or adapters.",
     "Account modeling, evidence, creation, publishing receipts, metrics and learning form one loop.",
@@ -246,6 +256,16 @@ PRODUCT_RUNTIME_GUIDANCE = (
     "verified evidence IDs when saving long-form parent drafts and distinct Zhihu/WeChat variants "
     "with marketing_draft_article_create. Use marketing_draft_content_create only for non-article "
     "assets. Resume drafts with marketing_read_content_assets; "
+    "Visual understanding is a foundational Agent capability, not a video-production-only step. "
+    "Provider material downloads are temporary for seven days unless referenced by active work. "
+    "When the user refers to a numbered material, resolve it only against the latest material list "
+    "in the same conversation, repeat the exact asset and destination, then use "
+    "marketing_effect_keep_material only after an explicit keep request. Never claim cloud storage "
+    "succeeded when the cloud material provider is unavailable. "
+    "Use vision_analyze for images, frames and visual references, browser_vision for page appearance, "
+    "and video_analyze for source footage, public examples, drafts and rendered outputs before making "
+    "visual claims or edit decisions. In sampled video mode, separate visible evidence from inference, "
+    "do not claim to hear untranscribed audio, and do not claim continuity outside sampled timestamps. "
     "never put complete articles, scripts or transient drafts into long-term memory. "
     "Marketing decisions must distinguish verified facts, strategy inference and "
     "creative suggestions. Never use source-code files, repository documentation "

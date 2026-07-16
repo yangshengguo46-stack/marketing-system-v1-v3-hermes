@@ -98,12 +98,32 @@ def _prediction_summary(prediction: Any) -> dict[str, Any]:
     dimensions = prediction.get("prediction_dimensions") or {}
     dimension_payload = dimensions.get("dimensions") if isinstance(dimensions, dict) else {}
     dimension_names = list(dimension_payload) if isinstance(dimension_payload, dict) else []
+    reaction = prediction.get("social_reaction_simulation")
+    if not isinstance(reaction, dict):
+        reaction = {}
+    system_simulation = prediction.get("social_system_simulation")
+    if not isinstance(system_simulation, dict):
+        system_simulation = {}
     return {
         "prediction_version": prediction.get("prediction_version"),
         "confidence": prediction.get("confidence"),
         "expected_outcome": prediction.get("expected_outcome"),
         "dimension_names": dimension_names,
         "basis": list(prediction.get("basis") or [])[:8],
+        "social_reaction": {
+            "version": reaction.get("version"),
+            "status": reaction.get("status"),
+            "simulation_id": reaction.get("simulation_id"),
+            "scenario_ids": list(reaction.get("scenario_ids") or [])[:8],
+            "scenario_count": len(reaction.get("scenarios") or []),
+        },
+        "social_system": {
+            "version": system_simulation.get("version"),
+            "simulation_id": system_simulation.get("simulation_id"),
+            "scope": system_simulation.get("scope"),
+            "stage_ids": sorted((system_simulation.get("stages") or {}).keys()),
+            "mutable": system_simulation.get("mutable"),
+        },
     }
 
 
@@ -157,9 +177,18 @@ def build_content_feature_snapshot(
         "prediction_ref": _prediction_summary(prediction or {}),
         "risk_hints": list(risks or []),
         "retro_contract": {
-            "label_dimensions": ["attention", "retention", "trust", "action", "fit", "sound", "risk"],
+            "label_dimensions": [
+                "attention", "retention", "trust", "action", "fit", "sound", "risk",
+                "social_reaction",
+            ],
             "mutable": False,
             "purpose": "pre_publish_replay_and_retro_attribution",
+            "social_reaction_observations": [
+                "comment_stance_clusters",
+                "comment_theme_clusters",
+                "question_and_objection_patterns",
+                "target_vs_off_target_audience_signals",
+            ],
         },
     }
     return {"id": _stable_snapshot_id(body), **body}

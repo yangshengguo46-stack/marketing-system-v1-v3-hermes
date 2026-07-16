@@ -14,11 +14,13 @@ import { resolveBrowserExecutable } from './browser-runtime.js'
 import { installAccountAuthTool } from './account-auth.js'
 import { installDouyinPortfolioTool } from './douyin-owned.js'
 import { installShortVideoSignalTool } from './short-video-signals.js'
+import { installPublicContentTool } from './public-content.js'
 import { installWechatOfficialPortfolioTool } from './wechat-official.js'
 
 installAccountAuthTool()
 installDouyinPortfolioTool()
 installShortVideoSignalTool()
+installPublicContentTool()
 installWechatOfficialPortfolioTool()
 
 if (process.argv.includes('--purge-profile')) {

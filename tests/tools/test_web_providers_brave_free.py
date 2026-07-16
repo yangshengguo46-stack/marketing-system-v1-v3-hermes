@@ -238,7 +238,7 @@ class TestBraveFreeBackendWiring:
 
 
 # ---------------------------------------------------------------------------
-# brave-free is search-only: web_extract returns a clear error
+# brave-free is search-only: web_extract uses the native reader
 # ---------------------------------------------------------------------------
 
 
@@ -252,7 +252,7 @@ class TestBraveFreeSearchOnlyErrors:
         from agent.web_search_registry import _reset_for_tests
         _reset_for_tests()
 
-    def test_web_extract_returns_search_only_error(self, monkeypatch):
+    def test_web_extract_uses_native_fallback(self, monkeypatch):
         import asyncio
         from tools import web_tools
 
@@ -263,12 +263,14 @@ class TestBraveFreeSearchOnlyErrors:
             return True
 
         monkeypatch.setattr(web_tools, "async_is_safe_url", _allow_ssrf)
+        async def _native(urls):
+            return [{"url": urls[0], "title": "Example", "content": "native content"}]
+
+        monkeypatch.setattr(web_tools, "_native_extract_urls", _native)
         monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: False, raising=False)
 
         result_str = asyncio.get_event_loop().run_until_complete(
             web_tools.web_extract_tool(["https://example.com"])
         )
         result = json.loads(result_str)
-        assert result["success"] is False
-        assert "search-only" in result["error"].lower()
-        assert "brave" in result["error"].lower()
+        assert result["results"][0]["content"] == "native content"

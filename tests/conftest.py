@@ -360,11 +360,13 @@ def _hermetic_environment(tmp_path, monkeypatch):
     (fake_hermes_home / "skills").mkdir()
     monkeypatch.setenv("HERMES_HOME", str(fake_hermes_home))
 
-    # 4. Deterministic locale / timezone / hashseed. CI runs in UTC with
-    #    C.UTF-8 locale; local dev often doesn't. Pin everything.
+    # 4. Deterministic product language / locale / timezone / hashseed. CI
+    #    runs in English and UTC; a local profile may intentionally use the
+    #    Chinese-first product default. Pin everything for behavior tests.
     monkeypatch.setenv("TZ", "UTC")
     monkeypatch.setenv("LANG", "C.UTF-8")
     monkeypatch.setenv("LC_ALL", "C.UTF-8")
+    monkeypatch.setenv("HERMES_LANGUAGE", "en")
     monkeypatch.setenv("PYTHONHASHSEED", "0")
 
     # 4b. Disable AWS IMDS lookups. Without this, any test that ends up

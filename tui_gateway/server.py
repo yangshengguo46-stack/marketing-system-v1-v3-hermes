@@ -1055,6 +1055,8 @@ def _err(rid, code: int, msg: str) -> dict:
 
 def method(name: str):
     def dec(fn):
+        if name in _methods:
+            raise RuntimeError(f"duplicate JSON-RPC method registration: {name}")
         _methods[name] = fn
         return fn
 
@@ -12934,6 +12936,18 @@ def _(rid, _params: dict) -> dict:
     )
 
 
+@method("marketing.operation.prepare")
+def _(rid, params: dict) -> dict:
+    """Translate a structured product action into a native agent turn."""
+    from agent.marketing.operation_entrypoints import prepare_marketing_operation
+
+    try:
+        result = prepare_marketing_operation(params if isinstance(params, dict) else {})
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
+
+
 @method("marketing.accounts.list")
 def _(rid, _params: dict) -> dict:
     """Read connected account summaries from the canonical product store."""
@@ -12976,13 +12990,48 @@ def _(rid, params: dict) -> dict:
     from agent.marketing.domains import MediaAssetRepository
 
     params = params if isinstance(params, dict) else {}
-    return _ok(
-        rid,
-        MediaAssetRepository().list(
-            user_id=str(params.get("user_id") or "default"),
-            account_id=str(params.get("account_id") or "").strip() or None,
-        ),
+    user_id = str(params.get("user_id") or "default")
+    repository = MediaAssetRepository()
+    result = repository.list(
+        user_id=user_id,
+        account_id=str(params.get("account_id") or "").strip() or None,
     )
+    for asset in result["assets"]:
+        asset["playback_path"] = repository.resolve_local_path(
+            asset_id=asset["id"], user_id=user_id
+        )
+        asset.pop("local_path", None)
+    return _ok(rid, result)
+
+
+@method("marketing.assets.promote")
+def _(rid, params: dict) -> dict:
+    """Promote one temporary asset into the durable local library."""
+    from agent.marketing.domains import MediaAssetRepository
+
+    params = params if isinstance(params, dict) else {}
+    asset_id = str(params.get("asset_id") or "").strip()
+    if not asset_id:
+        return _err(rid, -32602, "asset_id is required")
+    try:
+        repository = MediaAssetRepository()
+        asset = repository.get(
+            asset_id=asset_id,
+            user_id=str(params.get("user_id") or "default"),
+        )
+        account_id = str(params.get("account_id") or "").strip()
+        if account_id and asset.get("account_id") not in {None, account_id}:
+            raise KeyError("media asset not found in account scope")
+        asset = repository.promote(
+            asset_id=asset_id,
+            user_id=str(params.get("user_id") or "default"),
+            target_tier=str(params.get("target_tier") or "library"),
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"asset": asset})
 
 
 @method("marketing.assets.upload")
@@ -13024,6 +13073,27 @@ def _(rid, params: dict) -> dict:
     except ValueError as exc:
         return _err(rid, -32602, str(exc))
     return _ok(rid, {"asset": asset})
+
+
+@method("marketing.assets.import_paths")
+def _(rid, params: dict) -> dict:
+    """Import user-selected local files/folders through the native asset owner."""
+    from agent.marketing.domains import MediaAssetRepository
+
+    params = params if isinstance(params, dict) else {}
+    paths = params.get("paths")
+    if not isinstance(paths, list) or not paths:
+        return _err(rid, -32602, "at least one local path is required")
+    try:
+        result = MediaAssetRepository().import_local_paths(
+            user_id=str(params.get("user_id") or "default"),
+            account_id=str(params.get("account_id") or "").strip() or None,
+            paths=[str(value) for value in paths],
+            rights_confirmed=params.get("rights_confirmed") is True,
+        )
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
 
 
 @method("marketing.assets.trusted.register")
@@ -13104,6 +13174,122 @@ def _(rid, params: dict) -> dict:
     except KeyError as exc:
         return _err(rid, 4044, str(exc))
     return _ok(rid, {"asset": asset})
+
+
+@method("marketing.content.asset.review")
+def _(rid, params: dict) -> dict:
+    """Persist an explicit user decision for one immutable content version."""
+    from agent.marketing.domains import ContentAssetRepository
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit human review confirmation is required")
+    account_id = str(params.get("account_id") or "").strip()
+    asset_id = str(params.get("asset_id") or "").strip()
+    if not account_id or not asset_id:
+        return _err(rid, -32602, "account_id and asset_id are required")
+    try:
+        asset = ContentAssetRepository().record_human_review(
+            asset_id=asset_id,
+            user_id=str(params.get("user_id") or "default"),
+            account_id=account_id,
+            decision=str(params.get("decision") or ""),
+            note=str(params.get("note") or ""),
+            confirmed=True,
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"asset": asset})
+
+
+@method("marketing.video.productions.list")
+def _(rid, params: dict) -> dict:
+    """List bounded video-production summaries for one account workbench."""
+    from agent.marketing.domains import VideoProductionRepository
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    if not account_id:
+        return _err(rid, -32602, "account_id is required")
+    try:
+        result = VideoProductionRepository().list_review_summaries(
+            user_id=str(params.get("user_id") or "default"),
+            account_id=account_id,
+            status=str(params.get("status") or "").strip() or None,
+            limit=int(params.get("limit") or 20),
+        )
+    except (TypeError, ValueError) as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
+
+
+@method("marketing.video.production.get")
+def _(rid, params: dict) -> dict:
+    """Load one video production only when its review workbench is opened."""
+    from agent.marketing.domains import VideoProductionRepository
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    production_id = str(params.get("production_id") or "").strip()
+    if not account_id or not production_id:
+        return _err(rid, -32602, "account_id and production_id are required")
+    try:
+        projection = VideoProductionRepository().get_review_projection(
+            production_id=production_id,
+            user_id=str(params.get("user_id") or "default"),
+            account_id=account_id,
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, projection)
+
+
+@method("marketing.publish.actions.list")
+def _(rid, params: dict) -> dict:
+    """List bounded publish-action state for one account."""
+    from agent.marketing.domains import PublishingRepository
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    if not account_id:
+        return _err(rid, -32602, "account_id is required")
+    try:
+        result = PublishingRepository().list_action_summaries(
+            user_id=str(params.get("user_id") or "default"),
+            account_id=account_id,
+            status=str(params.get("status") or "").strip() or None,
+            limit=int(params.get("limit") or 30),
+        )
+    except (TypeError, ValueError) as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
+
+
+@method("marketing.publish.action.get")
+def _(rid, params: dict) -> dict:
+    """Load one scoped publish action, verified receipt and metric schedule."""
+    from agent.marketing.domains import PublishingRepository
+
+    params = params if isinstance(params, dict) else {}
+    account_id = str(params.get("account_id") or "").strip()
+    action_id = str(params.get("action_id") or "").strip()
+    if not account_id or not action_id:
+        return _err(rid, -32602, "account_id and action_id are required")
+    try:
+        result = PublishingRepository().get_action_projection(
+            action_id=action_id,
+            user_id=str(params.get("user_id") or "default"),
+            account_id=account_id,
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, result)
 
 
 @method("marketing.knowledge.contributions.list")
@@ -13479,22 +13665,6 @@ def _(rid, params: dict) -> dict:
     except ValueError as exc:
         return _err(rid, -32602, str(exc))
     return _ok(rid, {"deleted": deleted})
-
-
-@method("marketing.account.context")
-def _(rid, params: dict) -> dict:
-    """Read the native operating context for one user-scoped account."""
-    from agent.marketing.domains import AccountContextRepository
-
-    params = params if isinstance(params, dict) else {}
-    try:
-        result = AccountContextRepository().read(
-            user_id=str(params.get("user_id") or "default"),
-            account_id=str(params.get("account_id") or ""),
-        )
-    except ValueError as exc:
-        return _err(rid, -32602, str(exc))
-    return _ok(rid, result)
 
 
 @method("marketing.session.account.get")

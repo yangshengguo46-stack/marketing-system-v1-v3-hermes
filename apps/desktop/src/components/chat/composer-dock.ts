@@ -14,6 +14,18 @@ export const composerSurfaceGlass = cn(
   'transition-[background-color] duration-150 ease-out'
 )
 
+/** Shared frame for every first-party composer surface. Workbench composers
+ * use this too, so their density, border and glass treatment cannot drift from
+ * the main conversation composer. */
+export const composerSurfaceFrame = cn(
+  'group/composer-surface relative z-4 isolate grid grid-rows-[auto_1fr] overflow-hidden rounded-[inherit]',
+  'border border-[color-mix(in_srgb,var(--dt-composer-ring)_calc(18%*var(--composer-ring-strength)),var(--dt-input))]'
+)
+
+/** Shared inner spacing and row behavior for composer content. */
+export const composerSurfaceContent =
+  'relative z-1 flex min-h-0 w-full flex-col gap-(--composer-row-gap) overflow-hidden rounded-[inherit] px-(--composer-surface-pad-x) py-(--composer-surface-pad-y)'
+
 const composerDockEdge = (edge: 'bottom' | 'top') =>
   cn('border border-border/65', edge === 'top' ? 'rounded-t-2xl border-b-0' : 'rounded-b-2xl border-t-0')
 

@@ -22,6 +22,7 @@ from tools.vision_tools import (
     _RESIZE_TARGET_BYTES,
     vision_analyze_tool,
     check_vision_requirements,
+    check_vision_tool_surface,
 )
 
 
@@ -509,6 +510,13 @@ class TestVisionRequirements:
     def test_check_requirements_returns_bool(self):
         result = check_vision_requirements()
         assert isinstance(result, bool)
+
+    def test_product_surface_stays_visible_without_configured_provider(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("HERMES_PRODUCT_ID", "marketing-os")
+        with patch("tools.vision_tools.check_vision_requirements", return_value=False):
+            assert check_vision_tool_surface() is True
 
     def test_check_requirements_accepts_codex_auth(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))

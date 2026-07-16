@@ -334,7 +334,7 @@ class TestCheckWebApiKey:
 
 
 class TestSearXNGOnlyExtractCrawlErrors:
-    """When searxng is the active backend, extract/crawl must return clear errors."""
+    """SearXNG search remains provider-backed; extraction can use native HTTP."""
 
     _register_providers = staticmethod(register_all_web_providers)
 
@@ -345,7 +345,7 @@ class TestSearXNGOnlyExtractCrawlErrors:
         from agent.web_search_registry import _reset_for_tests
         _reset_for_tests()
 
-    def test_web_extract_searxng_returns_clear_error(self, monkeypatch):
+    def test_web_extract_searxng_uses_native_fallback(self, monkeypatch):
         import asyncio
         from tools import web_tools
 
@@ -356,11 +356,14 @@ class TestSearXNGOnlyExtractCrawlErrors:
             return True
 
         monkeypatch.setattr(web_tools, "async_is_safe_url", _allow_ssrf)
+        async def _native(urls):
+            return [{"url": urls[0], "title": "Example", "content": "native content"}]
+
+        monkeypatch.setattr(web_tools, "_native_extract_urls", _native)
         monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: False, raising=False)
 
         result_str = asyncio.get_event_loop().run_until_complete(
             web_tools.web_extract_tool(["https://example.com"])
         )
         result = json.loads(result_str)
-        assert result["success"] is False
-        assert "search-only" in result["error"].lower() or "SearXNG" in result["error"]
+        assert result["results"][0]["content"] == "native content"

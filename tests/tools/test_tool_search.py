@@ -117,6 +117,8 @@ class TestClassification:
         assert is_deferrable_tool_name("read_file") is True
         assert is_deferrable_tool_name("execute_code") is True
         assert is_deferrable_tool_name("marketing_read_account_context") is False
+        assert is_deferrable_tool_name("vision_analyze") is False
+        assert is_deferrable_tool_name("video_analyze") is False
         assert load_config().enabled == "on"
 
     def test_bridge_tools_never_defer(self):

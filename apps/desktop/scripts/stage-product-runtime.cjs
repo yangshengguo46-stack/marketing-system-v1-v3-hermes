@@ -50,6 +50,7 @@ function copyTree(source, destination, options = {}) {
     filter(item) {
       const relative = path.relative(source, item)
       const parts = relative.split(path.sep)
+      if (options.excludeNodeModules && parts.includes('node_modules')) return false
       if (parts.some(part => part === '__pycache__' || part === '.DS_Store')) return false
       if (/\.py[co]$/i.test(item)) return false
       if (options.sitePackages) {
@@ -60,6 +61,25 @@ function copyTree(source, destination, options = {}) {
       return true
     }
   })
+}
+
+function productionDependencyPathsForRoot(packageRoot) {
+  const result = spawnSync('npm', ['ls', '--all', '--parseable', '--omit=dev'], {
+    cwd: packageRoot,
+    encoding: 'utf8'
+  })
+  if (result.error) throw result.error
+  const output = String(result.stdout || '')
+  if (!output.trim()) {
+    throw new Error(`Production dependency discovery failed: ${String(result.stderr || '').trim()}`)
+  }
+  const modulesRoot = path.join(packageRoot, 'node_modules')
+  return output
+    .split(/\r?\n/)
+    .map(value => value.trim())
+    .filter(Boolean)
+    .filter(value => value.startsWith(`${modulesRoot}${path.sep}`))
+    .filter(value => path.basename(value) !== 'fsevents')
 }
 
 function discoverPython(pythonExecutable) {
@@ -114,6 +134,94 @@ function stageMarketingBrowserDependencies({
   }
   if (!copied) throw new Error('Marketing browser production dependencies are missing')
   return { copied, relative: path.posix.join('agent', 'node_modules') }
+}
+
+const VIDEO_RENDERER_PINS = Object.freeze({
+  '@remotion/cli': '4.0.488',
+  gsap: '3.14.2',
+  hyperframes: '0.7.57',
+  react: '19.2.4',
+  'react-dom': '19.2.4',
+  remotion: '4.0.488'
+})
+const REMOTION_UPGRADE_REQUIREMENTS = Object.freeze([
+  'explicit_user_approval',
+  'license_review',
+  'renderer_regression'
+])
+
+function validateVideoRendererPins(sourceRoot) {
+  const readJson = relative => JSON.parse(fs.readFileSync(path.join(sourceRoot, relative), 'utf8'))
+  const manifest = readJson('package.json')
+  const policy = readJson('version-policy.json')
+  const lock = readJson('package-lock.json')
+  const installed = readJson(path.join('node_modules', '.package-lock.json'))
+  const versionMaps = [
+    ['package.json', manifest.dependencies],
+    ['version policy', policy.dependencies],
+    ['package-lock root', lock.packages?.['']?.dependencies]
+  ]
+  for (const [name, version] of Object.entries(VIDEO_RENDERER_PINS)) {
+    for (const [label, versions] of versionMaps) {
+      if (versions?.[name] !== version) {
+        throw new Error(`Video renderer pin drift in ${label}: ${name} must remain ${version}`)
+      }
+    }
+    const packageKey = `node_modules/${name}`
+    for (const [label, actual] of [
+      ['package-lock package', lock.packages?.[packageKey]?.version],
+      ['installed lockfile', installed.packages?.[packageKey]?.version],
+      ['installed package', readJson(path.join(packageKey, 'package.json')).version]
+    ]) {
+      if (actual !== version) {
+        throw new Error(`Video renderer pin drift in ${label}: ${name} must remain ${version}`)
+      }
+    }
+  }
+  if (policy.remotion_upgrade_gate?.locked_version !== VIDEO_RENDERER_PINS.remotion) {
+    throw new Error('Remotion upgrade gate and dependency pin disagree')
+  }
+  if (policy.remotion_upgrade_gate?.blocked_major !== 5) {
+    throw new Error('Remotion 5 upgrade gate is missing')
+  }
+  if (JSON.stringify(policy.remotion_upgrade_gate?.requires) !== JSON.stringify(REMOTION_UPGRADE_REQUIREMENTS)) {
+    throw new Error('Remotion upgrade requirements have drifted')
+  }
+  if (Number(VIDEO_RENDERER_PINS.remotion.split('.')[0]) >= Number(policy.remotion_upgrade_gate?.blocked_major)) {
+    throw new Error('Remotion major upgrade requires explicit approval and license review')
+  }
+  return { ...VIDEO_RENDERER_PINS }
+}
+
+function stageVideoRenderers({
+  agentRoot,
+  output,
+  dependencyPaths
+}) {
+  const sourceRoot = path.join(agentRoot, 'video-renderers')
+  const destinationRoot = path.join(output, 'video-renderers')
+  if (!fs.existsSync(path.join(sourceRoot, 'package-lock.json'))) {
+    throw new Error('Pinned video renderer lockfile is missing')
+  }
+  validateVideoRendererPins(sourceRoot)
+  copyTree(sourceRoot, destinationRoot, { excludeNodeModules: true })
+  const modulesRoot = path.join(sourceRoot, 'node_modules')
+  const resolvedDependencies = dependencyPaths || productionDependencyPathsForRoot(sourceRoot)
+  let copied = 0
+  for (const source of resolvedDependencies) {
+    const relative = path.relative(modulesRoot, source)
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue
+    copyTree(source, path.join(destinationRoot, 'node_modules', relative))
+    copied += 1
+  }
+  if (!copied) throw new Error('Video renderer production dependencies are missing')
+  const destinationModules = path.join(destinationRoot, 'node_modules')
+  fs.mkdirSync(destinationModules, { recursive: true })
+  fs.copyFileSync(
+    path.join(modulesRoot, '.package-lock.json'),
+    path.join(destinationModules, '.package-lock.json')
+  )
+  return { copied, relative: 'video-renderers' }
 }
 
 function playwrightBrowserDirectory(executablePath) {
@@ -203,6 +311,7 @@ function main() {
   }).trim()
   const result = stageProductRuntime({ desktopRoot, agentRoot, pythonInfo, productTree })
   const dependencies = stageMarketingBrowserDependencies({ agentRoot, output: result.output })
+  const renderers = stageVideoRenderers({ agentRoot, output: result.output })
   const { chromium } = require('playwright')
   const browser = stagePlaywrightBrowser({
     executablePath: chromium.executablePath(),
@@ -211,6 +320,7 @@ function main() {
   result.manifest.paths.nodeModules = dependencies.relative
   result.manifest.paths.playwrightBrowsers = browser.relativeRoot
   result.manifest.paths.playwrightBrowserExecutable = browser.executableRelative
+  result.manifest.paths.videoRenderers = renderers.relative
   fs.writeFileSync(path.join(result.output, 'runtime-manifest.json'), `${JSON.stringify(result.manifest, null, 2)}\n`)
   console.log(
     `[stage-product-runtime] ${result.manifest.python.version} ${result.manifest.platform}/${result.manifest.arch} ` +
@@ -221,10 +331,14 @@ function main() {
 module.exports = {
   SOURCE_DIRS,
   ROOT_FILES,
+  REMOTION_UPGRADE_REQUIREMENTS,
+  VIDEO_RENDERER_PINS,
   discoverPython,
   playwrightBrowserDirectory,
   productionDependencyPaths,
   stageMarketingBrowserDependencies,
+  stageVideoRenderers,
+  validateVideoRendererPins,
   stagePlaywrightBrowser,
   stageProductRuntime
 }

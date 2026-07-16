@@ -40,6 +40,7 @@ function resolveBundledProductRuntime(resourcesPath, options = {}) {
     manifest.paths?.playwrightBrowserExecutable,
     'Playwright browser executable'
   )
+  const videoRenderers = safeRuntimePath(root, manifest.paths?.videoRenderers, 'video renderers')
   for (const [label, target] of [
     ['python executable', pythonExecutable],
     ['Hermes agent', path.join(agentRoot, 'hermes_cli', 'main.py')],
@@ -47,7 +48,11 @@ function resolveBundledProductRuntime(resourcesPath, options = {}) {
     ['marketing browser MCP', path.join(agentRoot, 'mcp', 'marketing-browser', 'src', 'server.js')],
     ['browser node_modules', nodeModules],
     ['Playwright browsers', playwrightBrowsers],
-    ['Playwright browser executable', playwrightBrowserExecutable]
+    ['Playwright browser executable', playwrightBrowserExecutable],
+    ['video renderer package', path.join(videoRenderers, 'package.json')],
+    ['Remotion renderer', path.join(videoRenderers, 'render-remotion.mjs')],
+    ['HyperFrames renderer', path.join(videoRenderers, 'render-hyperframes.mjs')],
+    ['video renderer dependencies', path.join(videoRenderers, 'node_modules', '.package-lock.json')]
   ]) {
     if (!fsImpl.existsSync(target)) throw new Error(`bundled ${label} missing: ${target}`)
   }
@@ -59,7 +64,8 @@ function resolveBundledProductRuntime(resourcesPath, options = {}) {
     sitePackages,
     nodeModules,
     playwrightBrowsers,
-    playwrightBrowserExecutable
+    playwrightBrowserExecutable,
+    videoRenderers
   }
 }
 

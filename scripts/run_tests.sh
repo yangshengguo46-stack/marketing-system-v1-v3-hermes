@@ -7,7 +7,9 @@
 #     file runs in its own freshly-spawned `python -m pytest <file>`
 #     subprocess. No xdist, no shared workers, no module-level leakage
 #     between files.
-#   * TZ=UTC, LANG=C.UTF-8, PYTHONHASHSEED=0 (deterministic)
+#   * TZ=UTC, LANG=C.UTF-8, HERMES_LANGUAGE=en, PYTHONHASHSEED=0, and
+#     loopback NO_PROXY (local integration servers never use host proxies)
+#     (deterministic, independent of the developer's product locale)
 #   * Env vars blanked (conftest.py also does this, but this
 #     is belt-and-suspenders for anyone running pytest outside our
 #     conftest path — e.g. on a single file)
@@ -67,7 +69,7 @@ fi
 # env -i: start with empty environment, opt-in only what we need.
 # No credential var can leak — you'd have to explicitly add it here.
 echo "▶ running per-file parallel test suite via run_tests_parallel.py"
-echo "  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)"
+echo "  (TZ=UTC LANG=C.UTF-8 HERMES_LANGUAGE=en PYTHONHASHSEED=0; clean env, loopback NO_PROXY)"
 
 cd "$REPO_ROOT"
 
@@ -77,6 +79,9 @@ exec env -i \
   TZ=UTC \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
+  HERMES_LANGUAGE=en \
+  NO_PROXY="127.0.0.1,localhost,::1" \
+  no_proxy="127.0.0.1,localhost,::1" \
   PYTHONHASHSEED=0 \
   PYTHONDONTWRITEBYTECODE=1 \
   ${HERMES_RUN_SLOW_PET_TESTS:+HERMES_RUN_SLOW_PET_TESTS="$HERMES_RUN_SLOW_PET_TESTS"} \

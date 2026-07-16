@@ -51,7 +51,7 @@ export function OverlaySidebar({ children, className }: OverlaySidebarProps) {
         // pt clears the in-card close button (the OverlayView now insets the
         // whole card below the OS titlebar); the bg fills from the card's top
         // edge so there's no surface-colored gap above the sidebar.
-        'flex min-h-0 flex-col gap-0.5 overflow-y-auto bg-(--ui-sidebar-surface-background) px-2.5 pb-3 pt-[calc(var(--titlebar-height)/2+1rem)]',
+        'flex min-h-0 flex-col gap-0.5 overflow-y-auto border-r border-(--ui-stroke-quaternary) bg-[color-mix(in_srgb,var(--ui-sidebar-surface-background)_78%,transparent)] px-2.5 pb-3 pt-[calc(var(--titlebar-height)/2+1rem)] backdrop-blur-xl',
         className
       )}
     >
@@ -78,14 +78,14 @@ export function OverlayNavItem({ active, icon: Icon, label, nested, onClick, tra
   return (
     <button
       className={cn(
-        'flex h-7 w-full items-center justify-start gap-2 rounded-md border px-2 text-left text-[length:var(--conversation-text-font-size)] font-normal transition-colors',
+        'flex h-7 w-full items-center justify-start gap-2 rounded-[7px] px-2 text-left text-[length:var(--conversation-text-font-size)] font-normal transition-[background-color,color] duration-[var(--mos-motion-fast)] ease-[var(--mos-ease-out)]',
         nested
           ? active
-            ? 'border-transparent bg-(--chrome-action-hover) font-medium text-foreground'
-            : 'border-transparent bg-transparent text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground'
+            ? 'bg-(--ui-row-active-background) font-medium text-foreground'
+            : 'bg-transparent text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground'
           : active
-            ? 'border-(--ui-stroke-tertiary) bg-(--ui-bg-tertiary) text-foreground'
-            : 'border-transparent bg-transparent text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground'
+            ? 'bg-(--ui-row-active-background) font-medium text-foreground'
+            : 'bg-transparent text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground'
       )}
       onClick={onClick}
       type="button"

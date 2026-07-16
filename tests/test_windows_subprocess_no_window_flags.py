@@ -54,10 +54,18 @@ def test_tui_gateway_fuzzy_file_listing_hides_git_windows(monkeypatch):
     captured = []
 
     def fake_run(cmd, **kwargs):
-        captured.append((cmd, kwargs))
-        if cmd[-1] == "--show-toplevel":
-            return _Completed(stdout=b"C:/repo\n")
-        return _Completed(stdout=b"src/main.py\0README.md\0")
+        if (
+            isinstance(cmd, (list, tuple))
+            and len(cmd) >= 3
+            and cmd[:3] == ["git", "-C", "C:/repo"]
+        ):
+            captured.append((cmd, kwargs))
+            if cmd[-1] == "--show-toplevel":
+                return _Completed(stdout=b"C:/repo\n")
+            return _Completed(stdout=b"src/main.py\0README.md\0")
+        # Importing the gateway may leave a diagnostic thread active; do not
+        # feed the wrong stdout type to unrelated subprocess callers.
+        return _Completed(stdout="" if kwargs.get("text") else b"")
 
     monkeypatch.setattr(_subprocess_compat, "IS_WINDOWS", True)
     monkeypatch.setattr(_subprocess_compat, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)

@@ -44,7 +44,14 @@ import {
   SIDEBAR_SESSIONS_PAGE_SIZE,
   unpinSession
 } from '../store/layout'
+import {
+  $selectedMarketingAccountId,
+  createMarketingOperationTask,
+  selectMarketingAccount,
+  updateMarketingOperationTask
+} from '../store/marketing'
 import { respondToApprovalAction } from '../store/native-notifications'
+import { notifyError } from '../store/notifications'
 import { $paneOpen } from '../store/panes'
 import { setPetActivity } from '../store/pet'
 import { setPetScale } from '../store/pet-gallery'
@@ -135,10 +142,13 @@ import {
   ACCOUNT_CENTER_ROUTE,
   CONTENT_FACTORY_ROUTE,
   CRON_ROUTE,
+  MATERIAL_LIBRARY_ROUTE,
   NEW_CHAT_ROUTE,
   routeSessionId,
   sessionRoute,
-  SETTINGS_ROUTE
+  SETTINGS_ROUTE,
+  VIDEO_CREATION_ROUTE,
+  WORKBENCH_ROUTE
 } from './routes'
 import { SessionPickerOverlay } from './session-picker-overlay'
 import { SessionSwitcher } from './session-switcher'
@@ -161,6 +171,8 @@ import type { StatusbarItem } from './shell/statusbar-controls'
 import type { TitlebarTool } from './shell/titlebar-controls'
 import { useGroupRegistry } from './shell/use-group-registry'
 import { UpdatesOverlay } from './updates-overlay'
+import { MarketingTaskTray } from './workbench/marketing-task-tray'
+import { type MarketingOperationIntent, prepareMarketingOperation } from './workbench/operations'
 
 const AgentsView = lazy(async () => ({ default: (await import('./agents')).AgentsView }))
 const ArtifactsView = lazy(async () => ({ default: (await import('./artifacts')).ArtifactsView }))
@@ -178,6 +190,14 @@ const AccountCenterView = lazy(async () => ({
 
 const ContentFactoryView = lazy(async () => ({
   default: (await import('./workbench/business-surfaces')).ContentFactoryView
+}))
+
+const VideoCreationView = lazy(async () => ({
+  default: (await import('./workbench/business-surfaces')).VideoCreationView
+}))
+
+const MaterialLibraryView = lazy(async () => ({
+  default: (await import('./workbench/material-library-view')).MaterialLibraryView
 }))
 
 const ManagedView = lazy(async () => ({ default: (await import('./workbench/business-surfaces')).ManagedView }))
@@ -243,7 +263,6 @@ export function DesktopController() {
   const busyRef = useRef(false)
   const creatingSessionRef = useRef(false)
   const refreshSessionsRequestRef = useRef(0)
-  const pendingMarketingPrefillRef = useRef<string | null>(null)
 
   const gatewayState = useStore($gatewayState)
   const activeSessionId = useStore($activeSessionId)
@@ -778,34 +797,54 @@ export function DesktopController() {
     updateSessionState
   })
 
-  const openMarketingChat = useCallback(
-    (prefill?: string) => {
-      pendingMarketingPrefillRef.current = prefill?.trim() || null
-      startFreshSessionDraft()
+  const openMarketingChat = useCallback(() => {
+    startFreshSessionDraft()
+  }, [startFreshSessionDraft])
+
+  const startMarketingOperation = useCallback(
+    (intent: MarketingOperationIntent) => {
+      selectMarketingAccount(intent.accountId)
+
+      const taskId = createMarketingOperationTask({
+        accountId: intent.accountId,
+        kind: intent.kind,
+        label: '正在绑定当前账号、资产和任务上下文。',
+        title: intent.title || '经营任务'
+      })
+
+      void prepareMarketingOperation(requestGateway, intent)
+        .then(async operation => {
+          updateMarketingOperationTask(taskId, { label: operation.visible_text, title: operation.title })
+
+          const created = await requestGateway<{ session_id: string; stored_session_id?: string }>('session.create', {
+            cols: 96,
+            marketing_account_id: intent.accountId,
+            marketing_user_id: 'default',
+            source: 'desktop-product',
+            title: operation.title
+          })
+
+          updateMarketingOperationTask(taskId, {
+            sessionId: created.session_id,
+            state: 'starting',
+            storedSessionId: created.stored_session_id
+          })
+          await requestGateway('prompt.submit', { session_id: created.session_id, text: operation.prompt })
+          updateMarketingOperationTask(taskId, { state: 'working' })
+        })
+        .catch(cause => {
+          const message = cause instanceof Error ? cause.message : String(cause || '任务启动失败')
+
+          updateMarketingOperationTask(taskId, {
+            error: message,
+            label: '当前经营对象没有被修改。',
+            state: 'error'
+          })
+          notifyError(cause, '任务入口暂时不可用')
+        })
     },
-    [startFreshSessionDraft]
+    [requestGateway]
   )
-
-  useEffect(() => {
-    if (location.pathname !== NEW_CHAT_ROUTE || selectedStoredSessionId || !freshDraftReady) {
-      return
-    }
-
-    const prefill = pendingMarketingPrefillRef.current
-
-    if (!prefill) {
-      return
-    }
-
-    pendingMarketingPrefillRef.current = null
-
-    const timer = window.setTimeout(() => {
-      requestComposerInsert(prefill, { target: 'main' })
-      requestComposerFocus('main')
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [freshDraftReady, location.pathname, selectedStoredSessionId])
 
   // Single global listener for every rebindable hotkey (incl. profile switching)
   // plus the on-screen keybind editor's capture mode.
@@ -1439,6 +1478,7 @@ export function DesktopController() {
                   onNewChat={openMarketingChat}
                   onOpenAccounts={() => navigate(ACCOUNT_CENTER_ROUTE)}
                   onOpenContent={() => navigate(CONTENT_FACTORY_ROUTE)}
+                  onStartOperation={startMarketingOperation}
                   requestGateway={requestGateway}
                 />
               </Suspense>
@@ -1450,16 +1490,50 @@ export function DesktopController() {
               <Suspense fallback={null}>
                 <ContentFactoryView
                   onNewChat={openMarketingChat}
+                  onOpenArticle={() =>
+                    startMarketingOperation({
+                      accountId: $selectedMarketingAccountId.get() || 'prospect_default',
+                      kind: 'content.article.start'
+                    })
+                  }
+                  onOpenMaterials={() => navigate(MATERIAL_LIBRARY_ROUTE)}
+                  onOpenVideo={() => navigate(VIDEO_CREATION_ROUTE)}
+                  onStartOperation={startMarketingOperation}
                   requestGateway={requestGateway}
                 />
               </Suspense>
             }
             path="content"
           />
+          <Route element={<Navigate replace to={NEW_CHAT_ROUTE} />} path="content/article" />
           <Route
             element={
               <Suspense fallback={null}>
-                <AccountCenterView onNewChat={openMarketingChat} requestGateway={requestGateway} />
+                <VideoCreationView
+                  onBack={() => navigate(CONTENT_FACTORY_ROUTE)}
+                  onOpenOperation={storedSessionId => void resumeSession(storedSessionId)}
+                  requestGateway={requestGateway}
+                />
+              </Suspense>
+            }
+            path="content/video"
+          />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <MaterialLibraryView onStartOperation={startMarketingOperation} requestGateway={requestGateway} />
+              </Suspense>
+            }
+            path="materials"
+          />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <AccountCenterView
+                  onOpenWorkbench={() => navigate(WORKBENCH_ROUTE)}
+                  onStartOperation={startMarketingOperation}
+                  requestGateway={requestGateway}
+                />
               </Suspense>
             }
             path="accounts"
@@ -1467,7 +1541,7 @@ export function DesktopController() {
           <Route
             element={
               <Suspense fallback={null}>
-                <ManagedView onNewChat={openMarketingChat} requestGateway={requestGateway} />
+                <ManagedView onStartOperation={startMarketingOperation} requestGateway={requestGateway} />
               </Suspense>
             }
             path="managed"
@@ -1508,6 +1582,10 @@ export function DesktopController() {
           <Route element={<LegacySessionRedirect />} path=":sessionId" />
           <Route element={<Navigate replace to={NEW_CHAT_ROUTE} />} path="*" />
         </Routes>
+        <MarketingTaskTray
+          onOpenOperation={storedSessionId => void resumeSession(storedSessionId)}
+          requestGateway={requestGateway}
+        />
       </PaneMain>
       {/*
         Order within a side maps to column order. Default (rail on the right):

@@ -14,6 +14,10 @@ from agent.marketing.domains.short_video_signals import (
     ShortVideoSignalRepository,
     decode_browser_signal_result,
 )
+from agent.marketing.domains.public_content_observations import (
+    PublicContentObservationRepository,
+    decode_browser_public_content_result,
+)
 from agent.marketing.session_scope import read_tool_session_scope
 
 
@@ -25,6 +29,11 @@ SHORT_VIDEO_SIGNAL_TOOL_NAMES = {
 ACCOUNT_PORTFOLIO_TOOL_NAMES = {
     "browser_collect_wechat_official_portfolio",
     "mcp_marketing_browser_browser_collect_wechat_official_portfolio",
+}
+
+PUBLIC_CONTENT_TOOL_NAMES = {
+    "browser_capture_public_content",
+    "mcp_marketing_browser_browser_capture_public_content",
 }
 
 
@@ -72,6 +81,21 @@ def enrich_tool_result_with_evidence(
             tool_call_id=str(tool_call_id or ""),
         )
         return str(result) + "\n\nMarketing OS verified capture:\n" + json.dumps(
+            capture, ensure_ascii=False, indent=2
+        )
+    if tool_name in PUBLIC_CONTENT_TOOL_NAMES:
+        scope = read_tool_session_scope(task_id=task_id, session_id=session_id)
+        payload = decode_browser_public_content_result(result)
+        if not scope or payload is None:
+            return result
+        capture = PublicContentObservationRepository().capture_browser_result(
+            user_id=str(scope["user_id"]),
+            account_id=str(scope["account_id"]),
+            payload=payload,
+            session_id=str(session_id or task_id),
+            tool_call_id=str(tool_call_id or ""),
+        )
+        return str(result) + "\n\nMarketing OS public natural-experiment capture:\n" + json.dumps(
             capture, ensure_ascii=False, indent=2
         )
     if tool_name != "web_extract" or not isinstance(result, str):

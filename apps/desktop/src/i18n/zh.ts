@@ -60,7 +60,7 @@ export const zh: Translations = {
 
   boot: {
     ready: 'Marketing OS 桌面版已就绪',
-    desktopBootFailedWithMessage: message => `桌面启动失败：${message}`,
+    desktopBootFailedWithMessage: _message => 'Marketing OS 暂时无法启动',
     steps: {
       connectingGateway: '正在连接桌面网关',
       loadingSettings: '正在加载 Marketing OS 设置',
@@ -75,16 +75,16 @@ export const zh: Translations = {
       desktopBootFailed: '桌面启动失败',
       gatewayConnectionLost: '与网关的连接已断开',
       gatewaySignInRequired: '需要登录网关',
-      ipcBridgeUnavailable: '桌面 IPC 桥不可用。'
+      ipcBridgeUnavailable: '桌面服务暂时不可用。'
     },
     failure: {
       title: 'Marketing OS 无法启动',
-      description: '后台网关没有启动。请尝试下面的恢复步骤；这里不会删除你的对话或设置。',
+      description: '启动服务暂时没有准备好。你可以重试或运行修复，现有对话和设置不会丢失。',
       remoteTitle: '需要重新登录远程网关',
       remoteDescription: '你的远程网关会话已过期。请重新登录以恢复连接。这些操作不会删除你的对话或设置。',
       retry: '重试',
       repairInstall: '修复安装',
-      useLocalGateway: '使用本地网关',
+      useLocalGateway: '使用本机服务',
       openLogs: '打开日志',
       repairHint: '修复会重新运行安装器，在新机器上可能需要几分钟。',
       remoteSignInHint: '打开网关登录窗口。也可以使用本地网关切换到随应用提供的后端。',
@@ -1457,6 +1457,9 @@ export const zh: Translations = {
       workbench: '工作台',
       'new-session': '新对话',
       content: '内容工厂',
+      'article-creation': '图文创作',
+      'video-creation': '视频创作',
+      materials: '素材库',
       accounts: '账号管理',
       managed: '托管',
       skills: '能力中心',

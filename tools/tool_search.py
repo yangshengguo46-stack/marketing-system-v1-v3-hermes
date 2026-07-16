@@ -188,13 +188,20 @@ def is_deferrable_tool_name(name: str) -> bool:
     if name in BRIDGE_TOOL_NAMES:
         return False
     try:
-        from agent.product import is_product_code_tool, is_product_runtime
+        from agent.product import (
+            is_product_code_tool,
+            is_product_perception_tool,
+            is_product_runtime,
+        )
 
-        if is_product_runtime() and is_product_code_tool(name):
-            # These are upstream Hermes core tools, but in Marketing OS they
-            # belong to a delegated production worker. Treat them as deferred
-            # before the generic core-tool exemption below.
-            return True
+        if is_product_runtime():
+            if is_product_perception_tool(name):
+                return False
+            if is_product_code_tool(name):
+                # These are upstream Hermes core tools, but in Marketing OS they
+                # belong to a delegated production worker. Treat them as deferred
+                # before the generic core-tool exemption below.
+                return True
     except Exception:
         pass
     if name in _core_tool_names():

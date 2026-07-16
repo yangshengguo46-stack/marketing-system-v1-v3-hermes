@@ -4459,7 +4459,11 @@ class TestMatrixProxyConfig:
         if proxy_env:
             for k, v in proxy_env.items():
                 monkeypatch.setenv(k, v)
-        with patch.dict("sys.modules", _make_fake_mautrix()):
+        # Keep this fixture independent of the developer's macOS system proxy;
+        # explicit system-proxy detection has its own coverage in base tests.
+        with patch.dict("sys.modules", _make_fake_mautrix()), patch(
+            "gateway.platforms.base._detect_macos_system_proxy", return_value=None
+        ):
             from plugins.platforms.matrix.adapter import MatrixAdapter
             cfg = PlatformConfig(enabled=True, token="syt_test",
                                  extra={"homeserver": "https://matrix.example.org",

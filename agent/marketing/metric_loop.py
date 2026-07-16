@@ -16,6 +16,11 @@ from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.account_strategy import AccountStrategyRepository
 from agent.marketing.domains.publishing import PublishingRepository
 from agent.marketing.intelligence.content_retro import reconcile, retro_to_dict
+from agent.marketing.intelligence.social_system_simulation import build_causal_reflection
+from agent.marketing.intelligence.audience_reaction_simulation import (
+    compare_social_reaction_simulation,
+    normalize_social_reaction_observation,
+)
 from agent.marketing.intelligence.influence_score import build_influence_score
 from agent.marketing.intelligence.learning_governance import (
     propose_publish_recovery_skill_candidate,
@@ -161,7 +166,23 @@ class MetricLoopRunner:
                 result = provider.collect_metrics(action, checkpoint)
                 state = str((result or {}).get("state") or "").strip().lower()
                 if state == "observed":
-                    metrics = normalize_observed_metrics(result.get("metrics"))
+                    raw_metrics = result.get("metrics")
+                    metrics = normalize_observed_metrics(raw_metrics) if raw_metrics else {}
+                    reaction_prediction = (
+                        ((action.get("request") or {}).get("prediction") or {}).get(
+                            "social_reaction_simulation"
+                        )
+                    )
+                    if not isinstance(reaction_prediction, dict):
+                        reaction_prediction = {}
+                    reaction_observation = normalize_social_reaction_observation(
+                        result.get("social_reaction_observation"),
+                        simulation=reaction_prediction,
+                    )
+                    if not metrics and reaction_observation is None:
+                        raise ValueError(
+                            "observed result requires metrics or social_reaction_observation"
+                        )
                     verification = str(result.get("verification_source") or "").strip()
                     if not verification:
                         raise ValueError("observed metrics require verification_source")
@@ -183,7 +204,12 @@ class MetricLoopRunner:
                             "observed_at": str(result.get("observed_at") or _iso(now)),
                             "provider": action["provider"],
                             "version": METRIC_LOOP_VERSION,
-                        },
+                        }
+                        | (
+                            {"social_reaction_observation": reaction_observation}
+                            if reaction_observation is not None
+                            else {}
+                        ),
                     )
                     self.publishing.mark_metric_observed(
                         checkpoint["id"], metric_receipt_id=receipt["id"]
@@ -247,9 +273,17 @@ class MetricLoopRunner:
         for checkpoint in self.publishing.list_observed_metric_checkpoints(limit=limit):
             action = self.publishing.get_action(checkpoint["publish_action_id"])
             receipt = self.loop.get_receipt(checkpoint["metric_receipt_id"])
-            metrics = normalize_observed_metrics(receipt["summary"].get("metrics"))
+            raw_metrics = receipt["summary"].get("metrics")
+            metrics = normalize_observed_metrics(raw_metrics) if raw_metrics else {}
             labels = build_metric_labels(metrics)
             prediction = _legacy_prediction(action)
+            full_prediction = (action.get("request") or {}).get("prediction")
+            if not isinstance(full_prediction, dict):
+                full_prediction = {}
+            reaction_retro = compare_social_reaction_simulation(
+                full_prediction.get("social_reaction_simulation"),
+                receipt["summary"].get("social_reaction_observation"),
+            )
             if prediction:
                 retro_value = retro_to_dict(reconcile(prediction, metrics))
                 retro_value["status"] = "compared"
@@ -261,6 +295,13 @@ class MetricLoopRunner:
                     "bias_direction": "unknown",
                     "note": "没有经过校准的发布前指标区间；只沉淀真实标签，不伪造预测偏差。",
                 }
+            causal_reflection = build_causal_reflection(
+                action=action,
+                checkpoint=checkpoint,
+                metric_labels=labels,
+                metric_retro=retro_value,
+                reaction_retro=reaction_retro,
+            )
             preflight = self.loop.get_preflight(action["preflight_id"])
             calibration = self.strategy.get_active_influence_calibration(
                 user_id=action["user_id"], account_id=action["account_id"]
@@ -298,6 +339,8 @@ class MetricLoopRunner:
                     "content_kind": (action.get("request") or {}).get("content_kind") or "",
                     "metric_labels": labels,
                     "retro": retro_value,
+                    "social_reaction_retro": reaction_retro,
+                    "causal_reflection": causal_reflection,
                     "influence_score": influence,
                     "guardrail": "pending candidate only; acceptance and account knowledge projection require governance",
                 },

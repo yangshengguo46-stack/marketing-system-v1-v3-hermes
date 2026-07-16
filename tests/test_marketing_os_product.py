@@ -10,6 +10,7 @@ from agent.product import (
     PRODUCT_NAME,
     PRODUCT_RUNTIME_GUIDANCE,
     is_product_code_tool,
+    is_product_perception_tool,
     is_product_runtime,
     normalize_product_delegation_toolsets,
     product_core_update_status,
@@ -47,10 +48,21 @@ def test_runtime_guidance_keeps_hermes_primary_without_a_second_agent():
     assert "HTTP-routed agent" in HERMES_AGENT_HELP_GUIDANCE
     assert "enhanced Hermes agent" in HERMES_AGENT_HELP_GUIDANCE
     assert "Marketing OS capabilities may both" in HERMES_AGENT_HELP_GUIDANCE
-    assert any("never external attachments" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
-    assert any("not historical directories" in principle for principle in PRODUCT_ARCHITECTURE_PRINCIPLES)
+    assert any(
+        "never external attachments" in principle
+        for principle in PRODUCT_ARCHITECTURE_PRINCIPLES
+    )
+    assert any(
+        "not historical directories" in principle
+        for principle in PRODUCT_ARCHITECTURE_PRINCIPLES
+    )
     assert "marketing_plan_content_production" in HERMES_AGENT_HELP_GUIDANCE
     assert "marketing_draft_content_create" in HERMES_AGENT_HELP_GUIDANCE
+    assert (
+        "Visual understanding is a foundational Agent capability"
+        in HERMES_AGENT_HELP_GUIDANCE
+    )
+    assert "video_analyze" in HERMES_AGENT_HELP_GUIDANCE
     assert "never put complete articles" in HERMES_AGENT_HELP_GUIDANCE
 
 
@@ -63,9 +75,16 @@ def test_hermes_ecosystem_contracts_remain_product_capabilities():
     assert callable(install_by_name)
     assert callable(do_update)
     assert {"skills_list", "skill_view", "skill_manage"} <= tools
-    assert PRODUCT_ECOSYSTEM_COMPATIBILITY["mcp"]["install_and_discovery"] == "preserved"
-    assert PRODUCT_ECOSYSTEM_COMPATIBILITY["skills"]["hub_install_update"] == "preserved"
-    assert PRODUCT_ECOSYSTEM_COMPATIBILITY["core"]["raw_upstream_apply"] == "blocked-in-product-runtime"
+    assert (
+        PRODUCT_ECOSYSTEM_COMPATIBILITY["mcp"]["install_and_discovery"] == "preserved"
+    )
+    assert (
+        PRODUCT_ECOSYSTEM_COMPATIBILITY["skills"]["hub_install_update"] == "preserved"
+    )
+    assert (
+        PRODUCT_ECOSYSTEM_COMPATIBILITY["core"]["raw_upstream_apply"]
+        == "blocked-in-product-runtime"
+    )
 
 
 def test_product_runtime_is_explicit_and_not_inferred_from_import(monkeypatch):
@@ -90,22 +109,32 @@ def test_code_capability_is_product_scoped_instead_of_business_default():
     assert is_product_code_tool("marketing_read_account_context") is False
     assert "terminal" in resolve_toolset("marketing_code")
     assert "marketing_read_content_assets" in resolve_toolset("marketing_code")
+    assert {"vision_analyze", "video_analyze"} <= set(resolve_toolset("marketing"))
+    assert {
+        "marketing_search_materials",
+        "marketing_effect_materialize",
+        "marketing_effect_keep_material",
+        "marketing_prepare_video_voice",
+        "marketing_effect_video_voice",
+    } <= set(resolve_toolset("marketing"))
+    assert {"vision_analyze", "video_analyze"} <= set(resolve_toolset("marketing_code"))
+    assert is_product_perception_tool("vision_analyze") is True
+    assert is_product_perception_tool("video_analyze") is True
 
     safe, error = normalize_product_delegation_toolsets(None)
     assert error is None
     assert "marketing" in safe
+    assert "video" in safe
     assert "marketing_code" not in safe
 
     _, error = normalize_product_delegation_toolsets(["terminal", "file"])
     assert "raw Hermes coding toolsets" in str(error)
     assert validate_product_code_scope(None) is not None
     assert (
-        validate_product_code_scope(
-            {
-                "purpose": "code_generated_media",
-                "content_asset_id": "asset_123",
-            }
-        )
+        validate_product_code_scope({
+            "purpose": "code_generated_media",
+            "content_asset_id": "asset_123",
+        })
         is None
     )
 

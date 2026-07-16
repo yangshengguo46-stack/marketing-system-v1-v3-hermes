@@ -14,7 +14,12 @@ import {
 } from 'react'
 
 import { hermesDirectiveFormatter, type SlashChipKind } from '@/components/assistant-ui/directive-text'
-import { composerFill, composerSurfaceGlass } from '@/components/chat/composer-dock'
+import {
+  composerFill,
+  composerSurfaceContent,
+  composerSurfaceFrame,
+  composerSurfaceGlass
+} from '@/components/chat/composer-dock'
 import { Button } from '@/components/ui/button'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useResizeObserver } from '@/hooks/use-resize-observer'
@@ -2258,7 +2263,7 @@ export function ChatBar({
           <div className="relative w-full rounded-[inherit]">
             <div
               className={cn(
-                'group/composer-surface relative z-4 isolate grid grid-rows-[auto_1fr] overflow-hidden rounded-[inherit] border border-[color-mix(in_srgb,var(--dt-composer-ring)_calc(18%*var(--composer-ring-strength)),var(--dt-input))]',
+                composerSurfaceFrame,
                 COMPOSER_DROP_FADE_CLASS,
                 dragActive && COMPOSER_DROP_ACTIVE_CLASS
               )}
@@ -2285,7 +2290,8 @@ export function ChatBar({
               ) : null}
               <div
                 className={cn(
-                  'relative z-1 flex min-h-0 w-full flex-col gap-(--composer-row-gap) overflow-hidden rounded-[inherit] px-(--composer-surface-pad-x) py-(--composer-surface-pad-y) transition-opacity duration-200 ease-out',
+                  composerSurfaceContent,
+                  'transition-opacity duration-200 ease-out',
                   scrolledUp
                     ? 'opacity-30 group-hover/composer:opacity-100 group-focus-within/composer-surface:opacity-100'
                     : 'opacity-100'

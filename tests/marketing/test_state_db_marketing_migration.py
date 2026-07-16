@@ -87,6 +87,11 @@ def test_legacy_agent_core_facts_import_once_without_deleting_source(tmp_path):
         assert target.execute("SELECT count(*) FROM audience_hypotheses").fetchone()[0] == 1
         assert target.execute("SELECT count(*) FROM content_production_plans").fetchone()[0] == 1
         assert target.execute("SELECT count(*) FROM content_assets").fetchone()[0] == 1
+        review = target.execute(
+            "SELECT human_review_status,human_review_note,human_reviewed_at "
+            "FROM content_assets WHERE id='asset-1'"
+        ).fetchone()
+        assert review == ("pending", "", None)
         assert target.execute("SELECT count(*) FROM evidence_records").fetchone()[0] == 1
         marker = target.execute(
             "SELECT value FROM state_meta WHERE key='marketing_agent_core_import_v1'"

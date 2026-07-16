@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import {
   appViewForPath,
+  ARTICLE_CREATION_ROUTE,
   isNewChatRoute,
+  MATERIAL_LIBRARY_ROUTE,
   NEW_CHAT_ROUTE,
   routeSessionId,
   sessionRoute,
+  VIDEO_CREATION_ROUTE,
   WORKBENCH_ROUTE
 } from './routes'
 
@@ -16,6 +19,15 @@ describe('Marketing OS native routes', () => {
     expect(appViewForPath('/')).toBe('workbench')
     expect(appViewForPath('/chat')).toBe('chat')
     expect(isNewChatRoute('/chat')).toBe(true)
+  })
+
+  it('keeps article, video and materials as native product destinations', () => {
+    expect(ARTICLE_CREATION_ROUTE).toBe('/content/article')
+    expect(VIDEO_CREATION_ROUTE).toBe('/content/video')
+    expect(MATERIAL_LIBRARY_ROUTE).toBe('/materials')
+    expect(appViewForPath(ARTICLE_CREATION_ROUTE)).toBe('article-creation')
+    expect(appViewForPath(VIDEO_CREATION_ROUTE)).toBe('video-creation')
+    expect(appViewForPath(MATERIAL_LIBRARY_ROUTE)).toBe('materials')
   })
 
   it('round-trips native session routes without confusing them with product routes', () => {

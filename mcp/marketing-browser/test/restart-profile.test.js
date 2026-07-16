@@ -13,7 +13,9 @@ const executable = resolveBrowserExecutable()
 
 test('flushes one account profile before MCP shutdown and recovers it', {
   skip: !executable,
-  timeout: 20_000,
+  // Two real browser startups routinely take 13-15s on an idle machine and
+  // can cross 20s while the desktop regression suite is running in parallel.
+  timeout: 30_000,
 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'marketing-browser-restart-'))
   const entry = fileURLToPath(new URL('../src/server.js', import.meta.url))

@@ -12,6 +12,7 @@ from agent.marketing.domains import (
     ContentAssetRepository,
     ContentProductionPolicy,
     EvidenceRepository,
+    MediaAssetRepository,
 )
 from agent.marketing.evidence_capture import enrich_tool_result_with_evidence
 from model_tools import get_tool_definitions, handle_function_call
@@ -24,8 +25,18 @@ def _paths(tmp_path):
         json.dumps(
             {
                 "accounts": [
-                    {"id": "acct-1", "platform": "douyin", "label": "主账号", "status": "active"},
-                    {"id": "acct-2", "platform": "xiaohongshu", "label": "副账号", "status": "active"},
+                    {
+                        "id": "acct-1",
+                        "platform": "douyin",
+                        "label": "主账号",
+                        "status": "active",
+                    },
+                    {
+                        "id": "acct-2",
+                        "platform": "xiaohongshu",
+                        "label": "副账号",
+                        "status": "active",
+                    },
                 ]
             },
             ensure_ascii=False,
@@ -97,9 +108,67 @@ def _long_article(evidence_id, voice):
         ("容易踩的坑", "效率提升不等于岗位价值提升，保留复核和责任边界"),
         ("下一步行动", "用一周小实验验证时间成本、错误率和实际收益"),
     ):
-        paragraph = (f"{voice}：{idea}。这段内容围绕真实工作场景展开，并说明适用条件和反例。" * 8)
+        paragraph = (
+            f"{voice}：{idea}。这段内容围绕真实工作场景展开，并说明适用条件和反例。" * 8
+        )
         sections.append(f"## {heading}\n\n{paragraph} [{evidence_id}]")
     return "\n\n".join(sections)
+
+
+def _reaction_scenarios(evidence_id):
+    return [
+        {
+            "cohort": "正在尝试 AI 工作流的职场新人",
+            "cohort_relation": "target",
+            "stance": "experience_sharing",
+            "need_projection": "belonging",
+            "cognitive_projection": "Fe",
+            "existence_strategy": "confirm",
+            "likelihood_band": "high",
+            "trigger": "正文从重复任务开始",
+            "rationale": "读者可能分享自己的实践来确认经验",
+            "likely_comment_themes": ["自己的尝试", "人工复核"],
+            "synthetic_comment_examples": ["我也是从周报开始试的，复核比想象中重要。"],
+            "response_opportunity": "追问具体任务",
+            "risk": "幸存者偏差",
+            "evidence_basis": [evidence_id],
+            "disconfirming_signals": ["没有经验分享主题"],
+        },
+        {
+            "cohort": "谨慎验证效果的读者",
+            "cohort_relation": "adjacent",
+            "stance": "skeptical",
+            "need_projection": "safety",
+            "cognitive_projection": "Ti",
+            "existence_strategy": "preserve",
+            "likelihood_band": "medium",
+            "trigger": "标题承诺改变工作方式",
+            "rationale": "读者可能先检查成本和证据",
+            "likely_comment_themes": ["错误率", "复核成本"],
+            "synthetic_comment_examples": ["错误率和人工复核时间怎么算？"],
+            "response_opportunity": "补充证据边界",
+            "risk": "夸大承诺会损伤信任",
+            "evidence_basis": [evidence_id],
+            "disconfirming_signals": ["没有证据或成本质疑"],
+        },
+        {
+            "cohort": "希望马上落地的行动型读者",
+            "cohort_relation": "target",
+            "stance": "action_seeking",
+            "need_projection": "self_actualization",
+            "cognitive_projection": "Te",
+            "existence_strategy": "expand",
+            "likelihood_band": "medium",
+            "trigger": "结尾给出一周实验",
+            "rationale": "读者可能索要第一步和模板",
+            "likely_comment_themes": ["如何开始", "记录模板"],
+            "synthetic_comment_examples": ["第一个任务应该记录哪些字段？"],
+            "response_opportunity": "提供低成本第一步",
+            "risk": "行动建议太泛",
+            "evidence_basis": [evidence_id],
+            "disconfirming_signals": ["没有行动问题"],
+        },
+    ]
 
 
 @pytest.mark.parametrize(
@@ -132,7 +201,9 @@ def test_native_planner_rejects_external_video_studio_work():
         )
 
 
-def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, monkeypatch):
+def test_native_content_tools_plan_save_and_resume_in_bound_account(
+    tmp_path, monkeypatch
+):
     paths = _bind_session(tmp_path, monkeypatch)
     extract_result, evidence_id = _capture_evidence()
     plan_args = {
@@ -172,12 +243,15 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
                     "wechat_official": {
                         "title": "普通人如何把 AI 变成工作搭档",
                         "summary": "从一个真实任务开始改造工作流",
-                        "body_markdown": _long_article(evidence_id, "公众号版本更重场景和行动"),
+                        "body_markdown": _long_article(
+                            evidence_id, "公众号版本更重场景和行动"
+                        ),
                         "tags": ["AI", "工作流"],
                         "cta": "从你最重复的一项任务开始记录。",
                     }
                 },
                 "evidence_refs": [evidence_id],
+                "reaction_scenarios": _reaction_scenarios(evidence_id),
             },
             task_id="session-1",
             session_id="session-1",
@@ -206,18 +280,22 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     assert planned["account_scope"]["account_id"] == "acct-1"
     assert planned["checkpoint_status"] == "planned"
     assert planned["preflight"]["id"].startswith("preflight_")
-    assert planned["preflight"]["formula_version"] == "content-production-preflight-v0.6"
+    assert (
+        planned["preflight"]["formula_version"] == "content-production-preflight-v0.6"
+    )
     assert planned["preflight"]["scores"]["knowledge_support"] > 0
     assert planned["preflight"]["scores"]["knowledge_confidence_factor"] <= 1
     assert planned["preflight"]["publish_eligible"] is False
     assert planned["operating_mode"] == "exploratory_draft"
     assert knowledge["total"] >= 8
     assert planned["preflight"]["decision"]["version"] == "preflight-decision-v0.1"
-    assert planned["preflight"]["influence_score"]["version"] == "influenceos-score-v0.1"
-    assert planned["recommended_next_action"].startswith("先完成或修订账号定位")
-    assert planned["platform_stylebooks"]["wechat_official"]["guidance_status"].startswith(
-        "operational_guidance"
+    assert (
+        planned["preflight"]["influence_score"]["version"] == "influenceos-score-v0.1"
     )
+    assert planned["recommended_next_action"].startswith("先完成或修订账号定位")
+    assert planned["platform_stylebooks"]["wechat_official"][
+        "guidance_status"
+    ].startswith("operational_guidance")
     assert extract_result["marketing_evidence"]["records"][0]["status"] == "verified"
     assert created["account_id"] == "acct-1"
     assert created["content"]["_created_by"] == "hermes-native-marketing"
@@ -226,28 +304,140 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(tmp_path, mo
     assert created["content"]["_evidence_verification_level"] == "source_integrity"
     assert created["content"]["feature_snapshot"]["retro_contract"]["mutable"] is False
     assert created["content"]["feature_snapshot"]["evidence"]["ready"] is True
+    reaction = created["content"]["prediction"]["social_reaction_simulation"]
+    dimensions = created["content"]["prediction"]["prediction_dimensions"]
+    system_simulation = created["content"]["prediction"]["social_system_simulation"]
+    assert reaction["status"] == "audience_hypothesis_backed"
+    assert len(reaction["scenarios"]) == 3
+    assert reaction["scenarios"][0]["synthetic"] is True
+    assert set(dimensions["dimensions"]) == {
+        "attention",
+        "retention",
+        "trust",
+        "action",
+        "account_fit",
+        "sound",
+        "risk",
+    }
+    assert system_simulation["scope"] == "content_enters_social_attention_field"
+    assert system_simulation["existence_ontology"]["directly_observable"] is False
+    assert system_simulation["stages"]["individual_attention"]["need_projections"] == [
+        "belonging",
+        "safety",
+        "self_actualization",
+    ]
+    assert set(system_simulation["stages"]) == {
+        "individual_attention",
+        "group_propagation",
+        "platform_distribution",
+        "business_action",
+    }
+    assert (
+        system_simulation["causal_contract"]["single_post_identifies_counterfactual"]
+        is False
+    )
+    assert system_simulation["mutable"] is False
+    snapshot_reaction = created["content"]["feature_snapshot"]["prediction_ref"][
+        "social_reaction"
+    ]
+    assert snapshot_reaction["simulation_id"] == reaction["simulation_id"]
+    assert (
+        created["content"]["feature_snapshot"]["prediction_ref"]["social_system"][
+            "simulation_id"
+        ]
+        == system_simulation["simulation_id"]
+    )
+    assert (
+        "social_reaction"
+        in created["content"]["feature_snapshot"]["retro_contract"]["label_dimensions"]
+    )
     assert created["content"]["schema"] == "marketing.article_bundle.v1"
     assert created["content"]["review_status"] == "ready_for_human_review"
     assert created["content"]["validation"]["ready"] is True
-    assert created["content"]["platform_stylebooks"]["wechat_official"]["cover"]["primary_ratio"] == "2.35:1"
+    assert (
+        created["content"]["platform_stylebooks"]["wechat_official"]["cover"][
+            "primary_ratio"
+        ]
+        == "2.35:1"
+    )
     assert listed["total"] == 1
     assert listed["assets"][0]["id"] == created["id"]
     assert replanned["plan_id"] == planned["plan_id"]
     assert replanned["checkpoint_status"] == "review_ready"
-    assert ContentAssetRepository(paths).list(user_id="default", account_id="acct-2")["total"] == 0
+    assert (
+        ContentAssetRepository(paths).list(user_id="default", account_id="acct-2")[
+            "total"
+        ]
+        == 0
+    )
 
 
 def test_content_write_schema_cannot_override_account_scope():
-    definitions = get_tool_definitions(enabled_toolsets=["marketing"], quiet_mode=True)
+    definitions = get_tool_definitions(
+        enabled_toolsets=["marketing"],
+        quiet_mode=True,
+        skip_tool_search_assembly=True,
+    )
     by_name = {item["function"]["name"]: item["function"] for item in definitions}
 
-    create_properties = by_name["marketing_draft_content_create"]["parameters"]["properties"]
-    article_properties = by_name["marketing_draft_article_create"]["parameters"]["properties"]
-    plan_properties = by_name["marketing_plan_content_production"]["parameters"]["properties"]
+    create_properties = by_name["marketing_draft_content_create"]["parameters"][
+        "properties"
+    ]
+    article_properties = by_name["marketing_draft_article_create"]["parameters"][
+        "properties"
+    ]
+    plan_properties = by_name["marketing_plan_content_production"]["parameters"][
+        "properties"
+    ]
+    render_properties = by_name["marketing_prepare_faceless_render"]["parameters"][
+        "properties"
+    ]
+    effect_properties = by_name["marketing_effect_faceless_render"]["parameters"][
+        "properties"
+    ]
+    material_properties = by_name["marketing_search_materials"]["parameters"][
+        "properties"
+    ]
+    materialize_properties = by_name["marketing_effect_materialize"]["parameters"][
+        "properties"
+    ]
+    keep_material_properties = by_name["marketing_effect_keep_material"]["parameters"][
+        "properties"
+    ]
+    voice_properties = by_name["marketing_prepare_video_voice"]["parameters"][
+        "properties"
+    ]
+    voice_effect_properties = by_name["marketing_effect_video_voice"]["parameters"][
+        "properties"
+    ]
 
     assert "account_id" not in create_properties
     assert "account_id" not in article_properties
     assert "account_id" not in plan_properties
+    assert "account_id" not in render_properties
+    assert "account_id" not in effect_properties
+    assert "account_id" not in material_properties
+    assert "account_id" not in materialize_properties
+    assert "account_id" not in keep_material_properties
+    assert "account_id" not in voice_properties
+    assert "account_id" not in voice_effect_properties
+    assert "reaction_scenarios" in create_properties
+    assert "reaction_scenarios" in article_properties
+    assert (
+        "reaction_scenarios"
+        in by_name["marketing_draft_content_create"]["parameters"]["required"]
+    )
+    assert (
+        "reaction_scenarios"
+        in by_name["marketing_draft_article_create"]["parameters"]["required"]
+    )
+    reaction_item = create_properties["reaction_scenarios"]["items"]
+    assert {
+        "need_projection",
+        "cognitive_projection",
+        "existence_strategy",
+    } <= set(reaction_item["required"])
+    assert "existence_direction" not in reaction_item["properties"]
     assert plan_properties["kind"]["enum"] == [
         "auto",
         "article_soft",
@@ -259,9 +449,82 @@ def test_content_write_schema_cannot_override_account_scope():
     ]
     assert "marketing_read_evidence_pack" in by_name
     assert "marketing_read_sound_trends" in by_name
+    assert "marketing_read_public_content" in by_name
+    assert "marketing_interpret_public_content" in by_name
     assert "marketing_read_account_portfolio" in by_name
     assert "marketing_read_knowledge" in by_name
     assert "marketing_read_content_assets" in by_name
+    assert "marketing_read_video_productions" in by_name
+    assert render_properties["renderer"]["enum"] == ["ffmpeg_timeline_v1"]
+    assert effect_properties["confirmed_by_user"]["type"] == "boolean"
+
+
+def test_agent_material_and_voice_prepare_flow_uses_bound_account(
+    tmp_path, monkeypatch
+):
+    paths = _bind_session(tmp_path, monkeypatch)
+    media = MediaAssetRepository(paths)
+    local = media.import_bytes(
+        user_id="default",
+        account_id="acct-1",
+        name="办公室工作空镜",
+        media_type="image",
+        role="broll",
+        source_type="user_upload",
+        rights_status="user_confirmed",
+        payload=b"image",
+        filename="office.png",
+        mime_type="image/png",
+    )
+
+    search = json.loads(
+        handle_function_call(
+            "marketing_search_materials",
+            {"query": "办公室 工作", "role": "broll", "orientation": "landscape"},
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    selected = json.loads(
+        handle_function_call(
+            "marketing_effect_materialize",
+            {"candidate_id": search["candidates"][0]["id"], "rights_reviewed": True},
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    kept = json.loads(
+        handle_function_call(
+            "marketing_effect_keep_material",
+            {
+                "asset_id": selected["asset"]["id"],
+                "target_tier": "library",
+                "confirmed": True,
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    voice = json.loads(
+        handle_function_call(
+            "marketing_prepare_video_voice",
+            {"name": "第一版旁白", "script_text": "先展示结果，再解释方法。"},
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+
+    assert selected["asset"]["id"] == local["id"]
+    assert selected["asset"]["account_id"] == "acct-1"
+    assert kept["asset"]["id"] == local["id"]
+    assert kept["asset"]["storage_tier"] == "library"
+    assert voice["effect_executed"] is False
+    assert voice["job"]["status"] == "prepared"
+    assert voice["job"]["account_id"] == "acct-1"
 
 
 def test_content_repository_rejects_reserved_provenance_keys(tmp_path):
@@ -339,19 +602,30 @@ def test_evidence_capture_is_idempotent_and_account_scoped(tmp_path, monkeypatch
     second_payload, second_id = _capture_evidence()
 
     assert evidence_id == second_id
-    assert first_payload["marketing_evidence"]["citation_rule"].startswith("Use these evidence_id")
+    assert first_payload["marketing_evidence"]["citation_rule"].startswith(
+        "Use these evidence_id"
+    )
     pack = EvidenceRepository(paths).list(user_id="default", account_id="acct-1")
     assert pack["total"] == 1
     assert pack["records"][0]["id"] == evidence_id
     assert pack["records"][0]["canonical_url"] == "https://example.com/report"
     assert len(pack["records"][0]["content_sha256"]) == 64
-    assert pack["records"][0]["content_sha256"] == hashlib.sha256(
-        "该报告记录了 AI 辅助工作流程的原始样本、方法与研究边界。".encode("utf-8")
-    ).hexdigest()
+    assert (
+        pack["records"][0]["content_sha256"]
+        == hashlib.sha256(
+            "该报告记录了 AI 辅助工作流程的原始样本、方法与研究边界。".encode("utf-8")
+        ).hexdigest()
+    )
     assert pack["records"][0]["metadata"]["excerpt_origin"] == "llm_summary"
-    assert pack["records"][0]["metadata"]["source_hash_origin"] == "native_collector_raw_content"
+    assert (
+        pack["records"][0]["metadata"]["source_hash_origin"]
+        == "native_collector_raw_content"
+    )
     assert pack["records"][0]["metadata"]["claim_truth_verified"] is False
-    assert EvidenceRepository(paths).list(user_id="default", account_id="acct-2")["total"] == 0
+    assert (
+        EvidenceRepository(paths).list(user_id="default", account_id="acct-2")["total"]
+        == 0
+    )
 
 
 def test_failed_or_empty_web_extract_is_not_evidence(tmp_path, monkeypatch):
@@ -359,23 +633,24 @@ def test_failed_or_empty_web_extract_is_not_evidence(tmp_path, monkeypatch):
     unchanged = enrich_tool_result_with_evidence(
         tool_name="web_extract",
         args={"urls": ["https://example.com/missing"]},
-        result=json.dumps(
-            {
-                "results": [
-                    {
-                        "url": "https://example.com/missing",
-                        "content": "",
-                        "error": "not found",
-                    }
-                ]
-            }
-        ),
+        result=json.dumps({
+            "results": [
+                {
+                    "url": "https://example.com/missing",
+                    "content": "",
+                    "error": "not found",
+                }
+            ]
+        }),
         task_id="session-1",
         session_id="session-1",
     )
 
     assert "marketing_evidence" not in json.loads(unchanged)
-    assert EvidenceRepository(paths).list(user_id="default", account_id="acct-1")["total"] == 0
+    assert (
+        EvidenceRepository(paths).list(user_id="default", account_id="acct-1")["total"]
+        == 0
+    )
 
 
 def test_model_tools_dispatch_native_seam_returns_evidence_ids(tmp_path, monkeypatch):
@@ -707,8 +982,13 @@ def test_existing_v1_article_is_revalidated_and_downgraded_on_repository_open(
     assert migrated["status"] == "draft"
     assert migrated["version"] == 2
     assert migrated["content"]["review_status"] == "needs_revision"
-    assert migrated["content"]["validation"]["version"] == "marketing.article_validation.v2"
-    assert "factual_claim_citation_missing" in migrated["content"]["validation"]["issues"]
+    assert (
+        migrated["content"]["validation"]["version"]
+        == "marketing.article_validation.v2"
+    )
+    assert (
+        "factual_claim_citation_missing" in migrated["content"]["validation"]["issues"]
+    )
     with sqlite3.connect(paths.agent_db) as db:
         checkpoint_status = db.execute(
             "SELECT status FROM content_production_plans WHERE id=?",

@@ -167,7 +167,7 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
         enabled_toolsets=["marketing"],
     ))
 
-    assert names == {
+    expected_marketing_tools = {
         "marketing_read_accounts",
         "marketing_read_account_context",
         "marketing_read_account_portfolio",
@@ -175,6 +175,8 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
         "marketing_plan_content_production",
         "marketing_read_evidence_pack",
         "marketing_read_sound_trends",
+        "marketing_read_public_content",
+        "marketing_interpret_public_content",
         "marketing_read_knowledge",
         "marketing_read_content_assets",
         "marketing_draft_article_create",
@@ -182,6 +184,9 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
         "marketing_prepare_publish",
         "marketing_read_publish_state",
     }
+    assert expected_marketing_tools <= names
+    assert {"vision_analyze", "video_analyze"} <= names
+    assert {"tool_search", "tool_describe", "tool_call"} <= names
     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")
     assert result["lifecycle"]["stage"] == "positioning_approved"
     assert result["lifecycle"]["strategy_alignment"]["positioning_current"] is False

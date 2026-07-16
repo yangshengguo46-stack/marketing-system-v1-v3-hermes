@@ -2,6 +2,9 @@ export const SESSION_ROUTE_PREFIX = '/chat/'
 export const NEW_CHAT_ROUTE = '/chat'
 export const WORKBENCH_ROUTE = '/'
 export const CONTENT_FACTORY_ROUTE = '/content'
+export const ARTICLE_CREATION_ROUTE = '/content/article'
+export const VIDEO_CREATION_ROUTE = '/content/video'
+export const MATERIAL_LIBRARY_ROUTE = '/materials'
 export const ACCOUNT_CENTER_ROUTE = '/accounts'
 export const MANAGED_ROUTE = '/managed'
 export const SETTINGS_ROUTE = '/settings'
@@ -26,6 +29,9 @@ export type AppView =
   | 'skills'
   | 'workbench'
   | 'content'
+  | 'article-creation'
+  | 'video-creation'
+  | 'materials'
   | 'managed'
 
 export type AppRouteId =
@@ -41,6 +47,9 @@ export type AppRouteId =
   | 'skills'
   | 'workbench'
   | 'content'
+  | 'article-creation'
+  | 'video-creation'
+  | 'materials'
   | 'managed'
 
 export interface AppRoute {
@@ -52,6 +61,9 @@ export interface AppRoute {
 export const APP_ROUTES = [
   { id: 'workbench', path: WORKBENCH_ROUTE, view: 'workbench' },
   { id: 'content', path: CONTENT_FACTORY_ROUTE, view: 'content' },
+  { id: 'article-creation', path: ARTICLE_CREATION_ROUTE, view: 'article-creation' },
+  { id: 'video-creation', path: VIDEO_CREATION_ROUTE, view: 'video-creation' },
+  { id: 'materials', path: MATERIAL_LIBRARY_ROUTE, view: 'materials' },
   { id: 'accounts', path: ACCOUNT_CENTER_ROUTE, view: 'accounts' },
   { id: 'managed', path: MANAGED_ROUTE, view: 'managed' },
   { id: 'new', path: NEW_CHAT_ROUTE, view: 'chat' },

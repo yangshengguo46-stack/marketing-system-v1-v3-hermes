@@ -86,6 +86,10 @@ class PublishingRepository(MarketingDomainRepository):
                 raise KeyError("content asset not found in account scope")
             if asset["status"] != "review_ready":
                 raise ValueError("only a review_ready asset can enter publishing approval")
+            if asset["human_review_status"] != "accepted":
+                raise ValueError(
+                    "current content asset version requires explicit human review acceptance"
+                )
             content = _object(asset["content_json"], "content asset")
             plan_id = str(content.get("_production_plan_id") or "").strip()
             if not plan_id:
@@ -321,6 +325,110 @@ class PublishingRepository(MarketingDomainRepository):
         value = dict(row)
         value["request"] = json.loads(value.pop("request_json"))
         return value
+
+    def list_action_summaries(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        status: str | None = None,
+        limit: int = 30,
+    ) -> dict[str, Any]:
+        """Return bounded publish state for presentation surfaces."""
+
+        if status and status not in ACTION_STATUSES:
+            raise ValueError("unsupported publish action status")
+        query = """SELECT action.id
+            FROM marketing_publish_actions AS action
+            WHERE action.user_id=? AND action.account_id=?"""
+        params: list[Any] = [user_id, account_id]
+        if status:
+            query += " AND action.status=?"
+            params.append(status)
+        query += " ORDER BY action.updated_at DESC,action.id DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 100)))
+        with self._connection() as db:
+            rows = db.execute(query, params).fetchall()
+        actions = [
+            self.get_action_projection(
+                action_id=row["id"], user_id=user_id, account_id=account_id
+            )["summary"]
+            for row in rows
+        ]
+        return {
+            "user_id": user_id,
+            "account_id": account_id,
+            "actions": actions,
+            "total": len(actions),
+        }
+
+    def get_action_projection(
+        self, *, action_id: str, user_id: str, account_id: str
+    ) -> dict[str, Any]:
+        """Load one scoped action, receipt summary and checkpoint states."""
+
+        with self._connection() as db:
+            row = db.execute(
+                """SELECT action.*,asset.title AS asset_title,asset.type AS asset_type,
+                          receipt.receipt_type,receipt.summary_json AS receipt_summary_json,
+                          receipt.created_at AS receipt_created_at
+                FROM marketing_publish_actions AS action
+                JOIN content_assets AS asset ON asset.id=action.asset_id
+                LEFT JOIN marketing_receipt_refs AS receipt ON receipt.id=action.receipt_id
+                WHERE action.id=? AND action.user_id=? AND action.account_id=?""",
+                (action_id, user_id, account_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError("publish action not found in account scope")
+        value = dict(row)
+        request = _object(value.pop("request_json"), "publish request")
+        receipt_summary_raw = value.pop("receipt_summary_json")
+        receipt = None
+        if value.get("receipt_id") and receipt_summary_raw:
+            receipt = {
+                "id": value["receipt_id"],
+                "receipt_type": value.pop("receipt_type"),
+                "summary": _object(receipt_summary_raw, "publish receipt"),
+                "created_at": value.pop("receipt_created_at"),
+            }
+        else:
+            value.pop("receipt_type", None)
+            value.pop("receipt_created_at", None)
+        summary = {
+            "id": value["id"],
+            "asset_id": value["asset_id"],
+            "asset_version": value["asset_version"],
+            "title": value.pop("asset_title") or request.get("title") or "未命名内容",
+            "asset_type": value.pop("asset_type") or request.get("asset_type") or "",
+            "platform": value["platform"],
+            "provider": value["provider"],
+            "status": value["status"],
+            "failure_code": value.get("failure_code") or None,
+            "receipt": receipt,
+            "created_at": value["created_at"],
+            "updated_at": value["updated_at"],
+            "started_at": value.get("started_at"),
+            "settled_at": value.get("settled_at"),
+        }
+        return {
+            "summary": summary,
+            "action": {
+                key: item
+                for key, item in value.items()
+                if key
+                not in {
+                    "idempotency_key",
+                    "user_id",
+                    "account_id",
+                    "session_id",
+                    "tool_call_id",
+                    "approval_ref",
+                }
+            }
+            | {"request": request},
+            "receipt": receipt,
+            "metric_checkpoints": self.list_metric_checkpoints(action_id),
+        }
 
     def list_unresolved_actions(
         self,

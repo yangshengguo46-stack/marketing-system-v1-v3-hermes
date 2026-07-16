@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
@@ -52,5 +52,15 @@ export default defineConfig({
   preview: {
     host: '127.0.0.1',
     port: 4174
+  },
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    setupFiles: ['./src/test/setup.ts'],
+    // The renderer suite includes integration-style component tests whose
+    // first module transform can exceed Vitest's 5s default under full-suite
+    // concurrency. DOM query waits keep their short defaults, so real missing
+    // UI states still fail promptly while cold module loading gets headroom.
+    testTimeout: 15_000
   }
 })

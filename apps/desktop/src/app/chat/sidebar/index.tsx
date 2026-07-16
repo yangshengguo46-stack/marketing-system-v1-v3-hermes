@@ -118,6 +118,7 @@ import {
   type AppView,
   CONTENT_FACTORY_ROUTE,
   MANAGED_ROUTE,
+  MATERIAL_LIBRARY_ROUTE,
   WORKBENCH_ROUTE
 } from '../../routes'
 import { SidebarPanelLabel } from '../../shell/sidebar-label'
@@ -177,6 +178,12 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
     label: '',
     icon: props => <Codicon name="edit" {...props} />,
     route: CONTENT_FACTORY_ROUTE
+  },
+  {
+    id: 'materials',
+    label: '',
+    icon: props => <Codicon name="file-media" {...props} />,
+    route: MATERIAL_LIBRARY_ROUTE
   },
   {
     id: 'accounts',
@@ -1244,7 +1251,8 @@ export function ChatSidebar({
 
                 const active =
                   (item.id === 'workbench' && currentView === 'workbench') ||
-                  (item.id === 'content' && currentView === 'content') ||
+                  (item.id === 'content' && ['content', 'article-creation', 'video-creation'].includes(currentView)) ||
+                  (item.id === 'materials' && currentView === 'materials') ||
                   (item.id === 'accounts' && currentView === 'accounts') ||
                   (item.id === 'managed' && currentView === 'managed')
 
@@ -1539,7 +1547,6 @@ export function ChatSidebar({
         )}
 
         {contentVisible && !showSessionSections && <SidebarBlankState onNewProject={openProjectCreate} />}
-
       </SidebarContent>
       <ProjectDialog />
     </Sidebar>

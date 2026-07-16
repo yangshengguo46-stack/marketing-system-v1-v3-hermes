@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   $marketingAccounts,
+  $marketingOperationTasks,
   $selectedMarketingAccountId,
+  createMarketingOperationTask,
   selectMarketingAccount,
   setMarketingAccounts
 } from './marketing'
@@ -10,7 +12,9 @@ import {
 describe('Marketing OS account selection', () => {
   beforeEach(() => {
     $marketingAccounts.set([])
+    $marketingOperationTasks.set([])
     $selectedMarketingAccountId.set('')
+    window.localStorage.removeItem('marketing-os.desktop.operation-tasks.v1')
   })
 
   it('selects the first connected account when the previous selection is unavailable', () => {
@@ -29,5 +33,17 @@ describe('Marketing OS account selection', () => {
 
     selectMarketingAccount('  ')
     expect($selectedMarketingAccountId.get()).toBe('prospect_default')
+  })
+
+  it('keeps operation progress as an ephemeral projection of backend sessions', () => {
+    createMarketingOperationTask({
+      accountId: 'acct-1',
+      kind: 'account.analyze',
+      label: '正在分析',
+      title: '账号分析'
+    })
+
+    expect($marketingOperationTasks.get()).toHaveLength(1)
+    expect(window.localStorage.getItem('marketing-os.desktop.operation-tasks.v1')).toBeNull()
   })
 })

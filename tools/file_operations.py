@@ -498,6 +498,7 @@ class FileOperations(ABC):
 
 # Image extensions (subset of binary that we can return as base64)
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico'}
+VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.wmv', '.flv', '.m4v', '.mpeg', '.mpg'}
 
 # Shell-based linters by file extension.  Invoked via _exec() with the
 # filesystem path.  Cover languages where a compile/type check needs an
@@ -865,6 +866,11 @@ class ShellFileOperations(FileOperations):
         """Check if file is an image we can return as base64."""
         ext = os.path.splitext(path)[1].lower()
         return ext in IMAGE_EXTENSIONS
+
+    def _is_video(self, path: str) -> bool:
+        """Check whether a file belongs to the native video perception path."""
+        ext = os.path.splitext(path)[1].lower()
+        return ext in VIDEO_EXTENSIONS
     
     def _add_line_numbers(self, content: str, start_line: int = 1) -> str:
         """Add line numbers to content in ``LINE_NUM|CONTENT`` format.
@@ -1089,6 +1095,17 @@ class ShellFileOperations(FileOperations):
                 ),
             )
         
+        # Videos are inspected through the shared perception layer, never as text.
+        if self._is_video(path):
+            return ReadResult(
+                is_binary=True,
+                file_size=file_size,
+                hint=(
+                    "Video file detected. Use video_analyze with this file path to inspect "
+                    "the footage. Long videos are sampled into timestamped visual evidence."
+                ),
+            )
+
         # Read a sample to check for binary content
         sample_cmd = f"head -c 1000 {self._escape_shell_arg(path)} 2>/dev/null"
         sample_result = self._exec(sample_cmd)

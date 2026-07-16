@@ -12,6 +12,7 @@ from agent.marketing.domains import (
     ContentProductionPolicy,
     EvidenceRepository,
 )
+from agent.marketing.domains.human_model import build_human_projection_model
 from agent.marketing.intelligence import OperatingLoopRepository
 from hermes_state import SessionDB
 
@@ -42,6 +43,42 @@ def _profile():
         "motivations": ["长期专业品牌"],
         "unknowns": ["短视频镜头稳定性"],
         "sustainability": {"weekly_topics": 3},
+        "existence_strategy_hypotheses": [
+            {
+                "subject": "创作者",
+                "strategy": "continue",
+                "context": "希望长期积累可复用的方法与作品",
+                "observable_signals": ["持续复盘真实项目"],
+                "evidence_basis": ["用户明确表达长期品牌动机"],
+                "disconfirming_signals": ["长期只追逐一次性热点"],
+                "confidence": 0.55,
+                "data_gaps": ["尚无跨季度行为"],
+            }
+        ],
+        "need_projection_hypotheses": [
+            {
+                "subject": "创作者",
+                "need": "self_actualization",
+                "context": "通过长期作品形成完整能力与意义",
+                "observable_signals": ["持续建设专业品牌"],
+                "evidence_basis": ["用户明确表达长期品牌动机"],
+                "disconfirming_signals": ["长期只追逐一次性热点"],
+                "confidence": 0.5,
+                "data_gaps": ["尚无跨季度行为"],
+            }
+        ],
+        "cognitive_projection_hypotheses": [
+            {
+                "framework": "jungian_eight_functions",
+                "dimension": "Te",
+                "hypothesis": "当前更偏好以可验证结果组织信息",
+                "confidence": 0.45,
+                "evidence_basis": ["多次强调结果先于概念"],
+                "disconfirming_signals": ["在开放探索任务中持续偏好发散讨论"],
+                "review_after": "2026-10-01",
+                "data_gaps": ["样本主要来自工作语境"],
+            }
+        ],
     }
 
 
@@ -127,6 +164,42 @@ def test_full_operating_model_is_versioned_evidence_backed_and_restart_safe(tmp_
         trust_barriers=["案例可能是摆拍"],
         desired_outcomes=["当天复用"],
         behavior_signals=["搜索具体文件类型和任务"],
+        existence_strategy_hypotheses=[
+            {
+                "subject": "需要交付的职场人",
+                "strategy": "preserve",
+                "context": "临时汇报时先降低失败和失控风险",
+                "observable_signals": ["优先询问复核成本和错误率"],
+                "evidence_basis": ["任务与信任障碍假设"],
+                "disconfirming_signals": ["主要反馈集中于扩大影响力"],
+                "confidence": 0.4,
+                "data_gaps": ["缺真实评论聚类"],
+            }
+        ],
+        need_projection_hypotheses=[
+            {
+                "subject": "需要交付的职场人",
+                "need": "safety",
+                "context": "临时汇报时降低交付失败与失控风险",
+                "observable_signals": ["优先询问错误率和复核成本"],
+                "evidence_basis": ["任务与信任障碍假设"],
+                "disconfirming_signals": ["主要反馈集中于探索新可能"],
+                "confidence": 0.4,
+                "data_gaps": ["缺真实评论聚类"],
+            }
+        ],
+        cognitive_projection_hypotheses=[
+            {
+                "framework": "jungian_eight_functions",
+                "dimension": "Si",
+                "hypothesis": "可能更信任可复用步骤与既有案例",
+                "confidence": 0.35,
+                "evidence_basis": ["当前替代方案是搜索具体教程"],
+                "disconfirming_signals": ["开放概念内容获得更高行动率"],
+                "review_after": "2026-10-01",
+                "data_gaps": ["尚无真实发布回执"],
+            }
+        ],
         exclusions=["只追工具新闻"],
         data_gaps=["付费意愿"],
     )
@@ -272,6 +345,16 @@ def test_full_operating_model_is_versioned_evidence_backed_and_restart_safe(tmp_
     )
     assert restarted["project"]["stage"] == "experiment_running"
     assert restarted["creator_profile"]["profile"]["skills"] == ["把复杂工具讲成任务步骤"]
+    creator_model = restarted["creator_profile"]["profile"]["human_projection_model"]
+    assert creator_model["existence_ontology"]["directly_scoreable"] is False
+    assert creator_model["existence_strategy_hypotheses"][0]["strategy"] == "continue"
+    assert creator_model["need_projection_hypotheses"][0]["need"] == "self_actualization"
+    assert creator_model["cognitive_projection_hypotheses"][0]["guardrail"] == (
+        "cognitive_projection_not_diagnosis_or_permanent_type"
+    )
+    audience_model = restarted["audience_hypothesis"]["human_projection_model"]
+    assert audience_model["need_projection_hypotheses"][0]["need"] == "safety"
+    assert audience_model["existence_strategy_hypotheses"][0]["strategy"] == "preserve"
     assert restarted["market_route"]["route"]["category"] == "AI 教育"
     assert restarted["content_system"]["system"]["measurement_plan"]["primary"] == (
         "qualified_action_rate"
@@ -370,7 +453,68 @@ def test_sessiondb_reconciles_old_lifecycle_and_benchmark_tables(tmp_path):
     assert {"project_id", "role", "match_dimensions_json", "evidence_refs_json"} <= (
         benchmark_columns
     )
-    assert {"jobs_json", "trust_barriers_json", "behavior_signals_json"} <= audience_columns
+    assert {
+        "jobs_json",
+        "trust_barriers_json",
+        "behavior_signals_json",
+        "existence_hypotheses_json",
+        "cognitive_style_hypotheses_json",
+        "existence_strategy_hypotheses_json",
+        "need_projection_hypotheses_json",
+        "cognitive_projection_hypotheses_json",
+    } <= audience_columns
     assert "idx_benchmark_account_scope" in indexes
     assert "experiment_id" in plan_columns
     assert "experiment_id" in receipt_columns
+
+
+def test_human_model_hypotheses_reject_diagnosis_and_fake_certainty(tmp_path):
+    lifecycle, strategy, _evidence, _paths = _repositories(tmp_path)
+    project = lifecycle.begin_project(
+        user_id="default", account_id="acct-1", business_goal="测试软假设边界"
+    )
+    profile = _profile()
+    profile["cognitive_projection_hypotheses"][0]["diagnosis"] = "fixed personality"
+    with pytest.raises(ValueError, match="diagnostic keys"):
+        strategy.draft_creator_profile(
+            user_id="default",
+            account_id="acct-1",
+            project_id=project["id"],
+            profile=profile,
+        )
+
+    profile = _profile()
+    profile["existence_strategy_hypotheses"][0]["confidence"] = 0.95
+    with pytest.raises(ValueError, match="between 0 and 0.7"):
+        strategy.draft_creator_profile(
+            user_id="default",
+            account_id="acct-1",
+            project_id=project["id"],
+            profile=profile,
+        )
+
+
+def test_human_projection_model_relabels_legacy_direction_as_strategy():
+    model = build_human_projection_model(
+        existence_strategies=[
+            {
+                "subject": "legacy audience",
+                "direction": "preserve",
+                "confidence": 0.3,
+            }
+        ],
+        cognitive_projections=[
+            {
+                "framework": "jungian_eight_functions",
+                "dimension": "Si",
+                "hypothesis": "legacy soft hypothesis",
+                "confidence": 0.3,
+            }
+        ],
+    )
+
+    assert model["existence_ontology"]["role"] == "ontological_root_not_measured_variable"
+    strategy_hypothesis = model["existence_strategy_hypotheses"][0]
+    assert strategy_hypothesis["strategy"] == "preserve"
+    assert "direction" not in strategy_hypothesis
+    assert model["cognitive_projection_hypotheses"][0]["dimension"] == "Si"

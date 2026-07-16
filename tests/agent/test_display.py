@@ -78,6 +78,13 @@ class TestBuildToolPreview:
         assert result is not None
         assert "hello world" in result
 
+    def test_video_analyze_preview_uses_question(self):
+        result = build_tool_preview(
+            "video_analyze",
+            {"video_url": "/tmp/source.mp4", "question": "检查镜头节奏"},
+        )
+        assert result == "检查镜头节奏"
+
     def test_read_file_preview(self):
         result = build_tool_preview("read_file", {"path": "/tmp/test.py", "offset": 1})
         assert result is not None

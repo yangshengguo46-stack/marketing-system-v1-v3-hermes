@@ -33,7 +33,8 @@ _HERMES_CORE_TOOLS = [
     # so desktop, messaging and cron sessions operate on the same accounts.
     "marketing_read_accounts", "marketing_read_account_context", "marketing_read_account_portfolio",
     "marketing_update_account_lifecycle", "marketing_plan_content_production",
-    "marketing_read_evidence_pack", "marketing_read_sound_trends", "marketing_read_knowledge",
+    "marketing_read_evidence_pack", "marketing_read_sound_trends", "marketing_read_public_content",
+    "marketing_interpret_public_content", "marketing_read_knowledge",
     "marketing_read_content_assets", "marketing_draft_article_create", "marketing_draft_content_create",
     "marketing_prepare_publish", "marketing_read_publish_state",
     # Web
@@ -102,8 +103,12 @@ _HERMES_WEBHOOK_SAFE_TOOLS = [
 TOOLSETS = {
     # Basic toolsets - individual tool categories
     "marketing": {
-        "description": "Marketing OS account, audience, content planning and durable asset tools",
+        "description": (
+            "Marketing OS account, audience, perception, content planning and durable asset tools"
+        ),
         "tools": [
+            "vision_analyze",
+            "video_analyze",
             "marketing_read_accounts",
             "marketing_read_account_context",
             "marketing_read_account_portfolio",
@@ -111,10 +116,17 @@ TOOLSETS = {
             "marketing_plan_content_production",
             "marketing_read_evidence_pack",
             "marketing_read_sound_trends",
+            "marketing_read_public_content",
+            "marketing_interpret_public_content",
             "marketing_read_knowledge",
             "marketing_read_content_assets",
             "marketing_draft_article_create",
             "marketing_draft_content_create",
+            "marketing_search_materials",
+            "marketing_effect_materialize",
+            "marketing_effect_keep_material",
+            "marketing_prepare_video_voice",
+            "marketing_effect_video_voice",
             "marketing_prepare_publish",
             "marketing_read_publish_state",
         ],
@@ -134,7 +146,7 @@ TOOLSETS = {
         "tools": [
             "terminal", "process",
             "read_file", "write_file", "patch", "search_files",
-            "web_search", "web_extract", "vision_analyze", "image_generate",
+            "web_search", "web_extract", "vision_analyze", "video_analyze", "image_generate",
             "marketing_read_content_assets", "marketing_draft_content_create",
         ],
         "includes": [],

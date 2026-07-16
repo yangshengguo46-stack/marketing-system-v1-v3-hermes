@@ -488,6 +488,19 @@ class TestShellFileOpsHelpers:
         assert file_ops._is_image("data.pdf") is False
         assert file_ops._is_image("code.py") is False
 
+    def test_is_video(self, file_ops):
+        assert file_ops._is_video("clip.mp4") is True
+        assert file_ops._is_video("reference.MOV") is True
+        assert file_ops._is_video("photo.png") is False
+
+    def test_read_video_redirects_to_native_perception(self, mock_env):
+        mock_env.execute.return_value = {"output": "2048\n", "returncode": 0}
+        result = ShellFileOperations(mock_env).read_file("/tmp/source.mp4")
+
+        assert result.is_binary is True
+        assert result.error is None
+        assert "video_analyze" in str(result.hint)
+
     def test_add_line_numbers(self, file_ops):
         content = "line one\nline two\nline three"
         result = file_ops._add_line_numbers(content)

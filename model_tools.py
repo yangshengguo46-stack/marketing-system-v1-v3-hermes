@@ -312,12 +312,19 @@ def get_tool_definitions(
             cfg_fp = (cfg_stat.st_mtime_ns, cfg_stat.st_size)
         except (FileNotFoundError, OSError, ImportError):
             cfg_fp = None
+        try:
+            from agent.product import is_product_runtime
+
+            product_runtime = is_product_runtime()
+        except Exception:
+            product_runtime = False
         cache_key = (
             frozenset(enabled_toolsets) if enabled_toolsets is not None else None,
             frozenset(disabled_toolsets) if disabled_toolsets else None,
             registry._generation,
             cfg_fp,
             bool(os.environ.get("HERMES_KANBAN_TASK")),
+            product_runtime,
             bool(skip_tool_search_assembly),
         )
         cached = _tool_defs_cache.get(cache_key)

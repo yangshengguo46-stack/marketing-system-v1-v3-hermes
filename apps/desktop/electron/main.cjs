@@ -2103,6 +2103,10 @@ function createBundledProductBackend(dashboardArgs) {
       HERMES_NODE_IS_ELECTRON: '1',
       NODE_PATH: runtime.nodeModules,
       HERMES_BROWSER_EXECUTABLE: runtime.playwrightBrowserExecutable,
+      MARKETING_OS_VIDEO_RENDERERS_ROOT: runtime.videoRenderers,
+      MARKETING_OS_VIDEO_NODE_EXECUTABLE: process.execPath,
+      MARKETING_OS_VIDEO_NODE_IS_ELECTRON: '1',
+      MARKETING_OS_VIDEO_BROWSER_EXECUTABLE: runtime.playwrightBrowserExecutable,
       PLAYWRIGHT_BROWSERS_PATH: runtime.playwrightBrowsers,
       PYTHONNOUSERSITE: '1',
       PYTHONUTF8: '1'

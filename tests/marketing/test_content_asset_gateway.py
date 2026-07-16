@@ -63,6 +63,7 @@ def test_gateway_lists_bounded_content_summaries_and_loads_body_on_demand(tmp_pa
     assert summary["review_status"] == "ready_for_human_review"
     assert summary["validation_ready"] is True
     assert summary["target_platforms"] == ["zhihu"]
+    assert summary["human_review_status"] == "pending"
     assert "content" not in summary
 
     opened = server.handle_request(
@@ -75,6 +76,22 @@ def test_gateway_lists_bounded_content_summaries_and_loads_body_on_demand(tmp_pa
     )["result"]["asset"]
     assert opened["content"]["parent_draft"]["body_markdown"] == "很长的正文"
 
+    reviewed = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": "review",
+            "method": "marketing.content.asset.review",
+            "params": {
+                "account_id": "acct-1",
+                "asset_id": "asset-1",
+                "decision": "accepted",
+                "confirmed": True,
+            },
+        }
+    )["result"]["asset"]
+    assert reviewed["human_review_status"] == "accepted"
+    assert reviewed["human_reviewed_at"]
+
 
 def test_content_gateway_requires_account_scope():
     response = server.handle_request(
@@ -86,3 +103,23 @@ def test_content_gateway_requires_account_scope():
         }
     )
     assert response["error"]["code"] == -32602
+
+
+def test_content_gateway_requires_explicit_review_confirmation(tmp_path, monkeypatch):
+    state_path = tmp_path / "state.db"
+    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(state_path))
+    SessionDB(db_path=state_path).close()
+
+    response = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": "review",
+            "method": "marketing.content.asset.review",
+            "params": {
+                "account_id": "acct-1",
+                "asset_id": "asset-1",
+                "decision": "accepted",
+            },
+        }
+    )
+    assert response["error"]["code"] == 4095

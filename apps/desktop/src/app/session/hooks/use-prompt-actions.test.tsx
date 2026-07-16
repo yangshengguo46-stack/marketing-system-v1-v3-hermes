@@ -46,7 +46,10 @@ interface HarnessHandle {
   cancelRun: () => Promise<void>
   restoreToMessage: (messageId: string, target?: { text?: string; userOrdinal?: number | null }) => Promise<void>
   steerPrompt: (text: string) => Promise<boolean>
-  submitText: (text: string, options?: { attachments?: ComposerAttachment[]; fromQueue?: boolean }) => Promise<boolean>
+  submitText: (
+    text: string,
+    options?: { attachments?: ComposerAttachment[]; displayText?: string; fromQueue?: boolean }
+  ) => Promise<boolean>
 }
 
 function Harness({
@@ -368,6 +371,38 @@ describe('usePromptActions submit / queue drain semantics', () => {
     expect(requestGateway).toHaveBeenCalledWith('prompt.submit', {
       session_id: RUNTIME_SESSION_ID,
       text: 'hello after a stop'
+    })
+  })
+
+  it('shows a product action while sending its full backend-owned execution contract', async () => {
+    const seeds: Record<string, unknown>[] = []
+    const requestGateway = vi.fn(async () => ({}) as never)
+    let handle: HarnessHandle | null = null
+
+    render(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('确认分镜\n\n--- Attached Context ---\noperation_json={"stage":"storyboard"}', {
+      displayText: '确认「雨夜唱片店」的分镜阶段'
+    })
+
+    const messages = seeds.flatMap(seed => (Array.isArray(seed.messages) ? seed.messages : [])) as Array<{
+      parts?: Array<{ text?: string }>
+      role?: string
+    }>
+
+    const userMessage = messages.find(message => message.role === 'user')
+
+    expect(userMessage?.parts?.[0]?.text).toBe('确认「雨夜唱片店」的分镜阶段')
+    expect(requestGateway).toHaveBeenCalledWith('prompt.submit', {
+      session_id: RUNTIME_SESSION_ID,
+      text: '确认分镜\n\n--- Attached Context ---\noperation_json={"stage":"storyboard"}'
     })
   })
 

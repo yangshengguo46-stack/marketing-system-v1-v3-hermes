@@ -398,29 +398,32 @@ describe('assistant-ui streaming renderer', () => {
   })
 
   it('renders assistant text incrementally before completion', async () => {
-    const { container } = render(<StreamingHarness />)
+    vi.useFakeTimers()
 
-    expect(screen.getByRole('status', { name: 'Hermes is loading a response' })).toBeTruthy()
+    try {
+      const { container } = render(<StreamingHarness />)
 
-    await wait(80)
+      expect(screen.getByRole('status', { name: 'Marketing OS is loading a response' })).toBeTruthy()
 
-    await waitFor(() => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(80)
+      })
       expect(container.textContent).toContain('first chunk')
-    })
-    expect(container.textContent).not.toContain('second chunk')
-    expect(screen.queryByRole('status', { name: 'Hermes is loading a response' })).toBeNull()
+      expect(container.textContent).not.toContain('second chunk')
 
-    await wait(500)
-
-    await waitFor(() => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500)
+      })
       expect(container.textContent).toContain('first chunk second chunk')
-    })
 
-    await wait(250)
-
-    await waitFor(() => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250)
+      })
       expect(container.textContent).toContain('first chunk second chunk')
-    })
+      expect(screen.queryByRole('status', { name: 'Marketing OS is loading a response' })).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not render composer clearance for intro-only threads', () => {

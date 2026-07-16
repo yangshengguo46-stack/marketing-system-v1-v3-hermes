@@ -5,6 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { installAccountAuthTool } from './account-auth.js'
 import { installDouyinPortfolioTool } from './douyin-owned.js'
 import { installShortVideoSignalTool } from './short-video-signals.js'
+import { installPublicContentTool } from './public-content.js'
 import { installWechatOfficialPortfolioTool } from './wechat-official.js'
 
 const require = createRequire(import.meta.url)
@@ -12,6 +13,7 @@ const { tools } = require('playwright-core/lib/coreBundle')
 installAccountAuthTool()
 installDouyinPortfolioTool()
 installShortVideoSignalTool()
+installPublicContentTool()
 installWechatOfficialPortfolioTool()
 
 export function playwrightToolSchemas() {

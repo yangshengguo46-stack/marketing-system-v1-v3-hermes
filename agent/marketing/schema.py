@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS audience_hypotheses (
     trust_barriers_json TEXT NOT NULL DEFAULT '[]',
     desired_outcomes_json TEXT NOT NULL DEFAULT '[]',
     behavior_signals_json TEXT NOT NULL DEFAULT '[]',
+    existence_hypotheses_json TEXT NOT NULL DEFAULT '[]',
+    cognitive_style_hypotheses_json TEXT NOT NULL DEFAULT '[]',
+    existence_strategy_hypotheses_json TEXT NOT NULL DEFAULT '[]',
+    need_projection_hypotheses_json TEXT NOT NULL DEFAULT '[]',
+    cognitive_projection_hypotheses_json TEXT NOT NULL DEFAULT '[]',
     exclusions_json TEXT NOT NULL DEFAULT '[]',
     data_gaps_json TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'draft',
@@ -244,6 +249,9 @@ CREATE TABLE IF NOT EXISTS content_assets (
     topic TEXT,
     hook TEXT,
     version INTEGER NOT NULL DEFAULT 1,
+    human_review_status TEXT NOT NULL DEFAULT 'pending',
+    human_review_note TEXT NOT NULL DEFAULT '',
+    human_reviewed_at TEXT,
     content_json TEXT NOT NULL DEFAULT '{}',
     metrics_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
@@ -271,6 +279,9 @@ CREATE TABLE IF NOT EXISTS media_asset_library (
     rights_status TEXT NOT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     receipt_json TEXT NOT NULL DEFAULT '{}',
+    storage_tier TEXT NOT NULL DEFAULT 'library',
+    expires_at TEXT,
+    last_used_at TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -290,6 +301,98 @@ CREATE TABLE IF NOT EXISTS media_asset_references (
 );
 CREATE INDEX IF NOT EXISTS idx_media_asset_references_asset
     ON media_asset_references(asset_id, created_at);
+
+CREATE TABLE IF NOT EXISTS material_searches (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    query_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'completed',
+    provider_errors_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_material_search_scope
+    ON material_searches(user_id, account_id, created_at);
+
+CREATE TABLE IF NOT EXISTS material_candidates (
+    id TEXT PRIMARY KEY,
+    search_id TEXT NOT NULL REFERENCES material_searches(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_asset_id TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    role TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
+    preview_url TEXT NOT NULL DEFAULT '',
+    download_url TEXT NOT NULL DEFAULT '',
+    creator TEXT NOT NULL DEFAULT '',
+    creator_url TEXT NOT NULL DEFAULT '',
+    license_name TEXT NOT NULL DEFAULT '',
+    license_url TEXT NOT NULL DEFAULT '',
+    provider_home_url TEXT NOT NULL DEFAULT '',
+    width INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL DEFAULT 0,
+    duration REAL NOT NULL DEFAULT 0,
+    score REAL NOT NULL DEFAULT 0,
+    score_json TEXT NOT NULL DEFAULT '{}',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'candidate',
+    selected_media_asset_id TEXT REFERENCES media_asset_library(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(search_id, provider, provider_asset_id)
+);
+CREATE INDEX IF NOT EXISTS idx_material_candidate_scope
+    ON material_candidates(user_id, account_id, search_id, score DESC);
+
+CREATE TABLE IF NOT EXISTS marketing_audio_jobs (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'voiceover',
+    name TEXT NOT NULL,
+    script_text TEXT NOT NULL,
+    script_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'prepared',
+    approval_ref TEXT,
+    provider TEXT NOT NULL DEFAULT '',
+    output_asset_id TEXT REFERENCES media_asset_library(id),
+    receipt_json TEXT NOT NULL DEFAULT '{}',
+    failure_code TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    settled_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_audio_job_scope
+    ON marketing_audio_jobs(user_id, account_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS marketing_video_productions (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    source_asset_id TEXT NOT NULL REFERENCES content_assets(id),
+    source_asset_version INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'prepared',
+    edl_json TEXT NOT NULL,
+    approval_ref TEXT,
+    voice_asset_id TEXT REFERENCES media_asset_library(id),
+    final_video_asset_id TEXT REFERENCES media_asset_library(id),
+    output_asset_id TEXT REFERENCES content_assets(id),
+    receipt_json TEXT NOT NULL DEFAULT '{}',
+    failure_code TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    settled_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_video_production_scope
+    ON marketing_video_productions(user_id,account_id,status,updated_at);
 
 CREATE TABLE IF NOT EXISTS marketing_preflight_records (
     id TEXT PRIMARY KEY,
@@ -476,6 +579,43 @@ CREATE TABLE IF NOT EXISTS marketing_short_video_observations (
     created_at TEXT NOT NULL,
     UNIQUE(user_id,account_id,platform,source_item_id,observed_at)
 );
+
+CREATE TABLE IF NOT EXISTS marketing_public_content_cases (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    source_item_id TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    creator_json TEXT NOT NULL DEFAULT '{}',
+    first_content_json TEXT NOT NULL DEFAULT '{}',
+    latest_content_json TEXT NOT NULL DEFAULT '{}',
+    published_at TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id,account_id,platform,source_item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_public_content_case_scope
+    ON marketing_public_content_cases(user_id,account_id,platform,last_seen_at);
+
+CREATE TABLE IF NOT EXISTS marketing_public_feedback_observations (
+    id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL REFERENCES marketing_public_content_cases(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    evidence_id TEXT NOT NULL REFERENCES evidence_records(id),
+    observed_at TEXT NOT NULL,
+    content_json TEXT NOT NULL DEFAULT '{}',
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    rank INTEGER,
+    created_at TEXT NOT NULL,
+    UNIQUE(case_id,observed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_public_feedback_case_time
+    ON marketing_public_feedback_observations(case_id,observed_at);
 CREATE INDEX IF NOT EXISTS idx_short_video_observation_scope
     ON marketing_short_video_observations(user_id,account_id,platform,observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_short_video_observation_sound
@@ -568,6 +708,7 @@ PROSPECT_SCOPE_COLUMNS = {
     "evidence_records": "account_id",
     "content_production_plans": "account_id",
     "content_assets": "account_id",
+    "marketing_video_productions": "account_id",
     "marketing_preflight_records": "account_id",
     "marketing_receipt_refs": "account_id",
     "marketing_learning_candidates": "account_id",
@@ -576,6 +717,8 @@ PROSPECT_SCOPE_COLUMNS = {
     "marketing_knowledge_contributions": "account_id",
     "marketing_knowledge_entries": "account_id",
     "marketing_short_video_observations": "account_id",
+    "marketing_public_content_cases": "account_id",
+    "marketing_public_feedback_observations": "account_id",
     "marketing_account_portfolio_snapshots": "account_id",
     "marketing_owned_content_observations": "account_id",
     # Optional compatibility tables may exist in upgraded product databases.
@@ -596,6 +739,7 @@ LEGACY_MARKETING_TABLES = (
     "evidence_records",
     "content_production_plans",
     "content_assets",
+    "marketing_video_productions",
     "marketing_preflight_records",
     "marketing_receipt_refs",
     "marketing_learning_candidates",
@@ -604,6 +748,8 @@ LEGACY_MARKETING_TABLES = (
     "marketing_metric_checkpoints",
     "marketing_sounds",
     "marketing_short_video_observations",
+    "marketing_public_content_cases",
+    "marketing_public_feedback_observations",
     "marketing_account_portfolio_snapshots",
     "marketing_owned_content_observations",
     "marketing_knowledge_entries",

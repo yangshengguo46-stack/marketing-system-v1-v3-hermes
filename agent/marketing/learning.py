@@ -72,8 +72,23 @@ class AccountLearningGovernance:
             if not validation.get("success"):
                 raise ValueError(str(validation.get("error") or "invalid Skill candidate"))
         proposal = candidate.get("proposal") or {}
-        if candidate_type == "strategy" and proposal.get("kind") != "account_influence_calibration":
+        strategy_kind = str(proposal.get("kind") or "")
+        if candidate_type == "strategy" and strategy_kind not in {
+            "account_influence_calibration",
+            "public_benchmark_account_candidate",
+            "public_benchmark_observation",
+        }:
             raise ValueError("unsupported strategy learning projection")
+        public_benchmark_projection = None
+        if candidate_type == "strategy" and strategy_kind.startswith("public_benchmark_"):
+            public_benchmark_projection = self.strategy.apply_public_benchmark_learning(
+                user_id=candidate["user_id"],
+                account_id=candidate["account_id"],
+                candidate_id=candidate["id"],
+                proposal=proposal,
+                evidence_refs=candidate.get("evidence_refs") or [],
+                confidence=float(candidate.get("confidence") or 0),
+            )
         accepted = self.loop.decide_learning_candidate(
             candidate_id, status="accepted", reason=reason_value
         )
@@ -86,11 +101,14 @@ class AccountLearningGovernance:
                 topic=topic,
             )
         if candidate_type == "strategy":
-            result["account_strategy"] = self.strategy.apply_learning_calibration(
-                user_id=accepted["user_id"],
-                account_id=accepted["account_id"],
-                candidate_id=accepted["id"],
-            )
+            if public_benchmark_projection is not None:
+                result["account_strategy"] = public_benchmark_projection
+            else:
+                result["account_strategy"] = self.strategy.apply_learning_calibration(
+                    user_id=accepted["user_id"],
+                    account_id=accepted["account_id"],
+                    candidate_id=accepted["id"],
+                )
         if candidate_type == "skill":
             from tools.skill_manager_tool import skill_manage
 

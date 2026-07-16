@@ -16,7 +16,7 @@ export function OverlayActionButton({
   return (
     <button
       className={cn(
-        'inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium transition-colors disabled:cursor-default disabled:opacity-45',
+        'inline-flex h-8 items-center rounded-[7px] border px-3 text-xs font-medium transition-[background-color,border-color,color,transform] duration-[var(--mos-motion-fast)] ease-[var(--mos-ease-out)] active:scale-[0.98] disabled:cursor-default disabled:scale-100 disabled:opacity-45',
         tone === 'default' &&
           'border-[color-mix(in_srgb,var(--dt-border)_55%,transparent)] bg-[color-mix(in_srgb,var(--dt-card)_80%,transparent)] text-foreground hover:bg-[color-mix(in_srgb,var(--dt-muted)_46%,var(--dt-card))]',
         tone === 'subtle' &&

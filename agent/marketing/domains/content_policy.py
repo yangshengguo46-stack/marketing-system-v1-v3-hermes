@@ -205,6 +205,9 @@ class ContentProductionPolicy:
                 "positioning_id": lifecycle.get("positioning_id"),
                 "content_system_id": lifecycle.get("content_system_id"),
             },
+            "audience_model": _audience_model(
+                lifecycle.get("audience_hypothesis"), explicit_audience=audience
+            ),
             "operating_mode": "strategy_aligned" if strategy_ready else "exploratory_draft",
             "experiment_id": str(experiment_id or "").strip() or None,
             "capabilities": {
@@ -231,6 +234,25 @@ class ContentProductionPolicy:
         if kind_value == "article_soft":
             result["platform_stylebooks"] = article_stylebooks(platform_values)
         return result
+
+
+def _audience_model(value: Any, *, explicit_audience: str) -> dict[str, Any]:
+    if isinstance(value, dict) and value:
+        return value
+    audience = str(explicit_audience or "").strip()
+    if not audience:
+        return {}
+    return {
+        "status": "user_supplied_for_plan",
+        "segments": [audience[:500]],
+        "pains": [],
+        "scenarios": [],
+        "jobs": [],
+        "trust_barriers": [],
+        "desired_outcomes": [],
+        "behavior_signals": [],
+        "data_gaps": ["audience_details_require_confirmation"],
+    }
 
 
 def infer_content_kind(objective: str, *, kind: str = "auto", platforms: Any = None) -> str:

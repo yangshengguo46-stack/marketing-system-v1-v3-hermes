@@ -338,6 +338,7 @@ interface PromptActionsOptions {
 
 interface SubmitTextOptions {
   attachments?: ComposerAttachment[]
+  displayText?: string
   fromQueue?: boolean
 }
 
@@ -586,6 +587,7 @@ export function usePromptActions({
   const submitPromptText = useCallback(
     async (rawText: string, options?: SubmitTextOptions) => {
       const visibleText = rawText.trim()
+      const optimisticText = options?.displayText?.trim() || visibleText
       const usingComposerAttachments = !options?.attachments
 
       // Drop undefined/null holes a session switch or draft restore can leave in
@@ -656,7 +658,7 @@ export function usePromptActions({
       const buildUserMessage = (): ChatMessage => ({
         id: optimisticId,
         role: 'user',
-        parts: [textPart(visibleText || (attachmentRefs.length ? '' : attachments.map(a => a.label).join(', ')))],
+        parts: [textPart(optimisticText || (attachmentRefs.length ? '' : attachments.map(a => a.label).join(', ')))],
         attachmentRefs
       })
 
@@ -736,7 +738,7 @@ export function usePromptActions({
 
       if (!sessionId) {
         try {
-          sessionId = await createBackendSessionForSend(visibleText)
+          sessionId = await createBackendSessionForSend(optimisticText)
         } catch (err) {
           dropOptimistic(null)
           releaseBusy()

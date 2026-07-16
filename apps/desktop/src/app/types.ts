@@ -132,6 +132,7 @@ export type SidebarNavId =
   | 'skills'
   | 'workbench'
   | 'content'
+  | 'materials'
   | 'managed'
 
 export interface SidebarNavItem {

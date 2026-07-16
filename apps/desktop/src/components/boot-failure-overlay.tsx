@@ -188,10 +188,6 @@ export function BootFailureOverlay() {
         </div>
 
         <div className="grid gap-4 p-5">
-          <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-xs text-destructive">
-            {boot.error}
-          </div>
-
           <div className="grid gap-2">
             <div className="flex flex-wrap gap-2">
               {remoteReauth ? (

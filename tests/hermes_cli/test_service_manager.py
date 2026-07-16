@@ -7,6 +7,8 @@ implementation in this same file once that phase ships.
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from hermes_cli.service_manager import (
@@ -436,6 +438,20 @@ def test_s6_manager_kind_and_supports_registration() -> None:
 # tests/docker/test_s6_profile_gateway_integration.py.
 
 
+def _assert_event_dir_mode(path) -> None:
+    import stat
+
+    mode = stat.S_IMODE(path.stat().st_mode)
+    allowed = {0o3730}
+    if sys.platform == "darwin":
+        # APFS clears setgid when the test user cannot chown the temporary
+        # directory to the container-only hermes group (gid 10000).
+        allowed.add(0o1730)
+    assert mode in allowed, (
+        f"{path} mode = {oct(mode)}, want one of {sorted(map(oct, allowed))}"
+    )
+
+
 def test_seed_supervise_skeleton_creates_expected_layout(tmp_path) -> None:
     """Verifies the dirs + FIFO + modes the helper lays down."""
     import stat
@@ -450,9 +466,7 @@ def test_seed_supervise_skeleton_creates_expected_layout(tmp_path) -> None:
     # Top-level event/ — s6-svlisten1 event subscription dir.
     event = svc_dir / "event"
     assert event.is_dir(), "missing top-level event/"
-    assert stat.S_IMODE(event.stat().st_mode) == 0o3730, (
-        f"event/ mode = {oct(event.stat().st_mode)}, want 03730"
-    )
+    _assert_event_dir_mode(event)
 
     # supervise/ dir.
     supervise = svc_dir / "supervise"
@@ -462,7 +476,7 @@ def test_seed_supervise_skeleton_creates_expected_layout(tmp_path) -> None:
     # supervise/event/.
     supervise_event = supervise / "event"
     assert supervise_event.is_dir(), "missing supervise/event/"
-    assert stat.S_IMODE(supervise_event.stat().st_mode) == 0o3730
+    _assert_event_dir_mode(supervise_event)
 
     # supervise/control FIFO.
     control = supervise / "control"
@@ -497,7 +511,7 @@ def test_seed_supervise_skeleton_handles_log_subservice(tmp_path) -> None:
     log_control = log_supervise / "control"
 
     assert log_event.is_dir()
-    assert stat.S_IMODE(log_event.stat().st_mode) == 0o3730
+    _assert_event_dir_mode(log_event)
     assert log_supervise.is_dir()
     assert log_supervise_event.is_dir()
     assert log_control.exists() and stat.S_ISFIFO(log_control.stat().st_mode)

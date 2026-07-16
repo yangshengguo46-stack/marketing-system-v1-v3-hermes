@@ -23,7 +23,7 @@ export function SegmentedControl<T extends string>({ options, value, onChange, c
   return (
     <div
       className={cn(
-        'inline-grid w-fit auto-cols-fr grid-flow-col gap-0.5 rounded-[5px] bg-(--ui-bg-tertiary) p-0.5',
+        'inline-grid w-fit auto-cols-fr grid-flow-col gap-0.5 rounded-[8px] bg-(--ui-bg-tertiary) p-0.5',
         className
       )}
     >
@@ -34,7 +34,7 @@ export function SegmentedControl<T extends string>({ options, value, onChange, c
           <button
             aria-pressed={active}
             className={cn(
-              'flex items-center justify-center gap-1 rounded-[3px] px-2.5 py-0.5 text-[0.6875rem] font-medium transition-colors',
+              'flex items-center justify-center gap-1 rounded-[6px] px-2.5 py-0.5 text-[0.6875rem] font-medium transition-[background-color,color,box-shadow] duration-[var(--mos-motion-fast)] ease-[var(--mos-ease-out)]',
               active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
             )}
             key={id}

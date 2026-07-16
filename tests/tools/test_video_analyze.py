@@ -114,6 +114,13 @@ class TestVideoAnalyzeSchema:
         assert "question" in params["properties"]
         assert params["required"] == ["video_url", "question"]
 
+    def test_schema_exposes_analysis_controls(self):
+        properties = VIDEO_ANALYZE_SCHEMA["parameters"]["properties"]
+        assert properties["analysis_mode"]["enum"] == ["auto", "direct", "sampled"]
+        assert properties["max_frames"]["maximum"] == 48
+        assert "start_seconds" in properties
+        assert "end_seconds" in properties
+
     def test_schema_description_mentions_video(self):
         assert "video" in VIDEO_ANALYZE_SCHEMA["description"].lower()
 
@@ -164,6 +171,31 @@ class TestHandleVideoAnalyze:
             args = mock_tool.call_args[0]
             assert args[2] == "google/gemini-flash"
 
+    def test_forwards_sampling_controls(self, monkeypatch):
+        monkeypatch.setenv("AUXILIARY_VIDEO_MODEL", "test-model")
+
+        with patch("tools.vision_tools.video_analyze_tool", new_callable=AsyncMock) as mock_tool:
+            mock_tool.return_value = json.dumps({"success": True, "analysis": "ok"})
+            asyncio.get_event_loop().run_until_complete(
+                _handle_video_analyze(
+                    {
+                        "video_url": "/tmp/test.mp4",
+                        "question": "test",
+                        "analysis_mode": "sampled",
+                        "start_seconds": 3.5,
+                        "end_seconds": 8.0,
+                        "max_frames": 16,
+                    }
+                )
+            )
+
+        assert mock_tool.call_args.kwargs == {
+            "analysis_mode": "sampled",
+            "start_seconds": 3.5,
+            "end_seconds": 8.0,
+            "max_frames": 16,
+        }
+
 
 # ---------------------------------------------------------------------------
 # video_analyze_tool — integration-style tests with mocked LLM
@@ -192,6 +224,7 @@ class TestVideoAnalyzeTool:
         data = json.loads(result)
         assert data["success"] is True
         assert "demo" in data["analysis"].lower()
+        assert data["analysis_mode"] == "direct"
 
     def test_local_file_not_found(self, tmp_path):
         """Non-existent file raises appropriate error."""
@@ -302,6 +335,106 @@ class TestVideoAnalyzeTool:
         assert "video_url" in content[1]
         assert content[1]["video_url"]["url"].startswith("data:video/mp4;base64,")
 
+    def test_sampled_mode_sends_visual_evidence_with_metadata(self, tmp_path):
+        video = tmp_path / "test.mp4"
+        video.write_bytes(b"\x00" * 100)
+        sheet = tmp_path / "contact-sheet.jpg"
+        sheet.write_bytes(b"fake-jpeg")
+        sampling = {
+            "duration_seconds": 12.0,
+            "start_seconds": 2.0,
+            "end_seconds": 8.0,
+            "frame_count": 6,
+            "contact_sheet_count": 1,
+        }
+        captured_kwargs = {}
+
+        async def capture_llm(**kwargs):
+            captured_kwargs.update(kwargs)
+            response = MagicMock()
+            response.choices = [MagicMock()]
+            response.choices[0].message.content = "Visible sequence analysis."
+            return response
+
+        with patch(
+            "tools.vision_tools._extract_video_contact_sheets",
+            return_value=([sheet], sampling),
+        ) as mock_extract:
+            with patch(
+                "tools.vision_tools._image_to_base64_data_url",
+                return_value="data:image/jpeg;base64,AAAA",
+            ):
+                with patch("tools.vision_tools.async_call_llm", side_effect=capture_llm):
+                    with patch(
+                        "tools.vision_tools.extract_content_or_reasoning",
+                        return_value="Visible sequence analysis.",
+                    ):
+                        result = self._run(
+                            video_analyze_tool(
+                                str(video),
+                                "Describe the edit.",
+                                analysis_mode="sampled",
+                                start_seconds=2.0,
+                                end_seconds=8.0,
+                                max_frames=6,
+                            )
+                        )
+
+        data = json.loads(result)
+        assert data["success"] is True
+        assert data["analysis_mode"] == "sampled"
+        assert data["sampling"] == sampling
+        mock_extract.assert_called_once()
+        assert mock_extract.call_args.kwargs["start_seconds"] == 2.0
+        assert mock_extract.call_args.kwargs["end_seconds"] == 8.0
+        assert mock_extract.call_args.kwargs["max_frames"] == 6
+        content = captured_kwargs["messages"][0]["content"]
+        assert content[1]["type"] == "image_url"
+        assert "do not claim to have heard audio" in content[0]["text"]
+
+    def test_auto_mode_samples_large_local_files(self, tmp_path):
+        video = tmp_path / "test.mp4"
+        video.write_bytes(b"\x00" * 100)
+        sheet = tmp_path / "contact-sheet.jpg"
+        sheet.write_bytes(b"fake-jpeg")
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "OK"
+
+        with patch("tools.vision_tools._VIDEO_SIZE_WARN_BYTES", 10):
+            with patch(
+                "tools.vision_tools._extract_video_contact_sheets",
+                return_value=([sheet], {"frame_count": 4}),
+            ):
+                with patch(
+                    "tools.vision_tools._image_to_base64_data_url",
+                    return_value="data:image/jpeg;base64,AAAA",
+                ):
+                    with patch(
+                        "tools.vision_tools.async_call_llm",
+                        new_callable=AsyncMock,
+                        return_value=response,
+                    ):
+                        with patch(
+                            "tools.vision_tools.extract_content_or_reasoning",
+                            return_value="OK",
+                        ):
+                            result = self._run(video_analyze_tool(str(video), "What?"))
+
+        assert json.loads(result)["analysis_mode"] == "sampled"
+
+    def test_rejects_unknown_analysis_mode(self, tmp_path):
+        video = tmp_path / "test.mp4"
+        video.write_bytes(b"\x00" * 100)
+
+        result = self._run(
+            video_analyze_tool(str(video), "What?", analysis_mode="magic")
+        )
+
+        data = json.loads(result)
+        assert data["success"] is False
+        assert "analysis_mode must be" in data["error"]
+
 
 # ---------------------------------------------------------------------------
 # Toolset registration
@@ -320,7 +453,7 @@ class TestVideoToolsetRegistration:
         assert entry.emoji == "🎬"
 
     def test_not_in_core_tools(self):
-        """video_analyze should NOT be in _HERMES_CORE_TOOLS (default disabled)."""
+        """Generic Hermes remains opt-in; Marketing OS promotes it separately."""
         from toolsets import _HERMES_CORE_TOOLS
         assert "video_analyze" not in _HERMES_CORE_TOOLS
 
@@ -329,3 +462,9 @@ class TestVideoToolsetRegistration:
         from toolsets import TOOLSETS
         assert "video" in TOOLSETS
         assert "video_analyze" in TOOLSETS["video"]["tools"]
+
+    def test_in_marketing_os_perception_surface(self):
+        from toolsets import resolve_toolset
+
+        assert "video_analyze" in resolve_toolset("marketing")
+        assert "video_analyze" in resolve_toolset("marketing_code")

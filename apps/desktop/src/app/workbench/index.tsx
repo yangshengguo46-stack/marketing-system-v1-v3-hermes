@@ -3,44 +3,25 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
-import {
-  ArrowUpRight,
-  BarChart3,
-  Brain,
-  CheckCircle2,
-  ChevronRight,
-  Eye,
-  FileText,
-  Plus,
-  RefreshCw,
-  Users,
-  Zap
-} from '@/lib/icons'
+import { ArrowUpRight, BarChart3, Brain, CheckCircle2, ChevronRight, FileText, Plus, Zap } from '@/lib/icons'
 import { PRODUCT_NAME } from '@/product'
 import {
   $selectedMarketingAccountId,
   type MarketingAccountSummary,
-  type MarketingPlatformSummary,
   selectMarketingAccount,
   setMarketingAccounts
 } from '@/store/marketing'
 import { $gatewayState } from '@/store/session'
 
-import {
-  AccountConnectDialog,
-  buildOwnedAccountAnalysisPrompt,
-  MarketingPlatformAvatar
-} from './account-connect-dialog'
+import { type ContentAssetSummary, ContentReviewSheet } from './content-review-sheet'
+import { GrowthDashboard } from './growth-dashboard'
+import type { StartMarketingOperation } from './operations'
+import { userFacingError } from './user-facing-copy'
 
 interface MarketingAccountsSummary {
   accounts: MarketingAccountSummary[]
   total: number
   source: string
-}
-
-interface MarketingPlatformsSummary {
-  platforms: MarketingPlatformSummary[]
-  total: number
 }
 
 interface AccountContext {
@@ -61,42 +42,55 @@ interface AccountContext {
   }
 }
 
-interface ContentAssetSummary {
+interface PublishActionSummary {
   id: string
-  platform?: string
-  status?: string
-  title?: string
-  topic?: string
-  type?: string
-  updated_at?: string
+  platform: string
+  status: string
+  title: string
+  updated_at: string
+  receipt?: {
+    summary?: {
+      platform_post_id?: string | null
+      published_url?: string | null
+    }
+  } | null
+}
+
+interface PublishActionDetail {
+  action?: {
+    request?: {
+      prediction?: Record<string, unknown> | null
+    }
+    [key: string]: unknown
+  }
+  metric_checkpoints?: Array<Record<string, unknown>>
+  receipt?: {
+    summary?: Record<string, unknown>
+  } | null
+  summary?: PublishActionSummary
 }
 
 interface WorkbenchViewProps {
-  onNewChat: (prefill?: string) => void
+  onNewChat: () => void
   onOpenAccounts: () => void
   onOpenContent: () => void
+  onStartOperation: StartMarketingOperation
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
 
-const STAGE_COPY: Record<string, { eyebrow: string; title: string; progress: number }> = {
-  not_started: { eyebrow: '等待建立经营模型', title: '先把你的优势变成一个可验证的方向', progress: 12 },
-  goal_defined: { eyebrow: '目标已建立', title: '正在寻找最值得进入的赛道', progress: 24 },
-  market_routes_ready: { eyebrow: '赛道候选已形成', title: '选择第一条可验证的市场路径', progress: 35 },
-  audience_ready: { eyebrow: '受众假设已形成', title: '用对标账号校准目标用户', progress: 48 },
-  benchmark_ready: { eyebrow: '对标研究已完成', title: '把优势压缩成清晰的账号定位', progress: 62 },
-  positioned: { eyebrow: '账号定位已建立', title: '搭建长期可持续的内容系统', progress: 74 },
-  content_system_ready: { eyebrow: '内容系统已建立', title: '启动第一轮内容实验', progress: 86 },
-  experiment_running: { eyebrow: '实验正在运行', title: '等待真实回执校准下一步', progress: 94 }
-}
-
-export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, requestGateway }: WorkbenchViewProps) {
+export function WorkbenchView({
+  onNewChat,
+  onOpenAccounts,
+  onOpenContent,
+  onStartOperation,
+  requestGateway
+}: WorkbenchViewProps) {
   const [accounts, setAccounts] = useState<MarketingAccountsSummary | null>(null)
-  const [platforms, setPlatforms] = useState<MarketingPlatformSummary[]>([])
   const [context, setContext] = useState<AccountContext | null>(null)
   const [assets, setAssets] = useState<ContentAssetSummary[]>([])
+  const [selectedReviewAsset, setSelectedReviewAsset] = useState<ContentAssetSummary | null>(null)
+  const [publishActionDetails, setPublishActionDetails] = useState<PublishActionDetail[]>([])
   const [pendingDecisions, setPendingDecisions] = useState(0)
-  const [connectOpen, setConnectOpen] = useState(false)
-  const [resumeAccount, setResumeAccount] = useState<MarketingAccountSummary | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [error, setError] = useState('')
   const selectedAccountId = useStore($selectedMarketingAccountId)
@@ -126,21 +120,17 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
 
     let active = true
 
-    void Promise.all([
-      requestGateway<MarketingAccountsSummary>('marketing.accounts.list'),
-      requestGateway<MarketingPlatformsSummary>('marketing.accounts.platforms')
-    ])
-      .then(([accountResult, platformResult]) => {
+    void requestGateway<MarketingAccountsSummary>('marketing.accounts.list')
+      .then(accountResult => {
         if (!active) {
           return
         }
 
         applyAccounts(accountResult)
-        setPlatforms(platformResult.platforms)
       })
       .catch(reason => {
         if (active) {
-          setError(reason instanceof Error ? reason.message : String(reason))
+          setError(userFacingError(reason, '账号数据暂时无法读取，请稍后重试。'))
         }
       })
 
@@ -153,6 +143,8 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
     if (!selectedAccount?.id || selectedAccount.auth_state !== 'authenticated') {
       setContext(null)
       setAssets([])
+      setSelectedReviewAsset(null)
+      setPublishActionDetails([])
       setPendingDecisions(0)
 
       return
@@ -171,6 +163,10 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
         account_id: selectedAccount.id,
         limit: 20,
         status: 'pending'
+      }),
+      requestGateway<{ actions: PublishActionSummary[] }>('marketing.publish.actions.list', {
+        account_id: selectedAccount.id,
+        limit: 20
       })
     ]).then(results => {
       if (!active) {
@@ -189,6 +185,28 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
         setPendingDecisions(results[2].value.total || 0)
       }
 
+      if (results[3].status === 'fulfilled') {
+        const actions = results[3].value.actions || []
+        void Promise.allSettled(
+          actions.slice(0, 8).map(action =>
+            requestGateway<PublishActionDetail>('marketing.publish.action.get', {
+              account_id: selectedAccount.id,
+              action_id: action.id
+            })
+          )
+        ).then(detailResults => {
+          if (!active) {
+            return
+          }
+
+          setPublishActionDetails(
+            detailResults.flatMap(result => (result.status === 'fulfilled' ? [result.value] : []))
+          )
+        })
+      } else {
+        setPublishActionDetails([])
+      }
+
       setLoadingDetail(false)
     })
 
@@ -197,66 +215,8 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
     }
   }, [requestGateway, selectedAccount?.auth_state, selectedAccount?.id])
 
-  const handleAccountChanged = useCallback(
-    (account: MarketingAccountSummary) => {
-      setAccounts(current => {
-        const previous = current?.accounts || []
-        const next = [...previous.filter(item => item.id !== account.id), account]
-        setMarketingAccounts(next)
-
-        return { accounts: next, source: current?.source || 'hermes_state', total: next.length }
-      })
-
-      if (account.auth_state === 'authenticated') {
-        selectMarketingAccount(account.id)
-        void refreshAccounts().catch(() => undefined)
-      }
-    },
-    [refreshAccounts]
-  )
-
-  const openAccountConnect = (account: MarketingAccountSummary | null = null) => {
-    setResumeAccount(account)
-    setConnectOpen(true)
-  }
-
-  const stats = selectedAccount?.stats || {}
-  const lifecycle = context?.lifecycle || {}
-  const stage = lifecycle.stage || 'not_started'
-  const stageCopy = STAGE_COPY[stage] || STAGE_COPY.not_started
   const accountName = selectedAccount?.label || selectedAccount?.username || '你的账号'
   const greeting = timeGreeting()
-
-  const metrics = selectedAccount?.platform === 'wechat_official'
-    ? [
-        { icon: Eye, label: '已同步阅读', value: metric(stats, ['read_users']), accent: '#54b99a' },
-        { icon: ArrowUpRight, label: '已同步分享', value: metric(stats, ['share_users']), accent: '#ef625c' },
-        { icon: Zap, label: '点赞', value: metric(stats, ['like_count']), accent: '#d6a84a' },
-        { icon: FileText, label: '文章', value: metric(stats, ['articles_count']), accent: '#7894d8' }
-      ]
-    : selectedAccount?.platform === 'douyin'
-      ? [
-          { icon: Users, label: '粉丝', value: metric(stats, ['followers']), accent: '#54b99a' },
-          { icon: Eye, label: '公开播放', value: metric(stats, ['total_views']), accent: '#ef625c' },
-          { icon: Zap, label: '累计获赞', value: metric(stats, ['total_likes']), accent: '#d6a84a' },
-          { icon: FileText, label: '公开作品', value: metric(stats, ['videos_count']), accent: '#7894d8' }
-        ]
-      : [
-          { icon: Users, label: '粉丝', value: metric(stats, ['followers', 'fan_count', 'fans']), accent: '#54b99a' },
-          { icon: Eye, label: '浏览', value: metric(stats, ['views', 'play_count', 'total_views']), accent: '#ef625c' },
-          {
-            icon: Zap,
-            label: '互动',
-            value: metric(stats, ['likes', 'total_likes', 'digg_count', 'engagement', 'interaction']),
-            accent: '#d6a84a'
-          },
-          {
-            icon: FileText,
-            label: '作品',
-            value: metric(stats, ['works', 'video_count', 'videos_count', 'content_count']),
-            accent: '#7894d8'
-          }
-        ]
 
   return (
     <main className="marketing-workbench h-full overflow-y-auto bg-(--ui-background) text-foreground">
@@ -284,189 +244,104 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
           </div>
         </header>
 
-        <section className="mt-7 flex items-center gap-2 overflow-x-auto pb-1">
-          {accounts?.accounts.map(account => (
+        <GrowthDashboard
+          accounts={accounts?.accounts || []}
+          actionDetails={publishActionDetails}
+          onRefresh={() => void refreshAccounts()}
+          onSelectAccount={selectMarketingAccount}
+          refreshing={loadingDetail}
+          selectedAccountId={selectedAccount?.id || ''}
+        />
+
+        <section className="mt-5 overflow-hidden rounded-[26px] border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) shadow-[0_16px_48px_rgba(42,34,27,0.045)]">
+          <header className="flex flex-wrap items-end justify-between gap-3 border-b border-(--ui-stroke-tertiary) px-7 py-5">
+            <div>
+              <p className="text-xs text-(--ui-text-tertiary)">此刻最值得处理的事情</p>
+              <h2 className="mt-1 text-xl font-semibold tracking-[-0.035em]">今天的经营面</h2>
+            </div>
             <button
-              className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-2 text-left transition-all ${
-                selectedAccount?.id === account.id
-                  ? 'border-(--ui-accent)/35 bg-(--ui-accent)/8 shadow-[0_6px_20px_rgba(0,0,0,0.04)]'
-                  : 'border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) text-(--ui-text-secondary) hover:text-foreground'
-              }`}
-              key={account.id}
+              className="flex items-center gap-1.5 text-sm font-medium text-(--ui-text-secondary) hover:text-foreground"
               onClick={() =>
-                account.auth_state === 'authenticated'
-                  ? selectMarketingAccount(account.id)
-                  : openAccountConnect(account)
+                onStartOperation({
+                  accountId: selectedAccount?.id || 'prospect_default',
+                  kind: 'account.prioritize'
+                })
               }
               type="button"
             >
-              <MarketingPlatformAvatar platform={account.platform || ''} />
-              <span className="max-w-32 truncate text-xs font-medium">
-                {account.label || account.username || account.id}
-              </span>
-              <span
-                className={`size-1.5 rounded-full ${account.auth_state === 'authenticated' ? 'bg-emerald-500' : 'bg-amber-400'}`}
-              />
+              排出今天的优先级 <ArrowUpRight className="size-4" />
             </button>
-          ))}
-          <button
-            className="grid size-9 shrink-0 place-items-center rounded-full border border-dashed border-(--ui-stroke-secondary) text-(--ui-text-tertiary) hover:border-(--ui-accent) hover:text-(--ui-accent)"
-            onClick={() => openAccountConnect()}
-            title="连接新账号"
-            type="button"
-          >
-            <Plus className="size-4" />
-          </button>
-        </section>
+          </header>
 
-        <section className="mt-5 overflow-hidden rounded-[28px] border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) shadow-[0_18px_55px_rgba(34,30,26,0.055)]">
-          <div className="grid min-h-[280px] lg:grid-cols-[1.03fr_1.6fr]">
-            <div className="relative flex flex-col justify-between overflow-hidden border-b border-(--ui-stroke-tertiary) p-8 lg:border-b-0 lg:border-r">
-              <div className="absolute -left-24 -top-32 size-72 rounded-full bg-(--ui-accent)/9 blur-3xl" />
-              <div className="relative">
-                <div className="flex items-center gap-2 text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-(--ui-text-tertiary)">
-                  <span className="size-1.5 rounded-full bg-(--ui-accent)" />
-                  经营进度
+          <div className="grid xl:grid-cols-[1.08fr_0.92fr]">
+            <WorkbenchLane
+              action="进入内容工厂"
+              count={assets.length}
+              icon={<FileText className="size-4" />}
+              onAction={onOpenContent}
+              title="正在推进"
+            >
+              {assets.length ? (
+                <div className="divide-y divide-(--ui-stroke-tertiary)">
+                  {assets.slice(0, 4).map((asset, index) => (
+                    <button
+                      className="group flex w-full items-center gap-4 py-4 text-left"
+                      key={asset.id}
+                      onClick={() => setSelectedReviewAsset(asset)}
+                      type="button"
+                    >
+                      <span className="w-5 text-[0.66rem] font-semibold tabular-nums text-(--ui-text-quaternary)">
+                        {String(index + 1).padStart(2, '0')}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <strong className="block truncate text-sm font-medium">
+                          {asset.title || asset.topic || '未命名内容'}
+                        </strong>
+                        <small className="mt-1 block text-xs text-(--ui-text-tertiary)">
+                          {contentTypeLabel(asset.type)} · {statusLabel(asset.status)}
+                        </small>
+                      </span>
+                      <ChevronRight className="size-4 text-(--ui-text-quaternary) transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+                    </button>
+                  ))}
                 </div>
-                <p className="mt-8 text-sm text-(--ui-text-secondary)">{stageCopy.eyebrow}</p>
-                <h2 className="mt-2 max-w-md text-[1.8rem] font-semibold leading-[1.2] tracking-[-0.045em]">
-                  {stageCopy.title}
-                </h2>
-                {lifecycle.business_goal ? (
-                  <p className="mt-3 line-clamp-2 text-sm leading-6 text-(--ui-text-secondary)">
-                    {lifecycle.business_goal}
-                  </p>
-                ) : null}
-              </div>
-              <div className="relative mt-8">
-                <div className="h-1.5 overflow-hidden rounded-full bg-(--ui-fill-tertiary)">
-                  <div className="h-full rounded-full bg-(--ui-accent)" style={{ width: `${stageCopy.progress}%` }} />
-                </div>
-                <div className="mt-4 flex items-center justify-between">
-                  <span className="text-xs text-(--ui-text-tertiary)">{stageCopy.progress}% 已建立</span>
-                  <button
-                    className="flex items-center gap-1.5 text-sm font-medium hover:text-(--ui-accent)"
-                    onClick={() =>
-                      onNewChat('请读取当前账号经营进度，从下一步开始继续推进；先说明你读取到的账号状态。')
-                    }
-                  >
-                    让 Agent 继续 <ArrowUpRight className="size-4" />
-                  </button>
-                </div>
-              </div>
-            </div>
+              ) : (
+                <EmptySignal detail="从一个想法开始，内容会在这里持续推进。" title="还没有正在制作的内容" />
+              )}
+            </WorkbenchLane>
 
-            <div className="p-7 lg:p-8">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-(--ui-text-tertiary)">
-                    Data pulse
-                  </p>
-                  <h2 className="mt-1.5 text-lg font-semibold tracking-[-0.025em]">账号实时脉搏</h2>
-                </div>
-                <button
-                  className="grid size-8 place-items-center rounded-full text-(--ui-text-tertiary) hover:bg-(--ui-control-hover-background) hover:text-foreground"
-                  onClick={() => void refreshAccounts()}
-                  title="刷新数据"
-                  type="button"
-                >
-                  <RefreshCw className={`size-4 ${loadingDetail ? 'animate-spin' : ''}`} />
-                </button>
+            <WorkbenchLane
+              action={pendingDecisions ? '一起判断' : '查看经营模型'}
+              count={pendingDecisions}
+              icon={<Brain className="size-4" />}
+              onAction={() =>
+                onStartOperation({
+                  accountId: selectedAccount?.id || 'prospect_default',
+                  kind: pendingDecisions ? 'learning.review' : 'account.model.review'
+                })
+              }
+              title="今日判断"
+            >
+              <div className="space-y-1">
+                <InsightRow
+                  detail={
+                    pendingDecisions
+                      ? `${pendingDecisions} 条策略学习需要确认，未经同意不会改变账号长期方向。`
+                      : '目前没有需要你审批的策略变化，会继续观察真实结果。'
+                  }
+                  icon={pendingDecisions ? <Zap className="size-4" /> : <CheckCircle2 className="size-4" />}
+                  title={pendingDecisions ? '有新的策略判断等待决定' : '经营策略保持稳定'}
+                  tone={pendingDecisions ? 'warm' : 'green'}
+                />
+                <InsightRow
+                  detail={radarDetail(context, selectedAccount)}
+                  icon={<BarChart3 className="size-4" />}
+                  title={radarTitle(context, selectedAccount)}
+                  tone="blue"
+                />
               </div>
-              <div className="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-4">
-                {metrics.map(item => (
-                  <MetricDial key={item.label} {...item} />
-                ))}
-              </div>
-              <div className="mt-7 flex items-center justify-between border-t border-(--ui-stroke-tertiary) pt-5 text-xs text-(--ui-text-tertiary)">
-                <span>{selectedAccount ? '数据来自已登录平台与发布回执' : '连接账号后开始建立真实数据曲线'}</span>
-                <span className="flex items-center gap-1.5">
-                  <span className="size-1.5 rounded-full bg-emerald-500" />
-                  {selectedAccount ? '持续更新' : '等待连接'}
-                </span>
-              </div>
-            </div>
+            </WorkbenchLane>
           </div>
-        </section>
-
-        <section className="mt-5 grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
-          <DashboardPanel
-            action="进入内容工厂"
-            count={assets.length}
-            eyebrow="CONTENT FLOW"
-            icon={<FileText className="size-4" />}
-            onAction={onOpenContent}
-            title="正在推进的内容"
-          >
-            {assets.length ? (
-              <div className="divide-y divide-(--ui-stroke-tertiary)">
-                {assets.slice(0, 4).map((asset, index) => (
-                  <button
-                    className="group flex w-full items-center gap-4 py-4 text-left"
-                    key={asset.id}
-                    onClick={() =>
-                      onNewChat(
-                        `请继续推进内容资产 ${asset.id}（${asset.title || asset.topic || '未命名内容'}）。先读取资产、校验状态与证据，再和我确认下一步。`
-                      )
-                    }
-                    type="button"
-                  >
-                    <span className="w-5 text-[0.66rem] font-semibold tabular-nums text-(--ui-text-quaternary)">
-                      {String(index + 1).padStart(2, '0')}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <strong className="block truncate text-sm font-medium">
-                        {asset.title || asset.topic || '未命名内容'}
-                      </strong>
-                      <small className="mt-1 block text-xs text-(--ui-text-tertiary)">
-                        {contentTypeLabel(asset.type)} · {statusLabel(asset.status)}
-                      </small>
-                    </span>
-                    <ChevronRight className="size-4 text-(--ui-text-quaternary) transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <EmptySignal
-                detail="从选题、素材到发布版本，Agent 会把每一步沉淀为可继续推进的内容资产。"
-                title="还没有进入生产的内容"
-              />
-            )}
-          </DashboardPanel>
-
-          <DashboardPanel
-            action={pendingDecisions ? '和 Agent 一起判断' : '查看经营模型'}
-            count={pendingDecisions}
-            eyebrow="AGENT JUDGEMENT"
-            icon={<Brain className="size-4" />}
-            onAction={() =>
-              onNewChat(
-                pendingDecisions
-                  ? '请打开当前账号待确认的策略学习，逐条说明证据、风险和建议，由我决定是否接受。'
-                  : '请基于当前账号经营模型，告诉我今天最值得推进的一件事；先说明依据，再开始执行。'
-              )
-            }
-            title="今天值得你关注"
-          >
-            <div className="space-y-3 pt-1">
-              <InsightRow
-                detail={
-                  pendingDecisions
-                    ? `${pendingDecisions} 条策略学习需要确认，未经同意不会改变账号长期方向。`
-                    : '目前没有需要你审批的策略变化，Agent 会继续收集证据。'
-                }
-                icon={pendingDecisions ? <Zap className="size-4" /> : <CheckCircle2 className="size-4" />}
-                title={pendingDecisions ? '有新的策略判断等待决定' : '经营策略保持稳定'}
-                tone={pendingDecisions ? 'warm' : 'green'}
-              />
-              <InsightRow
-                detail={radarDetail(context, selectedAccount)}
-                icon={<BarChart3 className="size-4" />}
-                title={radarTitle(context, selectedAccount)}
-                tone="blue"
-              />
-            </div>
-          </DashboardPanel>
         </section>
 
         {error ? (
@@ -475,61 +350,29 @@ export function WorkbenchView({ onNewChat, onOpenAccounts, onOpenContent, reques
           </p>
         ) : null}
       </div>
-
-      <AccountConnectDialog
-        onAccountChanged={handleAccountChanged}
-        onAnalyzeAccount={account => {
-          selectMarketingAccount(account.id)
-          onNewChat(buildOwnedAccountAnalysisPrompt(account))
+      <ContentReviewSheet
+        accountId={selectedAccount?.id || ''}
+        asset={selectedReviewAsset}
+        onOpenChange={open => {
+          if (!open) {
+            setSelectedReviewAsset(null)
+          }
         }}
-        onOpenChange={setConnectOpen}
-        open={connectOpen}
-        platforms={platforms}
+        onReviewed={reviewed => {
+          setAssets(current => current.map(asset => (asset.id === reviewed.id ? { ...asset, ...reviewed } : asset)))
+          setSelectedReviewAsset(reviewed)
+        }}
+        onStartOperation={onStartOperation}
         requestGateway={requestGateway}
-        resumeAccount={resumeAccount}
       />
     </main>
   )
 }
 
-function MetricDial({
-  accent,
-  icon: Icon,
-  label,
-  value
-}: {
-  accent: string
-  icon: typeof Users
-  label: string
-  value: number | null
-}) {
-  const progress = value === null ? 4 : Math.max(8, Math.min(88, Math.log10(value + 1) * 18))
-
-  return (
-    <div className="flex flex-col items-center">
-      <div
-        className="grid aspect-square w-full max-w-[118px] place-items-center rounded-full p-[7px]"
-        style={{ background: `conic-gradient(${accent} ${progress}%, var(--ui-fill-tertiary) 0)` }}
-      >
-        <div className="grid size-full place-items-center rounded-full bg-(--ui-sidebar-surface-background)">
-          <div className="text-center">
-            <Icon className="mx-auto size-4 text-(--ui-text-tertiary)" />
-            <strong className="mt-1.5 block text-lg font-semibold tabular-nums tracking-[-0.03em]">
-              {value === null ? '—' : compactNumber(value)}
-            </strong>
-            <span className="mt-0.5 block text-[0.66rem] text-(--ui-text-tertiary)">{label}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function DashboardPanel({
+function WorkbenchLane({
   action,
   children,
   count,
-  eyebrow,
   icon,
   onAction,
   title
@@ -537,40 +380,37 @@ function DashboardPanel({
   action: string
   children: React.ReactNode
   count: number
-  eyebrow: string
   icon: React.ReactNode
   onAction: () => void
   title: string
 }) {
   return (
-    <article className="rounded-[24px] border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-7 shadow-[0_14px_42px_rgba(34,30,26,0.04)]">
-      <header className="flex items-start justify-between border-b border-(--ui-stroke-tertiary) pb-5">
-        <div>
-          <p className="flex items-center gap-2 text-[0.66rem] font-semibold tracking-[0.18em] text-(--ui-text-tertiary)">
+    <article className="min-w-0 p-7 xl:border-r xl:border-(--ui-stroke-tertiary) xl:last:border-r-0">
+      <header className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2.5">
+          <span className="grid size-8 place-items-center rounded-xl bg-(--ui-fill-secondary) text-(--ui-text-secondary)">
             {icon}
-            {eyebrow}
-          </p>
-          <h2 className="mt-2 text-lg font-semibold tracking-[-0.025em]">{title}</h2>
+          </span>
+          <h3 className="text-base font-semibold tracking-[-0.02em]">{title}</h3>
+          <span className="text-xs tabular-nums text-(--ui-text-tertiary)">{count}</span>
         </div>
-        <span className="rounded-full bg-(--ui-accent)/10 px-2.5 py-1 text-xs font-semibold text-(--ui-accent)">
-          {count}
-        </span>
+        <button
+          className="flex items-center gap-1 text-xs font-medium text-(--ui-text-secondary) hover:text-foreground"
+          onClick={onAction}
+          type="button"
+        >
+          {action}
+          <ArrowUpRight className="size-3.5" />
+        </button>
       </header>
-      <div className="min-h-[190px]">{children}</div>
-      <button
-        className="mt-4 flex items-center gap-1.5 text-sm text-(--ui-text-secondary) hover:text-foreground"
-        onClick={onAction}
-      >
-        {action}
-        <ArrowUpRight className="size-4" />
-      </button>
+      <div className="mt-4 min-h-[180px]">{children}</div>
     </article>
   )
 }
 
 function EmptySignal({ detail, title }: { detail: string; title: string }) {
   return (
-    <div className="flex min-h-[190px] items-center justify-center text-center">
+    <div className="flex min-h-[180px] items-center justify-center text-center">
       <div className="max-w-sm">
         <div className="mx-auto grid size-10 place-items-center rounded-full bg-(--ui-fill-secondary) text-(--ui-text-secondary)">
           <FileText className="size-4" />
@@ -600,7 +440,7 @@ function InsightRow({
   }[tone]
 
   return (
-    <div className="flex gap-3.5 rounded-2xl border border-(--ui-stroke-tertiary) p-4">
+    <div className="flex gap-3.5 rounded-2xl px-1 py-4">
       <span className={`grid size-9 shrink-0 place-items-center rounded-xl ${toneClass}`}>{icon}</span>
       <div>
         <strong className="text-sm font-medium">{title}</strong>
@@ -608,30 +448,6 @@ function InsightRow({
       </div>
     </div>
   )
-}
-
-function metric(stats: Record<string, unknown>, keys: string[]): number | null {
-  for (const key of keys) {
-    const value = Number(stats[key])
-
-    if (Number.isFinite(value) && value >= 0) {
-      return value
-    }
-  }
-
-  return null
-}
-
-function compactNumber(value: number): string {
-  if (value >= 100_000_000) {
-    return `${(value / 100_000_000).toFixed(value >= 1_000_000_000 ? 0 : 1)}亿`
-  }
-
-  if (value >= 10_000) {
-    return `${(value / 10_000).toFixed(value >= 100_000 ? 0 : 1)}万`
-  }
-
-  return new Intl.NumberFormat('zh-CN').format(value)
 }
 
 function timeGreeting(): string {
@@ -663,7 +479,7 @@ function contentTypeLabel(type?: string): string {
     video: '视频'
   }
 
-  return labels[type || ''] || '内容资产'
+  return labels[type || ''] || '其他内容'
 }
 
 function statusLabel(status?: string): string {
@@ -686,7 +502,7 @@ function radarTitle(context: AccountContext | null, account: MarketingAccountSum
     return '账号定位仍需要更多用户与赛道证据'
   }
 
-  return '账号定位、内容系统与真实回执正在形成闭环'
+  return '账号定位、内容生产与真实结果正在形成闭环'
 }
 
 function radarDetail(context: AccountContext | null, account: MarketingAccountSummary | null): string {
@@ -698,7 +514,7 @@ function radarDetail(context: AccountContext | null, account: MarketingAccountSu
   const gaps = lifecycle?.data_gaps?.length || 0
 
   if (gaps) {
-    return `还有 ${gaps} 个关键数据缺口；Agent 会优先补证据，不会凭空给出确定结论。`
+    return `还有 ${gaps} 个关键数据缺口，会先补充证据再给出判断。`
   }
 
   return `已纳入 ${lifecycle?.benchmark_count || 0} 个对标对象和 ${lifecycle?.experiment_count || 0} 轮真实实验。`

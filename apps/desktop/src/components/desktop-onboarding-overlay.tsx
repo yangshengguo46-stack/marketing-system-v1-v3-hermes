@@ -378,10 +378,9 @@ function Preparing({ boot }: { boot: DesktopBootState }) {
         />
       </div>
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-        <span className="truncate">{boot.message}</span>
+        <span className="truncate">{hasError ? t.boot.errors.desktopBootFailed : boot.message}</span>
         <span>{progress}%</span>
       </div>
-      {hasError ? <p className="text-xs text-destructive">{boot.error}</p> : null}
     </div>
   )
 }

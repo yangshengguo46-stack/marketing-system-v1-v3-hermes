@@ -53,6 +53,29 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 
 人口属性只是描述，不足以指导内容。核心字段是任务、痛点、触发场景、现有替代方案、信任障碍、期望结果、可观察行为信号、排除人群和数据缺口。
 
+“存在”是哲学上的本体前提，不是一个可以从评论或点击中直接测量、分类或打分的变量。工程模型只能观察它投影到物理与社会世界后的行为，机制链固定为：
+
+```text
+存在本体
+→ 环境与身体约束
+→ 需求投影（马斯洛：行为试图满足或恢复什么）
+→ 认知投影（荣格八维：信息如何被感知与判断）
+→ 存在策略
+→ 可观察行为
+→ 社会与平台反馈
+```
+
+四种枚举因此命名为“存在策略”，而不是“存在方向”：
+
+- `preserve`：维持安全、资源、关系和可控状态。
+- `confirm`：确认身份、经验、归属和社会价值。
+- `expand`：扩展能力、资源、自由和影响力。
+- `continue`：延续作品、事业、关系、意义或长期影响。
+
+马斯洛需求层次描述“存在当前通过行为解决什么缺口或实现什么成长”，荣格八维描述“存在通过什么信息加工路径理解并回应环境”。两者都是投影层的可证伪软假设，不是存在本身，也不是对真人内心的直接读取。荣格维度不得成为永久人格标签、心理诊断或知识库事实。
+
+当前原生合同同时作用于创作者和行为受众：`human_projection_model` 固化不可测量的 `existence_ontology`，`need_projection_hypotheses` 保存马斯洛需求投影，`cognitive_projection_hypotheses` 保存荣格等认知投影，`existence_strategy_hypotheses` 保存策略、语境、可观察信号、依据、反证与数据缺口。投影假设置信度上限为 `0.7`；诊断字段、永久类型和把存在当测量值的写法均被拒绝。旧 `existence_hypotheses/cognitive_style_hypotheses` 只作为 v0.1 读取兼容并在读取时升级，不再是新写入合同。
+
 ### 4. 对标经营图谱
 
 对标不是第五个知识库，也不是粉丝榜单。它是当前账号与外部账号之间带证据、带时间、带角色的关系图。
@@ -69,6 +92,25 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 
 匹配必须保留多维向量：受众重合、商业模式、生命周期、形式适配、创作者资源、平台和当前表现相关性。禁止把它压成一个不透明总分。粉丝数不能解锁定位。
 
+### 公域内容是自然实验，不是爆款答案库
+
+公域创作者发布的作品及其公开反馈，是校准受众、内容模型和对标关系的重要学习样本。观察链必须保存“谁在什么平台发布了什么、何时发布、何时观察、当时可见什么反馈”，同一作品重复观察后形成时间序列，而不是只截取最终点赞数。
+
+浏览器 owner 只采集公开作品、创作者公开身份、内容快照和聚合指标；不保存评论者身份与逐条原话。Hermes 用与自有作品相同的内容特征、匿名人群、立场、需求投影、认知投影、存在策略、提问/反对模式和反证信号解释样本，并生成 Receipt 与 pending learning candidate。
+
+公域结果只能说明相关性。创作者历史、平台分发、发布时间、投流、粉丝基础和不可见流量都是潜在混杂变量。单条爆款不能直接改写内容规律或对标图谱；新创作者先进入对标候选，已有对标的新观察也必须经用户接受后才写入图谱。
+
+```text
+公开作品页
+→ browser_capture_public_content
+→ EvidenceRecord + PublicContentCase + 延迟 FeedbackObservation
+→ Agent 按内容/受众/存在/社会反应模型解释
+→ public natural-experiment Receipt
+→ 内容模型 learning candidate
+→ 对标新增/修正 strategy candidate
+→ 用户治理后进入账号知识或对标图谱
+```
+
 ### 5. 版本化定位
 
 至少包含内容承诺、差异化、人设、受众摘要、证据机制、内容支柱、语气、禁区、固定形式、商业路径和变现边界。定位是阶段性决策，不是永恒真理；必须由用户明确批准。
@@ -84,6 +126,33 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 未完成或已过期的定位/内容系统不会阻止首日试写，但产物只能标记为 `exploratory_draft`。它可以继续研究、生成和人工打磨，不能进入发布审批。正式经营内容必须绑定当前 `positioning_id`、`content_system_id` 和已连接账号。
 
 实验链必须可从结果反查到行动前假设：`account_experiment → content_production_plan → content_asset → preflight → publish/metric receipt → retro`。计划绑定运行中的 `experiment_id` 后，草稿自动继承并回写实验资产列表；Receipt owner 根据 plan 自动携带同一 experiment，禁止事后靠标题猜测哪条内容属于哪个实验。
+
+## 发布前社会反应预演
+
+内容草稿除了指标预测，还必须固化 `social_reaction_simulation`。每个匿名场景至少包含：
+
+- 评论人群及其与目标受众的关系；
+- 支持、经验分享、提问、质疑、反对、行动请求或误入等立场；
+- 马斯洛需求投影、荣格认知投影与 `preserve / confirm / expand / continue / unknown` 存在策略；
+- 内容触发点、推理依据和宽泛可能性；
+- 可能评论主题和明确标注的合成评论样例；
+- 回复机会、风险、证据依据和反证信号。
+
+系统不预测具体个人，也不输出未经校准的精确概率。发布后 Provider 只能提交匿名聚合观察：预测场景命中数、意外立场/主题簇、问题模式、反对模式和数据缺口。昵称、头像、主页、联系方式和逐条评论不得进入学习候选。Retro 比较命中、漏判和意外反应，但不能从评论相关性直接宣布心理或社会因果。
+
+Retro 以 `need_projection → cognitive_projection → existence_strategy → observable_reaction` 机制链按匿名聚类对账，分别记录预测场景数、命中场景数、意外聚类数、观察评论数和覆盖率。命中只能校准整条投影假设，不能证明读懂了某个真人的需求、认知过程或“存在”。每次指标结算还生成分层因果反思：事实观察、预测误差、是否绑定预注册实验、反事实是否可识别、可能混杂因素和下一步所需证据。单作品的反事实状态必须是 `unavailable`。
+
+原生链路固定为：
+
+```text
+行为受众假设 + 内容触发点 + EvidencePack
+→ Agent 提出匿名社会反应场
+→ Hermes 校验并固化到 prediction / feature snapshot
+→ 发布 action 携带同一不可变预测
+→ Provider 返回匿名评论聚类
+→ Receipt / Retro 对照命中、漏判和意外反应
+→ pending learning candidate
+```
 
 ## 四类知识与经营图谱的边界
 
@@ -102,7 +171,9 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 
 - `agent/marketing/domains/account_lifecycle.py`：项目与行为受众版本。
 - `agent/marketing/domains/account_strategy.py`：创作者画像、赛道路线、对标图谱、定位、内容系统和实验。
+- `agent/marketing/domains/public_content_observations.py`：公域作品、延迟反馈快照、同模型解释和公域学习候选。
 - `agent/marketing/domains/knowledge_bases.py`：四类受治理知识。
+- `agent/marketing/intelligence/audience_reaction_simulation.py`：匿名评论人群预演、聚合观察校验与发布后对照。
 - `tools/marketing_tools.py`：Hermes 原生自然对话工具入口。
 - `hermes_state.py`：唯一经营事实数据库的 schema 与迁移。
 

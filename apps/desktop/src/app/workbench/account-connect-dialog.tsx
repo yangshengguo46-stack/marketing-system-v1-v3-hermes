@@ -14,6 +14,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { CheckCircle2, Loader2 } from '@/lib/icons'
 import type { MarketingAccountSummary, MarketingPlatformSummary } from '@/store/marketing'
 
+import { userFacingError } from './user-facing-copy'
+
 interface AccountConnectDialogProps {
   onAnalyzeAccount?: (account: MarketingAccountSummary) => void
   onAccountChanged: (account: MarketingAccountSummary) => void
@@ -90,7 +92,7 @@ export function AccountConnectDialog({
       const message = reason instanceof Error ? reason.message : String(reason)
 
       if (!/not been verified|cookie_set_not_found/i.test(message)) {
-        setError(message)
+        setError(userFacingError(reason, '暂时无法确认登录状态，请稍后重试。'))
       }
     } finally {
       verifyInFlight.current = false
@@ -140,7 +142,7 @@ export function AccountConnectDialog({
       setAccount(started.account)
       setStage('waiting')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
+      setError(userFacingError(reason, '登录窗口打开失败，请重试。'))
       setStage('error')
     }
   }
@@ -158,22 +160,20 @@ export function AccountConnectDialog({
       <DialogContent className="max-w-xl gap-5 p-6">
         <DialogHeader>
           <DialogTitle>{stage === 'verified' ? '账号已连接' : '连接内容平台'}</DialogTitle>
-          <DialogDescription>
-            登录发生在该账号独立的持久浏览器中。Marketing OS 只保存账号状态，不把 Cookie 交给界面。
-          </DialogDescription>
+          <DialogDescription>选择平台并完成登录。</DialogDescription>
         </DialogHeader>
 
         {stage === 'choose' && !account ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="divide-y divide-(--ui-stroke-quaternary) border-y border-(--ui-stroke-tertiary)">
             {orderedPlatforms.map(platform => (
               <button
-                className="group flex min-h-24 flex-col items-start justify-between rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-4 text-left transition-colors hover:border-(--ui-accent)"
+                className="group flex min-h-16 w-full items-center gap-3 px-2 py-3 text-left transition-colors duration-[var(--mos-motion-fast)] hover:bg-(--ui-row-hover-background) sm:px-3"
                 key={platform.id}
                 onClick={() => void startLogin(platform)}
                 type="button"
               >
                 <MarketingPlatformAvatar platform={platform.id} />
-                <span>
+                <span className="min-w-0 flex-1">
                   <strong className="flex items-center gap-2 text-sm font-semibold">
                     {platform.label}
                     {platform.id === 'wechat_official' ? (
@@ -190,12 +190,12 @@ export function AccountConnectDialog({
         ) : null}
 
         {stage === 'choose' && account ? (
-          <div className="flex items-center justify-between rounded-xl border border-(--ui-stroke-tertiary) p-4">
+          <div className="flex items-center justify-between border-y border-(--ui-stroke-tertiary) py-4">
             <div className="flex items-center gap-3">
               <MarketingPlatformAvatar platform={account.platform || ''} />
               <div>
                 <strong className="block text-sm">{selectedPlatform?.label || account.platform || '内容平台'}</strong>
-                <span className="text-xs text-(--ui-text-tertiary)">继续使用原账号隔离空间登录</span>
+                <span className="text-xs text-(--ui-text-tertiary)">继续登录这个账号</span>
               </div>
             </div>
             <Button onClick={() => void startLogin()}>打开登录窗口</Button>
@@ -204,9 +204,9 @@ export function AccountConnectDialog({
 
         {stage === 'starting' ? (
           <ConnectStatus
-            detail="正在启动这个账号专属的持久浏览器…"
+            detail="登录窗口即将打开…"
             icon={<Loader2 className="size-5 animate-spin" />}
-            title="准备登录环境"
+            title="正在打开"
           />
         ) : null}
 
@@ -226,8 +226,8 @@ export function AccountConnectDialog({
           <ConnectStatus
             detail={
               account?.platform === 'wechat_official'
-                ? '独立账号空间已保存。现在可以同步你已经发布的文章，让 Agent 基于真实作品和可用指标诊断账号。'
-                : '独立账号空间已保存。后续采集、分析和经授权发布都会自动使用这个账号，不需要重复扫码。'
+                ? '现在可以同步已发布文章，查看账号表现和改进方向。'
+                : '以后会直接使用这个账号，不需要重复扫码。'
             }
             icon={<CheckCircle2 className="size-6 text-emerald-500" />}
             title="登录验证成功"
@@ -255,7 +255,7 @@ export function AccountConnectDialog({
 
         {stage === 'error' ? (
           <ConnectStatus
-            detail={error || '登录环境启动失败，请重试。'}
+            detail={error || '登录窗口打开失败，请重试。'}
             icon={<span className="size-2.5 rounded-full bg-red-500" />}
             title="暂时无法连接"
           >
@@ -267,27 +267,6 @@ export function AccountConnectDialog({
       </DialogContent>
     </Dialog>
   )
-}
-
-export function buildOwnedAccountAnalysisPrompt(account: MarketingAccountSummary): string {
-  if (account.platform === 'wechat_official') {
-    return (
-      '请诊断当前会话绑定的微信公众号。先调用 browser_collect_wechat_official_portfolio 同步最近已发布文章，' +
-      '再调用 marketing_read_account_portfolio 读取系统生成的作品档案和执行基线。请按“已证实事实、账号评分、' +
-      '每篇文章观察、核心优势、关键问题、下一步实验”输出；每个判断引用对应 evidence_id。没有阅读、点赞、' +
-      '分享或评论数据时明确写数据缺口，不得猜测粉丝反馈，也不要把启发式执行分当成内容价值的最终定论。'
-    )
-  }
-
-  if (account.platform === 'douyin') {
-    return (
-      '请诊断当前会话绑定的抖音账号。先调用 browser_collect_douyin_portfolio 同步创作者中心的账号和作品数据，' +
-      '再读取账号经营上下文。请明确区分公开已发布作品数、包含私密作品的全部作品数，以及每条作品的播放、' +
-      '点赞、评论、分享、完播和平均观看指标；不得用“近30天未发布”推断累计作品数。'
-    )
-  }
-
-  return `请进入账号 ${account.id} 的经营上下文，先汇总账号现状、受众、定位和今天最值得推进的任务。`
 }
 
 function ConnectStatus({
@@ -302,13 +281,13 @@ function ConnectStatus({
   title: string
 }) {
   return (
-    <div className="rounded-2xl border border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) p-6">
+    <div className="py-2">
       <div className="flex items-center gap-3">
-        <span className="grid size-10 place-items-center rounded-full bg-(--ui-bg-tertiary)">{icon}</span>
+        <span className="grid size-9 place-items-center rounded-[10px] bg-(--ui-bg-tertiary)">{icon}</span>
         <strong className="text-base">{title}</strong>
       </div>
-      <p className="mt-4 text-sm leading-6 text-(--ui-text-secondary)">{detail}</p>
-      {children ? <div className="mt-5">{children}</div> : null}
+      <p className="mt-3 text-sm leading-6 text-(--ui-text-secondary)">{detail}</p>
+      {children ? <div className="mt-4">{children}</div> : null}
     </div>
   )
 }

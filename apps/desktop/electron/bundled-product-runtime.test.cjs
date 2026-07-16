@@ -15,6 +15,7 @@ function fixture() {
   const nodeModules = path.join(root, 'agent', 'node_modules')
   const playwrightBrowsers = path.join(root, 'playwright-browsers')
   const playwrightBrowserExecutable = path.join(playwrightBrowsers, 'chromium-1234', 'chrome')
+  const videoRenderers = path.join(root, 'video-renderers')
   const sitePackages = path.join(root, 'site-packages')
   fs.mkdirSync(path.dirname(python), { recursive: true })
   fs.mkdirSync(agent, { recursive: true })
@@ -22,11 +23,16 @@ function fixture() {
   fs.mkdirSync(nodeModules, { recursive: true })
   fs.mkdirSync(playwrightBrowsers, { recursive: true })
   fs.mkdirSync(sitePackages, { recursive: true })
+  fs.mkdirSync(path.join(videoRenderers, 'node_modules'), { recursive: true })
   fs.writeFileSync(python, '')
   fs.writeFileSync(path.join(agent, 'main.py'), '')
   fs.writeFileSync(path.join(browserMcp, 'server.js'), '')
   fs.mkdirSync(path.dirname(playwrightBrowserExecutable), { recursive: true })
   fs.writeFileSync(playwrightBrowserExecutable, '')
+  fs.writeFileSync(path.join(videoRenderers, 'package.json'), '{}')
+  fs.writeFileSync(path.join(videoRenderers, 'render-remotion.mjs'), '')
+  fs.writeFileSync(path.join(videoRenderers, 'render-hyperframes.mjs'), '')
+  fs.writeFileSync(path.join(videoRenderers, 'node_modules', '.package-lock.json'), '{}')
   return { resources, root }
 }
 
@@ -46,7 +52,8 @@ test('resolves the packaged runtime for the current platform and architecture', 
         nodeModules: 'agent/node_modules',
         playwrightBrowserExecutable: 'playwright-browsers/chromium-1234/chrome',
         playwrightBrowsers: 'playwright-browsers',
-        sitePackages: 'site-packages'
+        sitePackages: 'site-packages',
+        videoRenderers: 'video-renderers'
       }
     })
   )

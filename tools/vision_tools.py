@@ -32,6 +32,8 @@ import base64
 import json
 import logging
 import os
+import shutil
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Dict, Optional
@@ -1107,6 +1109,29 @@ def check_vision_requirements() -> bool:
         return False
 
 
+def check_vision_tool_surface() -> bool:
+    """Keep perception visible in Marketing OS even before provider setup.
+
+    The product treats visual understanding as a native capability. A missing
+    provider must produce an explicit tool error, not erase that capability
+    from the Agent's schema. Generic Hermes keeps the existing opt-in gate.
+    """
+
+    try:
+        from agent.product import is_product_runtime
+
+        if is_product_runtime():
+            return True
+    except Exception:
+        pass
+    return check_vision_requirements()
+
+
+# Product/runtime identity can change inside a long-lived process or test host.
+# Do not let the generic requirement probe's TTL cache cross that boundary.
+setattr(check_vision_tool_surface, "_hermes_uncached", True)
+
+
 
 if __name__ == "__main__":
     """
@@ -1222,7 +1247,7 @@ registry.register(
     toolset="vision",
     schema=VISION_ANALYZE_SCHEMA,
     handler=_handle_vision_analyze,
-    check_fn=check_vision_requirements,
+    check_fn=check_vision_tool_surface,
     is_async=True,
     emoji="👁️",
 )
@@ -1245,6 +1270,7 @@ _VIDEO_MIME_TYPES = {
 
 _MAX_VIDEO_BASE64_BYTES = 50 * 1024 * 1024  # 50 MB hard cap
 _VIDEO_SIZE_WARN_BYTES = 20 * 1024 * 1024
+_VIDEO_ANALYSIS_MODES = {"auto", "direct", "sampled"}
 
 
 def _detect_video_mime_type(video_path: Path) -> Optional[str]:
@@ -1259,6 +1285,140 @@ def _video_to_base64_data_url(video_path: Path, mime_type: Optional[str] = None)
     encoded = base64.b64encode(data).decode("ascii")
     mime = mime_type or _VIDEO_MIME_TYPES.get(video_path.suffix.lower(), "video/mp4")
     return f"data:{mime};base64,{encoded}"
+
+
+def _video_probe(video_path: Path) -> Dict[str, Any]:
+    """Read bounded technical metadata needed for sampled video analysis."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("ffprobe is required for sampled video analysis")
+    result = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,r_frame_rate",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            str(video_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    payload = json.loads(result.stdout)
+    stream = (payload.get("streams") or [{}])[0]
+    return {
+        "duration_seconds": float((payload.get("format") or {}).get("duration") or 0),
+        "width": int(stream.get("width") or 0),
+        "height": int(stream.get("height") or 0),
+        "frame_rate": str(stream.get("r_frame_rate") or ""),
+    }
+
+
+def _extract_video_contact_sheets(
+    video_path: Path,
+    output_dir: Path,
+    *,
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
+    max_frames: int = 24,
+) -> tuple[list[Path], Dict[str, Any]]:
+    """Extract uniformly spaced frames and tile them into timestamped sheets."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is required for sampled video analysis")
+    technical = _video_probe(video_path)
+    duration = float(technical["duration_seconds"])
+    if duration <= 0:
+        raise ValueError("video duration is unavailable")
+    start = max(0.0, float(start_seconds or 0.0))
+    end = duration if end_seconds is None else min(duration, float(end_seconds))
+    if start >= duration or end <= start:
+        raise ValueError("video analysis time range is invalid")
+    frame_budget = max(4, min(int(max_frames), 48))
+    window = end - start
+    frame_count = min(frame_budget, max(4, int(round(min(window, frame_budget)))))
+    sample_fps = min(2.0, frame_count / window)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    frame_pattern = output_dir / "frame-%03d.jpg"
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{start:.3f}",
+            "-i",
+            str(video_path),
+            "-t",
+            f"{window:.3f}",
+            "-vf",
+            f"fps={sample_fps:.8f},scale=512:-2",
+            "-frames:v",
+            str(frame_count),
+            "-q:v",
+            "3",
+            str(frame_pattern),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=180,
+    )
+    frame_paths = sorted(output_dir.glob("frame-*.jpg"))
+    if not frame_paths:
+        raise RuntimeError("sampled video analysis produced no frames")
+
+    from PIL import Image, ImageDraw
+
+    sheet_paths: list[Path] = []
+    cells_per_sheet = 12
+    cell_width, cell_height, label_height = 256, 455, 28
+    columns, rows = 4, 3
+    for sheet_index in range(0, len(frame_paths), cells_per_sheet):
+        batch = frame_paths[sheet_index:sheet_index + cells_per_sheet]
+        sheet = Image.new(
+            "RGB",
+            (columns * cell_width, rows * (cell_height + label_height)),
+            "#101211",
+        )
+        draw = ImageDraw.Draw(sheet)
+        for offset, frame_path in enumerate(batch):
+            global_index = sheet_index + offset
+            timestamp = min(end, start + global_index / sample_fps)
+            with Image.open(frame_path) as source:
+                image = source.convert("RGB")
+                image.thumbnail((cell_width, cell_height))
+                x = (offset % columns) * cell_width + (cell_width - image.width) // 2
+                y = (offset // columns) * (cell_height + label_height)
+                sheet.paste(image, (x, y))
+            label_y = (offset // columns) * (cell_height + label_height) + cell_height + 5
+            minutes, seconds = divmod(timestamp, 60)
+            draw.text(
+                ((offset % columns) * cell_width + 8, label_y),
+                f"t={int(minutes):02d}:{seconds:05.2f}",
+                fill="#f2f1e8",
+            )
+        sheet_path = output_dir / f"contact-sheet-{len(sheet_paths) + 1:02d}.jpg"
+        sheet.save(sheet_path, format="JPEG", quality=88, optimize=True)
+        sheet_paths.append(sheet_path)
+
+    return sheet_paths, {
+        **technical,
+        "start_seconds": round(start, 3),
+        "end_seconds": round(end, 3),
+        "sample_fps": round(sample_fps, 6),
+        "frame_count": len(frame_paths),
+        "contact_sheet_count": len(sheet_paths),
+    }
 
 
 async def _download_video(video_url: str, destination: Path, max_retries: int = 3) -> Path:
@@ -1339,6 +1499,11 @@ async def video_analyze_tool(
     video_url: str,
     user_prompt: str,
     model: str = None,
+    *,
+    analysis_mode: str = "auto",
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
+    max_frames: int = 24,
 ) -> str:
     """Analyze a video via multimodal LLM. Returns JSON {success, analysis}."""
     if not isinstance(user_prompt, str):
@@ -1348,6 +1513,10 @@ async def video_analyze_tool(
             "video_url": video_url,
             "user_prompt": user_prompt[:200] + "..." if len(user_prompt) > 200 else user_prompt,
             "model": model,
+            "analysis_mode": analysis_mode,
+            "start_seconds": start_seconds,
+            "end_seconds": end_seconds,
+            "max_frames": max_frames,
         },
         "error": None,
         "success": False,
@@ -1357,6 +1526,7 @@ async def video_analyze_tool(
     }
 
     temp_video_path = None
+    sample_dir = None
     should_cleanup = True
 
     try:
@@ -1401,38 +1571,67 @@ async def video_analyze_tool(
                 f"Supported: {', '.join(sorted(_VIDEO_MIME_TYPES.keys()))}"
             )
 
+        mode = str(analysis_mode or "auto").strip().lower()
+        if mode not in _VIDEO_ANALYSIS_MODES:
+            raise ValueError("analysis_mode must be auto, direct, or sampled")
+        if mode == "auto":
+            mode = (
+                "sampled"
+                if video_size_bytes > _VIDEO_SIZE_WARN_BYTES
+                or start_seconds is not None
+                or end_seconds is not None
+                else "direct"
+            )
+
         if video_size_bytes > _VIDEO_SIZE_WARN_BYTES:
             logger.warning("Video is %.1f MB — may be slow or rejected", video_size_mb)
 
-        video_data_url = _video_to_base64_data_url(temp_video_path, mime_type=detected_mime)
-        data_size_mb = len(video_data_url) / (1024 * 1024)
-
-        if len(video_data_url) > _MAX_VIDEO_BASE64_BYTES:
-            raise ValueError(
-                f"Video too large for API: base64 payload is {data_size_mb:.1f} MB "
-                f"(limit {_MAX_VIDEO_BASE64_BYTES / (1024 * 1024):.0f} MB). "
-                f"Compress or trim the video and retry."
-            )
-
         debug_call_data["video_size_bytes"] = video_size_bytes
-
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": user_prompt,
-                    },
-                    {
-                        "type": "video_url",
-                        "video_url": {
-                            "url": video_data_url,
-                        },
-                    },
-                ],
-            }
-        ]
+        sampling = None
+        if mode == "direct":
+            video_data_url = _video_to_base64_data_url(
+                temp_video_path, mime_type=detected_mime
+            )
+            data_size_mb = len(video_data_url) / (1024 * 1024)
+            if len(video_data_url) > _MAX_VIDEO_BASE64_BYTES:
+                raise ValueError(
+                    f"Video too large for direct API analysis: {data_size_mb:.1f} MB "
+                    f"(limit {_MAX_VIDEO_BASE64_BYTES / (1024 * 1024):.0f} MB). "
+                    "Retry with analysis_mode=sampled."
+                )
+            content: list[Dict[str, Any]] = [
+                {"type": "text", "text": user_prompt},
+                {"type": "video_url", "video_url": {"url": video_data_url}},
+            ]
+        else:
+            sample_dir = get_hermes_dir("cache/video", "sampled_video_frames") / uuid.uuid4().hex
+            sheet_paths, sampling = _extract_video_contact_sheets(
+                temp_video_path,
+                sample_dir,
+                start_seconds=start_seconds,
+                end_seconds=end_seconds,
+                max_frames=max_frames,
+            )
+            content = [
+                {
+                    "type": "text",
+                    "text": (
+                        f"{user_prompt}\n\n"
+                        "The following contact sheets are chronological samples from the video. "
+                        "Each cell includes its source timestamp. Distinguish visible evidence "
+                        "from inference, call out gaps between sampled moments, and do not claim "
+                        "to have heard audio or read a transcript."
+                    ),
+                }
+            ]
+            content.extend(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _image_to_base64_data_url(path, "image/jpeg")},
+                }
+                for path in sheet_paths
+            )
+        messages = [{"role": "user", "content": content}]
 
         vision_timeout = 180.0
         vision_temperature = 0.1
@@ -1473,7 +1672,10 @@ async def video_analyze_tool(
         result = {
             "success": True,
             "analysis": analysis or "There was a problem with the request and the video could not be analyzed.",
+            "analysis_mode": mode,
         }
+        if sampling is not None:
+            result["sampling"] = sampling
 
         debug_call_data["success"] = True
         debug_call_data["analysis_length"] = analysis_length
@@ -1540,16 +1742,19 @@ async def video_analyze_tool(
                 logger.warning(
                     "Could not delete temporary file: %s", cleanup_error, exc_info=True
                 )
+        if sample_dir and sample_dir.exists():
+            shutil.rmtree(sample_dir, ignore_errors=True)
 
 
 VIDEO_ANALYZE_SCHEMA = {
     "name": "video_analyze",
     "description": (
         "Analyze a video from a URL or local file path using a multimodal AI model. "
-        "Sends the video to a video-capable model (e.g. Gemini) for understanding. "
+        "Uses direct video understanding for small files or local timestamped contact-sheet "
+        "sampling for large files and focused time ranges. "
         "Use this for video files — for images, use vision_analyze instead. "
         "Supports mp4, webm, mov, avi, mkv, mpeg formats. "
-        "Note: large videos (>20 MB) may be slow; max ~50 MB."
+        "Direct mode is capped at ~50 MB; sampled mode supports larger local files."
     ),
     "parameters": {
         "type": "object",
@@ -1562,6 +1767,32 @@ VIDEO_ANALYZE_SCHEMA = {
                 "type": "string",
                 "description": "Your specific question about the video. The AI will describe what happens in the video and answer your question.",
             },
+            "analysis_mode": {
+                "type": "string",
+                "enum": ["auto", "direct", "sampled"],
+                "default": "auto",
+                "description": (
+                    "auto samples large files or focused time ranges; direct sends the video; "
+                    "sampled sends timestamped contact sheets without audio."
+                ),
+            },
+            "start_seconds": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Optional focused analysis start on the source timeline.",
+            },
+            "end_seconds": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Optional focused analysis end on the source timeline.",
+            },
+            "max_frames": {
+                "type": "integer",
+                "minimum": 4,
+                "maximum": 48,
+                "default": 24,
+                "description": "Maximum local frame samples used in sampled mode.",
+            },
         },
         "required": ["video_url", "question"],
     },
@@ -1573,11 +1804,20 @@ def _handle_video_analyze(args: Dict[str, Any], **kw: Any) -> Awaitable[str]:
     question = args.get("question", "")
     full_prompt = (
         "Fully describe and explain everything happening in this video, "
-        "including visual content, motion, audio cues, text overlays, and scene "
-        f"transitions. Then answer the following question:\n\n{question}"
+        "including visual content, motion, text overlays, and scene transitions. "
+        "Only discuss audio when the supplied evidence actually includes audio. "
+        f"Then answer the following question:\n\n{question}"
     )
     model = os.getenv("AUXILIARY_VIDEO_MODEL", "").strip() or os.getenv("AUXILIARY_VISION_MODEL", "").strip() or None
-    return video_analyze_tool(video_url, full_prompt, model)
+    return video_analyze_tool(
+        video_url,
+        full_prompt,
+        model,
+        analysis_mode=str(args.get("analysis_mode") or "auto"),
+        start_seconds=args.get("start_seconds"),
+        end_seconds=args.get("end_seconds"),
+        max_frames=int(args.get("max_frames") or 24),
+    )
 
 
 registry.register(
@@ -1585,7 +1825,7 @@ registry.register(
     toolset="video",
     schema=VIDEO_ANALYZE_SCHEMA,
     handler=_handle_video_analyze,
-    check_fn=check_vision_requirements,
+    check_fn=check_vision_tool_surface,
     is_async=True,
     emoji="🎬",
 )

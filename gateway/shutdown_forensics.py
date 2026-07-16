@@ -20,8 +20,10 @@ from __future__ import annotations
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -226,11 +228,16 @@ def spawn_async_diagnostic(
     if sys.platform == "win32":
         return None
 
+    ps_command = (
+        "ps auxf --sort=-pcpu 2>/dev/null | head -60"
+        if sys.platform.startswith("linux")
+        else "ps ax -o pid=,ppid=,%cpu=,%mem=,state=,command= -r 2>/dev/null | head -60"
+    )
     script = (
         f"echo '=== shutdown diagnostic @ {signal_name} ==='; "
         "echo '--- date ---'; date -u +%Y-%m-%dT%H:%M:%SZ; "
-        "echo '--- ps auxf (top 60 by cpu) ---'; "
-        "ps auxf --sort=-pcpu 2>/dev/null | head -60; "
+        "echo '--- ps (top 60 by cpu) ---'; "
+        f"{ps_command}; "
         "echo '--- pstree of self ---'; "
         f"pstree -plau {os.getpid()} 2>/dev/null | head -40 || true; "
         "echo '--- /proc/loadavg ---'; "
@@ -254,14 +261,27 @@ def spawn_async_diagnostic(
         # would also reap us anyway, but defense in depth).  Without
         # start_new_session, a SIGKILL on our cgroup takes the diag down
         # before it can flush.
+        timeout_binary = shutil.which("timeout") or shutil.which("gtimeout")
+        command = ["bash", "-c", script]
+        if timeout_binary:
+            command = [timeout_binary, f"{timeout_seconds:.0f}", *command]
         proc = subprocess.Popen(
-            ["timeout", f"{timeout_seconds:.0f}", "bash", "-c", script],
+            command,
             stdout=fd,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
             close_fds=True,
         )
+        if not timeout_binary:
+            # macOS does not ship GNU ``timeout``.  Keep the same bounded
+            # fire-and-forget contract with a daemon timer on those hosts.
+            timer = threading.Timer(
+                timeout_seconds,
+                lambda: proc.kill() if proc.poll() is None else None,
+            )
+            timer.daemon = True
+            timer.start()
     except (FileNotFoundError, OSError):
         try:
             os.close(fd)

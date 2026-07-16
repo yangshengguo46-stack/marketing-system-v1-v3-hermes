@@ -12,7 +12,7 @@ export function SettingsContent({ children }: { children: ReactNode }) {
   return (
     <section className="min-h-0 overflow-hidden">
       <div className={cn('h-full min-h-0 overflow-y-auto pb-20', PAGE_INSET_X)}>
-        <div className="mx-auto w-full max-w-4xl">{children}</div>
+        <div className="mos-page-enter mx-auto w-full max-w-[var(--mos-reading-max-width)]">{children}</div>
       </div>
     </section>
   )
@@ -22,10 +22,9 @@ export function Pill({ tone = 'muted', children }: { tone?: 'muted' | 'primary';
   return <Badge variant={tone === 'primary' ? 'default' : 'muted'}>{children}</Badge>
 }
 
-export function SectionHeading({ icon: Icon, title, meta }: { icon: IconComponent; title: string; meta?: string }) {
+export function SectionHeading({ title, meta }: { icon: IconComponent; title: string; meta?: string }) {
   return (
-    <div className="mb-2.5 flex items-center gap-2 pt-2 text-[length:var(--conversation-text-font-size)] font-medium">
-      <Icon className="size-4 text-muted-foreground" />
+    <div className="mb-3 flex items-center gap-2 pt-2 text-base font-semibold tracking-[-0.02em]">
       <span>{title}</span>
       {meta && <Pill>{meta}</Pill>}
     </div>
@@ -80,7 +79,7 @@ export function ListRow({
   return (
     <div
       className={cn(
-        'grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(15rem,22rem)] sm:items-center',
+        'grid gap-3 py-3.5 sm:grid-cols-[minmax(0,1fr)_minmax(15rem,22rem)] sm:items-center',
         wide && 'sm:grid-cols-1 sm:items-start'
       )}
     >
@@ -91,7 +90,11 @@ export function ListRow({
             {description}
           </div>
         )}
-        {hint && <div className="mt-1 block font-mono text-[0.68rem] text-muted-foreground/45">{hint}</div>}
+        {hint && (
+          <div className="mt-1 text-[length:var(--conversation-caption-font-size)] leading-(--conversation-caption-line-height) text-(--ui-text-quaternary)">
+            {hint}
+          </div>
+        )}
         {below}
       </div>
       {action && <div className={cn('min-w-0', !wide && 'sm:justify-self-end')}>{action}</div>}

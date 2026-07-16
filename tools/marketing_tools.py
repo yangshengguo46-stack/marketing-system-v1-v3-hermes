@@ -13,8 +13,13 @@ from agent.marketing.domains import (
     ContentProductionPolicy,
     EvidenceRepository,
     KnowledgeBaseRepository,
+    MaterialSourcingRepository,
+    MediaAssetRepository,
+    ProductionAudioRepository,
     PublishingRepository,
+    PublicContentObservationRepository,
     ShortVideoSignalRepository,
+    VideoProductionRepository,
 )
 from agent.marketing.session_scope import enforce_tool_account_scope
 from agent.marketing.providers import get_publish_provider, has_publish_providers
@@ -111,6 +116,30 @@ UPDATE_ACCOUNT_LIFECYCLE_SCHEMA = {
             "trust_barriers": {"type": "array", "items": {}},
             "desired_outcomes": {"type": "array", "items": {}},
             "behavior_signals": {"type": "array", "items": {}},
+            "existence_strategy_hypotheses": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": (
+                    "Revisable preserve/confirm/expand/continue behavioral strategy projections; "
+                    "these are not existence itself and require observable/disconfirming signals."
+                ),
+            },
+            "need_projection_hypotheses": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": (
+                    "Maslow-like need projections describing what embodied or social deficit/growth "
+                    "a behavior may address. These are hypotheses, not directly observed motives."
+                ),
+            },
+            "cognitive_projection_hypotheses": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": (
+                    "Confidence-bounded, reviewable soft hypotheses such as Jungian information-"
+                    "processing projections. Never a diagnosis or permanent personality label."
+                ),
+            },
             "exclusions": {"type": "array", "items": {}},
             "data_gaps": {"type": "array", "items": {}},
             "benchmark_id": {"type": "string"},
@@ -198,6 +227,26 @@ READ_CONTENT_ASSETS_SCHEMA = {
     },
 }
 
+READ_VIDEO_PRODUCTIONS_SCHEMA = {
+    "name": "marketing_read_video_productions",
+    "description": (
+        "List durable faceless-video render jobs for the account bound to this conversation. "
+        "Use it to recover prepared, running, completed or failed work and inspect the approved "
+        "EDL, final media asset, immutable content revision and render receipt."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["prepared", "approved", "running", "completed", "failed"],
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+        },
+        "required": [],
+    },
+}
+
 READ_EVIDENCE_PACK_SCHEMA = {
     "name": "marketing_read_evidence_pack",
     "description": (
@@ -230,12 +279,168 @@ READ_SOUND_TRENDS_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "platform": {"type": "string", "enum": ["douyin", "bilibili", "xiaohongshu", "kuaishou", "wechat_channels", "tiktok", "youtube"]},
+            "platform": {
+                "type": "string",
+                "enum": [
+                    "douyin",
+                    "bilibili",
+                    "xiaohongshu",
+                    "kuaishou",
+                    "wechat_channels",
+                    "tiktok",
+                    "youtube",
+                ],
+            },
             "objective": {"type": "string"},
-            "window_hours": {"type": "integer", "minimum": 1, "maximum": 720, "default": 72},
+            "window_hours": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 720,
+                "default": 72,
+            },
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
         },
         "required": ["platform"],
+    },
+}
+
+READ_PUBLIC_CONTENT_SCHEMA = {
+    "name": "marketing_read_public_content",
+    "description": (
+        "Read evidence-backed public creator content cases captured by "
+        "browser_capture_public_content. Repeated captures of the same post form a feedback "
+        "time series. Public observations are natural experiments, not causal proof."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "platform": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+        },
+        "required": [],
+    },
+}
+
+INTERPRET_PUBLIC_CONTENT_SCHEMA = {
+    "name": "marketing_interpret_public_content",
+    "description": (
+        "Interpret one verified public-content feedback snapshot with the same content, audience, "
+        "existence-direction and social-reaction model used for owned work. This creates a Receipt "
+        "and pending learning candidates; it never mutates the benchmark graph automatically. "
+        "Do not submit commenter identities, raw comments, exact probabilities or causal claims."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "observation_id": {"type": "string"},
+            "model_observation": {
+                "type": "object",
+                "properties": {
+                    "content_features": {"type": "object"},
+                    "audience": {"type": "object"},
+                    "reaction": {
+                        "type": "object",
+                        "properties": {
+                            "sample_size": {"type": "integer", "minimum": 0},
+                            "clusters": {
+                                "type": "array",
+                                "maxItems": 12,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "cohort": {"type": "string"},
+                                        "stance": {
+                                            "type": "string",
+                                            "enum": [
+                                                "supportive",
+                                                "experience_sharing",
+                                                "questioning",
+                                                "skeptical",
+                                                "oppositional",
+                                                "action_seeking",
+                                                "off_target",
+                                            ],
+                                        },
+                                        "need_projection": {
+                                            "type": "string",
+                                            "enum": [
+                                                "physiological",
+                                                "safety",
+                                                "belonging",
+                                                "esteem",
+                                                "self_actualization",
+                                                "transcendence",
+                                                "unknown",
+                                            ],
+                                        },
+                                        "cognitive_projection": {
+                                            "type": "string",
+                                            "enum": ["Se", "Si", "Ne", "Ni", "Te", "Ti", "Fe", "Fi", "unknown"],
+                                        },
+                                        "existence_strategy": {
+                                            "type": "string",
+                                            "enum": [
+                                                "preserve",
+                                                "confirm",
+                                                "expand",
+                                                "continue",
+                                                "unknown",
+                                            ],
+                                        },
+                                        "themes": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                        },
+                                        "count": {"type": "integer", "minimum": 0},
+                                    },
+                                    "required": [
+                                        "cohort",
+                                        "stance",
+                                        "need_projection",
+                                        "cognitive_projection",
+                                        "existence_strategy",
+                                        "themes",
+                                        "count",
+                                    ],
+                                },
+                            },
+                            "question_patterns": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "objection_patterns": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["sample_size", "clusters"],
+                    },
+                    "disconfirming_signals": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "data_gaps": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": [
+                    "content_features",
+                    "audience",
+                    "reaction",
+                    "disconfirming_signals",
+                    "data_gaps",
+                ],
+            },
+            "confidence": {"type": "number", "minimum": 0, "maximum": 0.7},
+            "project_id": {"type": "string"},
+            "benchmark_id": {"type": "string"},
+            "benchmark_projection": {
+                "type": "object",
+                "description": (
+                    "Optional governed benchmark proposal. Requires project_id; benchmark_id links "
+                    "an existing benchmark, otherwise acceptance creates only a benchmark candidate."
+                ),
+            },
+        },
+        "required": ["observation_id", "model_observation", "confidence"],
     },
 }
 
@@ -276,12 +481,110 @@ READ_KNOWLEDGE_SCHEMA = {
     },
 }
 
+REACTION_SCENARIOS_SCHEMA = {
+    "type": "array",
+    "minItems": 3,
+    "maxItems": 8,
+    "description": (
+        "Anonymous pre-publish commenter-cohort hypotheses. Include supportive, skeptical/opposed, "
+        "and question/action scenarios. Examples must be synthetic and must not identify a real person."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "cohort": {"type": "string"},
+            "cohort_relation": {
+                "type": "string",
+                "enum": ["target", "adjacent", "opposed", "off_target", "unknown"],
+            },
+            "stance": {
+                "type": "string",
+                "enum": [
+                    "supportive",
+                    "experience_sharing",
+                    "questioning",
+                    "skeptical",
+                    "oppositional",
+                    "action_seeking",
+                    "off_target",
+                ],
+            },
+            "need_projection": {
+                "type": "string",
+                "enum": [
+                    "physiological",
+                    "safety",
+                    "belonging",
+                    "esteem",
+                    "self_actualization",
+                    "transcendence",
+                    "unknown",
+                ],
+                "description": "Maslow-like hypothesis about what need is projected into behavior.",
+            },
+            "cognitive_projection": {
+                "type": "string",
+                "enum": ["Se", "Si", "Ne", "Ni", "Te", "Ti", "Fe", "Fi", "unknown"],
+                "description": "Jungian information-processing hypothesis, not a permanent type.",
+            },
+            "existence_strategy": {
+                "type": "string",
+                "enum": ["preserve", "confirm", "expand", "continue", "unknown"],
+                "description": (
+                    "Observable strategy projection: preserve boundaries, confirm identity, expand "
+                    "capacity, continue meaning/legacy, or unknown. It is not existence itself."
+                ),
+            },
+            "likelihood_band": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "unknown"],
+                "description": "Use a broad band only; never invent an exact probability.",
+            },
+            "trigger": {"type": "string"},
+            "rationale": {"type": "string"},
+            "likely_comment_themes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 6,
+                "items": {"type": "string"},
+            },
+            "synthetic_comment_examples": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": {"type": "string"},
+                "description": "Synthetic examples only, never presented as quotes from real users.",
+            },
+            "response_opportunity": {"type": "string"},
+            "risk": {"type": "string"},
+            "evidence_basis": {"type": "array", "items": {"type": "string"}},
+            "disconfirming_signals": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [
+            "cohort",
+            "cohort_relation",
+            "stance",
+            "need_projection",
+            "cognitive_projection",
+            "existence_strategy",
+            "likelihood_band",
+            "trigger",
+            "rationale",
+            "likely_comment_themes",
+            "synthetic_comment_examples",
+            "disconfirming_signals",
+        ],
+        "additionalProperties": False,
+    },
+}
+
 CREATE_CONTENT_DRAFT_SCHEMA = {
     "name": "marketing_draft_content_create",
     "description": (
         "Save a substantive, reversible video/image/caption draft for the account bound to this "
         "conversation. Article drafts must use marketing_draft_article_create so parent/variant and "
         "citation checks cannot be bypassed. At least one verified EvidencePack ID is required. The "
+        "draft must include anonymous social reaction scenarios for later comment-cluster retro. The "
         "account id is taken from the Hermes session and cannot be supplied or overridden by the model."
     ),
     "parameters": {
@@ -311,8 +614,20 @@ CREATE_CONTENT_DRAFT_SCHEMA = {
             },
             "evidence_refs": {"type": "array", "items": {"type": "string"}},
             "memory_refs": {"type": "array", "items": {"type": "string"}},
+            "revision_of": {
+                "type": "string",
+                "description": "Existing faceless-video asset ID when creating a new immutable version.",
+            },
+            "reaction_scenarios": REACTION_SCENARIOS_SCHEMA,
         },
-        "required": ["title", "plan_id", "platform", "production_kind", "content"],
+        "required": [
+            "title",
+            "plan_id",
+            "platform",
+            "production_kind",
+            "content",
+            "reaction_scenarios",
+        ],
     },
 }
 
@@ -325,7 +640,9 @@ CREATE_ARTICLE_DRAFT_SCHEMA = {
         "[evidence_xxx] markers returned by web_extract or "
         "marketing_read_evidence_pack. The tool persists useful incomplete drafts as needs_revision, "
         "but only structurally complete, cited, numerically supported and platform-distinct bundles "
-        "become review_ready. Never invent percentages, time intervals or market prevalence."
+        "become review_ready. Include at least three anonymous commenter-cohort scenarios covering "
+        "support/experience, skepticism/opposition, and questions/action. Never invent percentages, "
+        "time intervals, market prevalence, exact reaction probabilities, or real-person comments."
     ),
     "parameters": {
         "type": "object",
@@ -362,6 +679,7 @@ CREATE_ARTICLE_DRAFT_SCHEMA = {
                     "becomes the next immutable version and the parent is marked superseded."
                 ),
             },
+            "reaction_scenarios": REACTION_SCENARIOS_SCHEMA,
         },
         "required": [
             "title",
@@ -369,7 +687,188 @@ CREATE_ARTICLE_DRAFT_SCHEMA = {
             "parent_body_markdown",
             "platform_variants",
             "evidence_refs",
+            "reaction_scenarios",
         ],
+    },
+}
+
+PREPARE_FACELESS_RENDER_SCHEMA = {
+    "name": "marketing_prepare_faceless_render",
+    "description": (
+        "Validate and persist an immutable renderer-neutral Video IR or legacy edit decision "
+        "list for an existing faceless-video ContentAsset in the current account. This prepares "
+        "no external effect and performs no render. Every referenced media asset must already be "
+        "materialized locally with approved rights. Repeating the same request returns the same "
+        "production job."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "source_asset_id": {
+                "type": "string",
+                "description": "Current faceless-video ContentAsset revision to render.",
+            },
+            "renderer": {
+                "type": "string",
+                "enum": ["ffmpeg_timeline_v1"],
+                "default": "ffmpeg_timeline_v1",
+            },
+            "edl": {
+                "type": "object",
+                "description": (
+                    "marketing.faceless_video.edl.v1 object with width, height, fps, 1-100 clips "
+                    "and optional voice_asset_id, music_asset_id and captions. Each clip requires "
+                    "media_asset_id, source_in and duration. Provide exactly one of edl or video_ir."
+                ),
+            },
+            "video_ir": {
+                "type": "object",
+                "description": (
+                    "marketing.video.ir.v1 object with canvas, stable scenes, visuals, motion "
+                    "intent, renderer policy, review rules, captions and audio references. "
+                    "Unsupported renderer capabilities fail before approval. Provide exactly "
+                    "one of video_ir or edl."
+                ),
+            },
+        },
+        "required": ["source_asset_id"],
+    },
+}
+
+SEARCH_MATERIALS_SCHEMA = {
+    "name": "marketing_search_materials",
+    "description": (
+        "Search the current account's user-owned visual library first, then configured licensed "
+        "stock providers. Results are durable, ranked candidates with creator, source and license "
+        "evidence. Search does not download or authorize any candidate."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "role": {
+                "type": "string",
+                "enum": ["scene", "broll", "prop", "storyboard", "other"],
+                "default": "broll",
+            },
+            "orientation": {
+                "type": "string",
+                "enum": ["landscape", "portrait", "square"],
+            },
+            "target_duration": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 600,
+                "default": 0,
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 40, "default": 12},
+            "locale": {"type": "string", "default": "zh-CN"},
+        },
+        "required": ["query"],
+    },
+}
+
+MATERIALIZE_MATERIAL_SCHEMA = {
+    "name": "marketing_effect_materialize",
+    "description": (
+        "After the user reviews a candidate's source and license, download the provider binary, "
+        "hash it and import it into the native rights-gated media library. User-library candidates "
+        "are selected without a duplicate copy."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "candidate_id": {"type": "string"},
+            "rights_reviewed": {
+                "type": "boolean",
+                "description": "Must be true only after explicit human source/license review.",
+            },
+        },
+        "required": ["candidate_id", "rights_reviewed"],
+    },
+}
+
+KEEP_MATERIAL_SCHEMA = {
+    "name": "marketing_effect_keep_material",
+    "description": (
+        "After the user explicitly asks to keep a numbered or identified temporary material, "
+        "promote that exact account-scoped asset into the durable local library. Cloud promotion "
+        "fails honestly until a cloud material provider is connected."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "asset_id": {"type": "string"},
+            "target_tier": {
+                "type": "string",
+                "enum": ["library", "cloud"],
+                "default": "library",
+            },
+            "confirmed": {
+                "type": "boolean",
+                "description": "True only after the user explicitly requested this retention action.",
+            },
+        },
+        "required": ["asset_id", "target_tier", "confirmed"],
+    },
+}
+
+PREPARE_VIDEO_VOICE_SCHEMA = {
+    "name": "marketing_prepare_video_voice",
+    "description": (
+        "Prepare an immutable voiceover intent for the current account. This stores the exact "
+        "script hash but does not call TTS or incur provider cost."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "script_text": {"type": "string", "maxLength": 4000},
+        },
+        "required": ["name", "script_text"],
+    },
+}
+
+EXECUTE_VIDEO_VOICE_SCHEMA = {
+    "name": "marketing_effect_video_voice",
+    "description": (
+        "After explicit human approval of the exact prepared script, call the user's configured "
+        "Hermes TTS provider once and import the real audio output as a voice MediaAsset. Paid and "
+        "local providers use the same receipt-bound state machine."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string"},
+            "approval_ref": {"type": "string"},
+            "confirmed_by_user": {"type": "boolean"},
+        },
+        "required": ["job_id", "approval_ref", "confirmed_by_user"],
+    },
+}
+
+EXECUTE_FACELESS_RENDER_SCHEMA = {
+    "name": "marketing_effect_faceless_render",
+    "description": (
+        "After explicit human review, execute one prepared faceless-video render through the native "
+        "Hermes FFmpeg timeline. The effect is account-scoped and idempotent: completion creates a "
+        "derived final-video MediaAsset, an immutable ContentAsset revision and a render receipt. "
+        "No paid generation provider is called by this tool."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "production_id": {"type": "string"},
+            "approval_ref": {
+                "type": "string",
+                "description": "Audit reference for the user's review of this exact EDL.",
+            },
+            "confirmed_by_user": {
+                "type": "boolean",
+                "description": "Must be true only after the user explicitly approves rendering.",
+            },
+        },
+        "required": ["production_id", "approval_ref", "confirmed_by_user"],
     },
 }
 
@@ -388,8 +887,15 @@ PREPARE_PUBLISH_SCHEMA = {
             "platform": {
                 "type": "string",
                 "enum": [
-                    "zhihu", "wechat_official", "douyin", "bilibili", "xiaohongshu",
-                    "kuaishou", "wechat_channels", "tiktok", "youtube",
+                    "zhihu",
+                    "wechat_official",
+                    "douyin",
+                    "bilibili",
+                    "xiaohongshu",
+                    "kuaishou",
+                    "wechat_channels",
+                    "tiktok",
+                    "youtube",
                 ],
             },
             "provider": {
@@ -415,7 +921,10 @@ READ_PUBLISH_STATE_SCHEMA = {
             "action_id": {"type": "string"},
             "include_unresolved": {"type": "boolean", "default": True},
             "include_due_metrics": {"type": "boolean", "default": False},
-            "as_of": {"type": "string", "description": "Optional ISO-8601 cutoff for due metrics."},
+            "as_of": {
+                "type": "string",
+                "description": "Optional ISO-8601 cutoff for due metrics.",
+            },
             "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
         },
         "required": [],
@@ -530,6 +1039,11 @@ def _update_account_lifecycle(args: dict, **kwargs) -> str:
             trust_barriers=args.get("trust_barriers"),
             desired_outcomes=args.get("desired_outcomes"),
             behavior_signals=args.get("behavior_signals"),
+            existence_strategy_hypotheses=args.get("existence_strategy_hypotheses"),
+            need_projection_hypotheses=args.get("need_projection_hypotheses"),
+            cognitive_projection_hypotheses=args.get("cognitive_projection_hypotheses"),
+            existence_hypotheses=args.get("existence_hypotheses"),
+            cognitive_style_hypotheses=args.get("cognitive_style_hypotheses"),
             exclusions=args.get("exclusions"),
             data_gaps=args.get("data_gaps"),
         )
@@ -766,6 +1280,22 @@ def _read_content_assets(args: dict, **kwargs) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def _read_video_productions(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = VideoProductionRepository().list(
+        user_id=user_id,
+        account_id=account_id,
+        status=str(args.get("status") or "") or None,
+        limit=int(args.get("limit") or 20),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 def _read_evidence_pack(args: dict, **kwargs) -> str:
     user_id, account_id = enforce_tool_account_scope(
         {},
@@ -796,6 +1326,43 @@ def _read_sound_trends(args: dict, **kwargs) -> str:
         objective=str(args.get("objective") or ""),
         window_hours=int(args.get("window_hours") or 72),
         limit=int(args.get("limit") or 20),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _read_public_content(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = PublicContentObservationRepository().list_cases(
+        user_id=user_id,
+        account_id=account_id,
+        platform=str(args.get("platform") or "") or None,
+        limit=int(args.get("limit") or 50),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _interpret_public_content(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = PublicContentObservationRepository().interpret_observation(
+        user_id=user_id,
+        account_id=account_id,
+        observation_id=str(args.get("observation_id") or ""),
+        model_observation=args.get("model_observation") or {},
+        confidence=float(args.get("confidence") or 0),
+        project_id=str(args.get("project_id") or ""),
+        benchmark_id=str(args.get("benchmark_id") or ""),
+        benchmark_projection=args.get("benchmark_projection"),
+        session_id=str(kwargs.get("session_id") or kwargs.get("task_id") or ""),
     )
     return json.dumps(result, ensure_ascii=False)
 
@@ -890,6 +1457,8 @@ def _create_content_draft(args: dict, **kwargs) -> str:
         hook=str(args.get("hook") or ""),
         evidence_refs=args.get("evidence_refs") or [],
         memory_refs=args.get("memory_refs") or [],
+        reaction_scenarios=args.get("reaction_scenarios") or [],
+        revision_of=str(args.get("revision_of") or ""),
     )
     loop.mark_preflight_used(preflight["id"])
     return json.dumps({**result, "preflight_id": preflight["id"]}, ensure_ascii=False)
@@ -922,9 +1491,157 @@ def _create_article_draft(args: dict, **kwargs) -> str:
         topic=str(args.get("topic") or ""),
         hook=str(args.get("hook") or ""),
         revision_of=str(args.get("revision_of") or ""),
+        reaction_scenarios=args.get("reaction_scenarios") or [],
     )
     loop.mark_preflight_used(preflight["id"])
     return json.dumps({**result, "preflight_id": preflight["id"]}, ensure_ascii=False)
+
+
+def _prepare_faceless_render(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = VideoProductionRepository().prepare(
+        user_id=user_id,
+        account_id=account_id,
+        source_asset_id=str(args.get("source_asset_id") or ""),
+        edl=args.get("edl") if "edl" in args else None,
+        video_ir=args.get("video_ir") if "video_ir" in args else None,
+        renderer=str(args.get("renderer") or "ffmpeg_timeline_v1"),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _search_materials(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = MaterialSourcingRepository().search(
+        user_id=user_id,
+        account_id=account_id,
+        query=str(args.get("query") or ""),
+        role=str(args.get("role") or "broll"),
+        orientation=str(args.get("orientation") or ""),
+        target_duration=float(args.get("target_duration") or 0),
+        limit=int(args.get("limit") or 12),
+        locale=str(args.get("locale") or "zh-CN"),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _materialize_material(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = MaterialSourcingRepository().materialize(
+        candidate_id=str(args.get("candidate_id") or ""),
+        user_id=user_id,
+        account_id=account_id,
+        rights_reviewed=args.get("rights_reviewed") is True,
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _keep_material(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    if args.get("confirmed") is not True:
+        raise ValueError("explicit material retention confirmation is required")
+    asset = MediaAssetRepository().get(
+        asset_id=str(args.get("asset_id") or ""),
+        user_id=user_id,
+    )
+    if asset.get("account_id") not in {None, account_id}:
+        raise KeyError("media asset not found in account scope")
+    result = MediaAssetRepository().promote(
+        asset_id=asset["id"],
+        user_id=user_id,
+        target_tier=str(args.get("target_tier") or "library"),
+    )
+    return json.dumps({"asset": result}, ensure_ascii=False)
+
+
+def _prepare_video_voice(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    result = ProductionAudioRepository().prepare_voice(
+        user_id=user_id,
+        account_id=account_id,
+        name=str(args.get("name") or ""),
+        script_text=str(args.get("script_text") or ""),
+    )
+    return json.dumps(
+        {
+            "job": result,
+            "effect_executed": False,
+            "next_action": "Request one-shot approval for this exact script before TTS generation.",
+        },
+        ensure_ascii=False,
+    )
+
+
+def _execute_video_voice(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    repository = ProductionAudioRepository()
+    repository.approve(
+        job_id=str(args.get("job_id") or ""),
+        user_id=user_id,
+        account_id=account_id,
+        approval_ref=str(args.get("approval_ref") or ""),
+        confirmed_by_user=args.get("confirmed_by_user") is True,
+    )
+    result = repository.execute(
+        job_id=str(args.get("job_id") or ""),
+        user_id=user_id,
+        account_id=account_id,
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _execute_faceless_render(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    repository = VideoProductionRepository()
+    repository.approve(
+        production_id=str(args.get("production_id") or ""),
+        user_id=user_id,
+        account_id=account_id,
+        approval_ref=str(args.get("approval_ref") or ""),
+        confirmed_by_user=args.get("confirmed_by_user") is True,
+    )
+    result = repository.execute(
+        production_id=str(args.get("production_id") or ""),
+        user_id=user_id,
+        account_id=account_id,
+        session_id=str(kwargs.get("session_id") or kwargs.get("task_id") or ""),
+    )
+    return json.dumps(result, ensure_ascii=False)
 
 
 def _prepare_publish(args: dict, **kwargs) -> str:
@@ -1057,7 +1774,9 @@ def _execute_publish(args: dict, **kwargs) -> str:
 def _query_publish(args: dict, **kwargs) -> str:
     _repository, action = _publish_action_in_scope(args, **kwargs)
     if action["status"] not in {"executing", "unknown"}:
-        raise ValueError(f"publish action does not require recovery from {action['status']}")
+        raise ValueError(
+            f"publish action does not require recovery from {action['status']}"
+        )
     provider = get_publish_provider(action["provider"])
     try:
         provider_result = provider.query(action)
@@ -1124,6 +1843,15 @@ registry.register(
 )
 
 registry.register(
+    name="marketing_read_video_productions",
+    toolset="marketing",
+    schema=READ_VIDEO_PRODUCTIONS_SCHEMA,
+    handler=_read_video_productions,
+    description="Recover durable faceless-video render jobs for the current account.",
+    emoji="🎞️",
+)
+
+registry.register(
     name="marketing_read_evidence_pack",
     toolset="marketing",
     schema=READ_EVIDENCE_PACK_SCHEMA,
@@ -1139,6 +1867,24 @@ registry.register(
     handler=_read_sound_trends,
     description="Read evidence-backed short-video sound momentum for the current account.",
     emoji="🎵",
+)
+
+registry.register(
+    name="marketing_read_public_content",
+    toolset="marketing",
+    schema=READ_PUBLIC_CONTENT_SCHEMA,
+    handler=_read_public_content,
+    description="Read public creator natural experiments captured from real browser pages.",
+    emoji="🔭",
+)
+
+registry.register(
+    name="marketing_interpret_public_content",
+    toolset="marketing",
+    schema=INTERPRET_PUBLIC_CONTENT_SCHEMA,
+    handler=_interpret_public_content,
+    description="Create governed model and benchmark learning candidates from public observations.",
+    emoji="🧪",
 )
 
 registry.register(
@@ -1177,6 +1923,69 @@ registry.register(
     handler=_create_article_draft,
     description="Persist a validated parent article and platform-native variants.",
     emoji="📝",
+)
+
+registry.register(
+    name="marketing_search_materials",
+    toolset="marketing",
+    schema=SEARCH_MATERIALS_SCHEMA,
+    handler=_search_materials,
+    description="Search and rank user-owned and licensed visual material candidates.",
+    emoji="🔎",
+)
+
+registry.register(
+    name="marketing_effect_materialize",
+    toolset="marketing",
+    schema=MATERIALIZE_MATERIAL_SCHEMA,
+    handler=_materialize_material,
+    description="Materialize one explicitly rights-reviewed provider candidate.",
+    emoji="📥",
+)
+
+registry.register(
+    name="marketing_effect_keep_material",
+    toolset="marketing",
+    schema=KEEP_MATERIAL_SCHEMA,
+    handler=_keep_material,
+    description="Keep one explicit temporary material in the local library or connected cloud.",
+    emoji="📌",
+)
+
+registry.register(
+    name="marketing_prepare_video_voice",
+    toolset="marketing",
+    schema=PREPARE_VIDEO_VOICE_SCHEMA,
+    handler=_prepare_video_voice,
+    description="Prepare a hash-bound voiceover intent without calling TTS.",
+    emoji="🗣️",
+)
+
+registry.register(
+    name="marketing_effect_video_voice",
+    toolset="marketing",
+    schema=EXECUTE_VIDEO_VOICE_SCHEMA,
+    handler=_execute_video_voice,
+    description="Generate one approved voiceover and import its real audio receipt.",
+    emoji="🎙️",
+)
+
+registry.register(
+    name="marketing_prepare_faceless_render",
+    toolset="marketing",
+    schema=PREPARE_FACELESS_RENDER_SCHEMA,
+    handler=_prepare_faceless_render,
+    description="Persist and validate an immutable faceless-video edit decision list.",
+    emoji="🎬",
+)
+
+registry.register(
+    name="marketing_effect_faceless_render",
+    toolset="marketing",
+    schema=EXECUTE_FACELESS_RENDER_SCHEMA,
+    handler=_execute_faceless_render,
+    description="Render one explicitly approved faceless-video EDL and settle its receipt.",
+    emoji="🎥",
 )
 
 registry.register(
