@@ -441,6 +441,8 @@ describe('Marketing OS business surfaces', () => {
     expect(screen.queryByLabelText('声音库')).toBeNull()
     expect(screen.queryByRole('button', { name: /交给 AI 生成/ })).toBeNull()
     expect(screen.getByText('镜头列表')).toBeTruthy()
+    expect(screen.queryByText('项目参考素材')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '展开项目素材栏' }))
     expect(screen.getByText('项目参考素材')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '折叠项目素材栏' }))
     expect(screen.queryByText('项目参考素材')).toBeNull()

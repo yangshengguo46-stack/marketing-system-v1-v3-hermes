@@ -264,6 +264,7 @@ export interface VideoSetupDraft {
 
 interface VideoWorkspaceViewState {
   inspectorRailCollapsed: boolean
+  inspectorRailFormatVersion: number
   inspectorTab: InspectorTab
   sceneRailCollapsed: boolean
   selectedId: string
@@ -348,7 +349,8 @@ function videoWorkspaceViewKey(accountId: string): string {
 
 function readVideoWorkspaceView(accountId: string): VideoWorkspaceViewState {
   const fallback: VideoWorkspaceViewState = {
-    inspectorRailCollapsed: false,
+    inspectorRailCollapsed: true,
+    inspectorRailFormatVersion: 2,
     inspectorTab: 'materials',
     sceneRailCollapsed: false,
     selectedId: '',
@@ -362,7 +364,11 @@ function readVideoWorkspaceView(accountId: string): VideoWorkspaceViewState {
     const tabs: InspectorTab[] = ['characters', 'materials', 'props', 'scenes', 'sound']
 
     return {
-      inspectorRailCollapsed: value.inspectorRailCollapsed === true,
+      inspectorRailCollapsed:
+        value.inspectorRailFormatVersion === fallback.inspectorRailFormatVersion
+          ? value.inspectorRailCollapsed !== false
+          : fallback.inspectorRailCollapsed,
+      inspectorRailFormatVersion: fallback.inspectorRailFormatVersion,
       inspectorTab: tabs.includes(value.inspectorTab as InspectorTab)
         ? (value.inspectorTab as InspectorTab)
         : fallback.inspectorTab,
@@ -550,6 +556,7 @@ export function VideoProductionWorkbench({
       videoWorkspaceViewKey(accountId),
       JSON.stringify({
         inspectorRailCollapsed,
+        inspectorRailFormatVersion: 2,
         inspectorTab,
         sceneRailCollapsed,
         selectedId,
@@ -1000,8 +1007,8 @@ export function VideoProductionWorkbench({
     directorLayout === 'wide'
       ? inspectorRailCollapsed
         ? sceneRailCollapsed
-          ? 'grid-cols-[3.5rem_minmax(0,1fr)]'
-          : 'grid-cols-[15rem_minmax(0,1fr)]'
+          ? 'grid-cols-[3.5rem_minmax(0,1fr)_7rem]'
+          : 'grid-cols-[15rem_minmax(0,1fr)_7rem]'
         : sceneRailCollapsed
           ? 'grid-cols-[3.5rem_minmax(0,1fr)_20rem]'
           : 'grid-cols-[15rem_minmax(0,1fr)_20rem]'
@@ -1331,6 +1338,16 @@ export function VideoProductionWorkbench({
           />
         </main>
 
+        {inspectorRailCollapsed && directorLayout === 'wide' ? (
+          <DirectorInspectorRail
+            activeTab={inspectorTab}
+            onTab={tab => {
+              setInspectorTab(tab)
+              setInspectorRailCollapsed(false)
+            }}
+          />
+        ) : null}
+
         {!inspectorRailCollapsed ? (
           <div
             className={`flex min-h-0 ${directorLayout === 'compact' ? 'col-span-2 max-h-[34rem] border-t border-(--ui-stroke-tertiary)' : directorLayout === 'stacked' ? 'max-h-[38rem]' : ''}`}
@@ -1659,6 +1676,44 @@ function VoiceLibrary({
         ))}
       </div>
     </section>
+  )
+}
+
+function DirectorInspectorRail({
+  activeTab,
+  onTab
+}: {
+  activeTab: InspectorTab
+  onTab: (tab: InspectorTab) => void
+}) {
+  const tabs: Array<{ id: InspectorTab; icon: typeof Users; label: string }> = [
+    { id: 'characters', icon: Users, label: '人物' },
+    { id: 'sound', icon: AudioLines, label: '声音' },
+    { id: 'scenes', icon: Layers3, label: '场景' },
+    { id: 'props', icon: Package, label: '道具' }
+  ]
+
+  return (
+    <aside className="flex min-h-0 flex-col border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background)">
+      <nav aria-label="项目参考素材" className="grid gap-1.5 px-2 py-3">
+        {tabs.map(tab => {
+          const Icon = tab.icon
+
+          return (
+            <button
+              aria-label={tab.label}
+              className={`flex min-h-14 flex-col items-center justify-center gap-1.5 rounded-xl border px-1 text-center transition ${activeTab === tab.id ? 'border-(--ui-accent) bg-(--ui-row-active-background) text-(--ui-accent)' : 'border-transparent text-(--ui-text-secondary) hover:border-(--ui-stroke-tertiary) hover:bg-(--ui-row-hover-background)'}`}
+              key={tab.id}
+              onClick={() => onTab(tab.id)}
+              type="button"
+            >
+              <Icon className="size-[1.15rem]" />
+              <strong className="text-[0.65rem]">{tab.label}</strong>
+            </button>
+          )
+        })}
+      </nav>
+    </aside>
   )
 }
 
