@@ -287,6 +287,13 @@ const COMMON_RATIOS = [
   { height: 4, label: '3:4', width: 3 }
 ]
 
+const VIDEO_REFERENCE_CATEGORIES: Array<{ id: SetupCategory; icon: typeof Users; label: string }> = [
+  { id: 'characters', icon: Users, label: '人物' },
+  { id: 'sound', icon: AudioLines, label: '声音' },
+  { id: 'scenes', icon: Layers3, label: '场景' },
+  { id: 'props', icon: Package, label: '道具' }
+]
+
 const VIDEO_COMPOSER_MENU_STATE: ChatBarState = {
   model: { canSwitch: false, model: '', provider: '' },
   tools: { enabled: true, label: '添加素材' },
@@ -1351,12 +1358,14 @@ export function VideoProductionWorkbench({
         </main>
 
         {!inspectorRailHidden && directorLayout !== 'stacked' ? (
-          <DirectorInspectorRail
-            activeTab={inspectorTab}
-            onTab={tab => {
-              setInspectorTab(tab)
-              setInspectorPanelOpen(current => (tab === inspectorTab ? !current : true))
+          <VideoReferenceRail
+            activeCategory={inspectorTab === 'materials' ? null : inspectorTab}
+            ariaLabel="项目参考素材"
+            onCategory={category => {
+              setInspectorTab(category)
+              setInspectorPanelOpen(current => (category === inspectorTab ? !current : true))
             }}
+            resolveAsset={category => detail?.media_assets.find(item => assetMatchesTab(item, category))}
           />
         ) : null}
 
@@ -1690,36 +1699,43 @@ function VoiceLibrary({
   )
 }
 
-function DirectorInspectorRail({
-  activeTab,
-  onTab
+function VideoReferenceRail({
+  activeCategory,
+  ariaLabel,
+  className,
+  navClassName,
+  onCategory,
+  resolveAsset
 }: {
-  activeTab: InspectorTab
-  onTab: (tab: InspectorTab) => void
+  activeCategory: SetupCategory | null
+  ariaLabel: string
+  className?: string
+  navClassName?: string
+  onCategory: (category: SetupCategory) => void
+  resolveAsset?: (category: SetupCategory) => MediaAssetProjection | undefined
 }) {
-  const tabs: Array<{ id: InspectorTab; icon: typeof Users; label: string }> = [
-    { id: 'characters', icon: Users, label: '人物' },
-    { id: 'sound', icon: AudioLines, label: '声音' },
-    { id: 'scenes', icon: Layers3, label: '场景' },
-    { id: 'props', icon: Package, label: '道具' }
-  ]
-
   return (
-    <aside className="flex min-h-0 flex-col border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background)">
-      <nav aria-label="项目参考素材" className="grid gap-1.5 px-2 py-3">
-        {tabs.map(tab => {
-          const Icon = tab.icon
+    <aside
+      className={cn(
+        'flex min-h-0 flex-col border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background)',
+        className
+      )}
+    >
+      <nav aria-label={ariaLabel} className={cn('grid gap-1.5 px-2 py-3', navClassName)}>
+        {VIDEO_REFERENCE_CATEGORIES.map(category => {
+          const Icon = category.icon
+          const asset = resolveAsset?.(category.id)
 
           return (
             <button
-              aria-label={tab.label}
-              className={`flex min-h-14 flex-col items-center justify-center gap-1.5 rounded-xl border px-1 text-center transition ${activeTab === tab.id ? 'border-(--ui-accent) bg-(--ui-row-active-background) text-(--ui-accent)' : 'border-transparent text-(--ui-text-secondary) hover:border-(--ui-stroke-tertiary) hover:bg-(--ui-row-hover-background)'}`}
-              key={tab.id}
-              onClick={() => onTab(tab.id)}
+              aria-label={category.label}
+              className={`flex min-h-14 flex-col items-center justify-center gap-1.5 rounded-xl border px-1 text-center transition ${activeCategory === category.id ? 'border-(--ui-accent) bg-(--ui-row-active-background) text-(--ui-accent)' : 'border-transparent text-(--ui-text-secondary) hover:border-(--ui-stroke-tertiary) hover:bg-(--ui-row-hover-background)'}`}
+              key={category.id}
+              onClick={() => onCategory(category.id)}
               type="button"
             >
-              <Icon className="size-[1.15rem]" />
-              <strong className="text-[0.65rem]">{tab.label}</strong>
+              <SetupCategoryThumbnail asset={asset} icon={Icon} label={category.label} />
+              <strong className="text-[0.65rem]">{category.label}</strong>
             </button>
           )
         })}
@@ -1780,10 +1796,7 @@ function DirectorInspector({
   const [voiceLibraryOpen, setVoiceLibraryOpen] = useState(false)
 
   const tabs: Array<{ id: InspectorTab; icon: typeof FileImage; label: string }> = [
-    { id: 'characters', icon: Users, label: '角色' },
-    { id: 'scenes', icon: Layers3, label: '场景' },
-    { id: 'props', icon: Package, label: '道具' },
-    { id: 'sound', icon: AudioLines, label: '声音' },
+    ...VIDEO_REFERENCE_CATEGORIES,
     { id: 'materials', icon: FileImage, label: '素材' }
   ]
 
@@ -2076,13 +2089,6 @@ interface VideoSetupWorkspaceProps {
   onToggleRail: () => void
 }
 
-const SETUP_CATEGORIES: Array<{ id: SetupCategory; icon: typeof Users; label: string }> = [
-  { id: 'characters', icon: Users, label: '人物' },
-  { id: 'sound', icon: AudioLines, label: '声音' },
-  { id: 'scenes', icon: Layers3, label: '场景' },
-  { id: 'props', icon: Package, label: '道具' }
-]
-
 function VideoSetupWorkspace({
   activeCategory,
   assets,
@@ -2105,7 +2111,7 @@ function VideoSetupWorkspace({
   railCollapsed,
   onToggleRail
 }: VideoSetupWorkspaceProps) {
-  const category = SETUP_CATEGORIES.find(item => item.id === activeCategory)
+  const category = VIDEO_REFERENCE_CATEGORIES.find(item => item.id === activeCategory)
   const categoryAssets = activeCategory ? assets.filter(asset => setupAssetMatches(asset, activeCategory)) : []
 
   return (
@@ -2178,30 +2184,14 @@ function VideoSetupWorkspace({
       </main>
 
       {!railCollapsed ? (
-        <aside className="flex min-h-0 flex-col border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) lg:col-start-2 lg:row-span-2 lg:row-start-1">
-          <nav
-            aria-label="视频设定素材"
-            className="grid gap-1.5 px-2 pt-[calc(var(--video-workbench-topbar-height)+0.75rem)] pb-2"
-          >
-            {SETUP_CATEGORIES.map(item => {
-              const Icon = item.icon
-              const selectedAsset = assets.find(asset => asset.id === selections[item.id])
-
-              return (
-                <button
-                  aria-label={item.label}
-                  className={`flex min-h-14 flex-col items-center justify-center gap-1.5 rounded-xl border px-1 text-center transition ${activeCategory === item.id ? 'border-(--ui-accent) bg-(--ui-row-active-background) text-(--ui-accent)' : 'border-transparent text-(--ui-text-secondary) hover:border-(--ui-stroke-tertiary) hover:bg-(--ui-row-hover-background)'}`}
-                  key={item.id}
-                  onClick={() => onCategory(item.id)}
-                  type="button"
-                >
-                  <SetupCategoryThumbnail asset={selectedAsset} icon={Icon} label={item.label} />
-                  <strong className="text-[0.65rem]">{item.label}</strong>
-                </button>
-              )
-            })}
-          </nav>
-        </aside>
+        <VideoReferenceRail
+          activeCategory={activeCategory}
+          ariaLabel="视频设定素材"
+          className="lg:col-start-2 lg:row-span-2 lg:row-start-1"
+          navClassName="pt-[calc(var(--video-workbench-topbar-height)+0.75rem)] pb-2"
+          onCategory={onCategory}
+          resolveAsset={categoryId => assets.find(asset => asset.id === selections[categoryId])}
+        />
       ) : null}
     </section>
   )
