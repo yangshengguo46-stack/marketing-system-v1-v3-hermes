@@ -68,11 +68,58 @@ def _seed_prospect(paths, prospect_id="prospect_default"):
     return project, evidence, saved_plan, asset
 
 
+def _seed_media_facts(paths, account_id="prospect_default"):
+    now = "2026-07-17T00:00:00+00:00"
+    sql = sqlite3.connect(paths.agent_db)
+    try:
+        sql.execute(
+            """INSERT INTO media_asset_library
+            (id,user_id,account_id,name,media_type,role,source_type,rights_status,
+             created_at,updated_at)
+            VALUES ('media-prospect','default',?,'首轮参考素材','image','reference',
+                    'user_upload','user_owned',?,?)""",
+            (account_id, now, now),
+        )
+        sql.execute(
+            """INSERT INTO media_asset_references
+            (id,asset_id,owner_kind,owner_id,relation,created_at)
+            VALUES ('media-ref-prospect','media-prospect','content_asset','asset-prospect',
+                    'reference',?)""",
+            (now,),
+        )
+        sql.execute(
+            """INSERT INTO material_searches
+            (id,user_id,account_id,query_json,status,provider_errors_json,created_at,updated_at)
+            VALUES ('search-prospect','default',?,'{}','completed','{}',?,?)""",
+            (account_id, now, now),
+        )
+        sql.execute(
+            """INSERT INTO material_candidates
+            (id,search_id,user_id,account_id,provider,provider_asset_id,media_type,role,
+             created_at,updated_at)
+            VALUES ('candidate-prospect','search-prospect','default',?,'pexels',
+                    'pexels-1','image','broll',?,?)""",
+            (account_id, now, now),
+        )
+        sql.execute(
+            """INSERT INTO marketing_audio_jobs
+            (id,idempotency_key,user_id,account_id,name,script_text,script_sha256,
+             created_at,updated_at)
+            VALUES ('audio-prospect','audio-prospect-key','default',?,'首轮旁白',
+                    '这是首轮旁白。','audio-sha',?,?)""",
+            (account_id, now, now),
+        )
+        sql.commit()
+    finally:
+        sql.close()
+
+
 def test_authenticated_account_atomically_adopts_prospect_facts(tmp_path):
     db, paths, registry = _runtime(tmp_path)
     try:
         db.create_session("prospect-session", "tui")
         project, evidence, plan, asset = _seed_prospect(paths)
+        _seed_media_facts(paths)
         pending = registry.register_pending(platform="douyin", label="主账号")
         connected = registry.mark_authenticated(
             pending["id"], platform_user_id="douyin-user-1", username="创作者"
@@ -86,7 +133,13 @@ def test_authenticated_account_atomically_adopts_prospect_facts(tmp_path):
         assert adopted["moved_counts"]["evidence_records"] == 1
         assert adopted["moved_counts"]["content_production_plans"] == 1
         assert adopted["moved_counts"]["content_assets"] == 1
+        assert adopted["moved_counts"]["media_asset_library"] == 1
+        assert adopted["moved_counts"]["material_searches"] == 1
+        assert adopted["moved_counts"]["material_candidates"] == 1
+        assert adopted["moved_counts"]["marketing_audio_jobs"] == 1
+        assert adopted["entity_id"] == project["entity_id"]
         assert repeated["operation"] == "already_complete"
+        assert repeated["entity_id"] == project["entity_id"]
         assert repeated["successor_session_required"] is True
         assert db.get_session("prospect-session")["marketing_account_id"] == (
             "prospect_default"
@@ -108,12 +161,20 @@ def test_authenticated_account_atomically_adopts_prospect_facts(tmp_path):
                 "evidence_records": evidence["id"],
                 "content_production_plans": plan["plan_id"],
                 "content_assets": asset["id"],
+                "media_asset_library": "media-prospect",
+                "material_searches": "search-prospect",
+                "material_candidates": "candidate-prospect",
+                "marketing_audio_jobs": "audio-prospect",
             }
             for table, identifier in checks.items():
                 row = sql.execute(
-                    f'SELECT account_id FROM "{table}" WHERE id=?', (identifier,)
+                    f'SELECT entity_id,account_id FROM "{table}" WHERE id=?',
+                    (identifier,),
                 ).fetchone()
-                assert row == (connected["id"],)
+                assert row == (project["entity_id"], connected["id"])
+            assert sql.execute(
+                "SELECT asset_id FROM media_asset_references WHERE id='media-ref-prospect'"
+            ).fetchone() == ("media-prospect",)
         finally:
             sql.close()
     finally:
@@ -129,12 +190,35 @@ def test_adoption_requires_authenticated_empty_target(tmp_path):
             registry.adopt_prospect("prospect_default", pending["id"])
 
         connected = registry.mark_authenticated(pending["id"])
-        AccountLifecycleRepository(paths).begin_project(
+        EvidenceRepository(paths).capture_web_extract_result(
             user_id="default",
             account_id=connected["id"],
-            business_goal="账号已有独立经营模型",
+            session_id="target-session",
+            result={
+                "results": [
+                    {
+                        "url": "https://example.com/target-account-fact",
+                        "title": "Target account evidence",
+                        "content": "This account already has independent source facts.",
+                    }
+                ]
+            },
         )
         with pytest.raises(ValueError, match="explicit merge review"):
+            registry.adopt_prospect("prospect_default", connected["id"])
+    finally:
+        db.close()
+
+
+def test_adoption_treats_target_media_as_existing_operating_facts(tmp_path):
+    db, paths, registry = _runtime(tmp_path)
+    try:
+        _seed_prospect(paths)
+        pending = registry.register_pending(platform="douyin")
+        connected = registry.mark_authenticated(pending["id"])
+        _seed_media_facts(paths, connected["id"])
+
+        with pytest.raises(ValueError, match="media_asset_library"):
             registry.adopt_prospect("prospect_default", connected["id"])
     finally:
         db.close()

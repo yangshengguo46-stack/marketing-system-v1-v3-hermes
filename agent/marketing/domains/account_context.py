@@ -138,6 +138,76 @@ class AccountContextRepository:
             context["data_state"] = "ready"
         return context
 
+    def read_operating_entity(
+        self,
+        *,
+        user_id: str,
+        entity_id: str,
+        focus_account_id: str = "",
+    ) -> dict[str, Any]:
+        """Aggregate strategy and first-party channel facts without merging them."""
+
+        from agent.marketing.domains.operating_entities import OperatingEntityRepository
+
+        # Operating-entity membership is Hermes session state. It may live in
+        # the native SessionDB while legacy content evidence still points at a
+        # separately configured MarketingDataPaths database.
+        entity = OperatingEntityRepository().get(entity_id=entity_id, user_id=user_id)
+        contexts = [
+            self.read(user_id=user_id, account_id=account_id)
+            for account_id in entity.get("account_ids", [])
+        ]
+        strategy_contexts = [
+            item
+            for item in contexts
+            if str((item.get("lifecycle") or {}).get("business_goal") or "").strip()
+        ]
+        shared = strategy_contexts[0] if strategy_contexts else None
+        strategy_project_ids = list(
+            dict.fromkeys(
+                str((item.get("lifecycle") or {}).get("project_id") or "")
+                for item in strategy_contexts
+                if (item.get("lifecycle") or {}).get("project_id")
+            )
+        )
+        focus = next(
+            (item for item in contexts if item.get("account_id") == focus_account_id),
+            None,
+        )
+        return {
+            "user_id": user_id,
+            "entity_id": entity_id,
+            "operating_entity": {
+                "id": entity["id"],
+                "label": entity["label"],
+                "platforms": entity.get("platforms", []),
+                "account_ids": entity.get("account_ids", []),
+            },
+            "focus_account_id": focus_account_id or None,
+            "focus_account_context": focus,
+            "linked_account_contexts": contexts,
+            "shared_operating_context": shared,
+            "strategy_scope_status": (
+                "ready"
+                if len(strategy_project_ids) <= 1
+                else "conflict_requires_explicit_merge_review"
+            ),
+            "strategy_project_ids": strategy_project_ids,
+            "data_gaps": [
+                *(
+                    ["no_shared_operating_strategy"]
+                    if not strategy_contexts
+                    else []
+                ),
+                *(
+                    ["multiple_platform_scoped_strategies_require_merge"]
+                    if len(strategy_project_ids) > 1
+                    else []
+                ),
+            ],
+            "source": "hermes_state",
+        }
+
 
 def _empty_lifecycle() -> dict[str, Any]:
     return {

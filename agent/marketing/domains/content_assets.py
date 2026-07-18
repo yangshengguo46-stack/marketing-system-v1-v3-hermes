@@ -26,10 +26,15 @@ from agent.marketing.intelligence.social_system_simulation import (
     build_social_system_simulation,
 )
 from agent.marketing.intelligence.store import OperatingLoopRepository
+from agent.marketing.platform_catalog import (
+    normalize_platform_id,
+    normalize_platforms,
+    platform_content_blueprints,
+)
 
 
 ASSET_TYPES = {"script", "video", "image", "caption"}
-CONTENT_ASSET_PLATFORMS = VALID_PLATFORMS | {"multi_article"}
+CONTENT_ASSET_PLATFORMS = VALID_PLATFORMS | {"multi_article", "multi_platform"}
 
 
 class ContentAssetRepository(MarketingDomainRepository):
@@ -53,8 +58,9 @@ class ContentAssetRepository(MarketingDomainRepository):
         platforms = plan.get("target_platforms")
         if not isinstance(platforms, list) or not platforms:
             raise ValueError("production plan requires target platforms")
-        if any(platform not in VALID_PLATFORMS for platform in platforms):
-            raise ValueError("production plan contains unsupported platform")
+        platforms = normalize_platforms(platforms)
+        if not platforms:
+            raise ValueError("production plan requires target platforms")
         experiment_id = str(plan.get("experiment_id") or "").strip() or None
         fingerprint = json.dumps(
             {
@@ -75,6 +81,8 @@ class ContentAssetRepository(MarketingDomainRepository):
         plan_id = f"production_plan_{digest}"
         payload = dict(plan)
         payload["plan_id"] = plan_id
+        payload["target_platforms"] = platforms
+        payload["platform_blueprints"] = platform_content_blueprints(platforms)
         encoded = _bounded_json(payload, "production_plan", 500_000)
         now = _now()
         with self._transaction() as db:
@@ -142,12 +150,13 @@ class ContentAssetRepository(MarketingDomainRepository):
             raise ValueError(
                 "article_soft drafts must use the validated article bundle path"
             )
-        parent_id, asset_version = self._faceless_revision_parent(
+        parent_id, asset_version = self._content_revision_parent(
             revision_of=revision_of,
             user_id=user_id,
             account_id=account_id,
             plan_id=plan_id,
             platform=platform,
+            production_kind=production_kind,
         )
         return self._save_draft(
             user_id=user_id,
@@ -204,12 +213,13 @@ class ContentAssetRepository(MarketingDomainRepository):
         plan_id = str(previous.get("_production_plan_id") or "").strip()
         if not plan_id:
             raise ValueError("render revision parent has no production plan")
-        parent_id, asset_version = self._faceless_revision_parent(
+        parent_id, asset_version = self._content_revision_parent(
             revision_of=parent_asset_id,
             user_id=user_id,
             account_id=account_id,
             plan_id=plan_id,
             platform=str(parent.get("platform") or ""),
+            production_kind="faceless_video",
         )
         payload = {
             key: value
@@ -265,7 +275,7 @@ class ContentAssetRepository(MarketingDomainRepository):
             asset_version=asset_version,
         )
 
-    def _faceless_revision_parent(
+    def _content_revision_parent(
         self,
         *,
         revision_of: str,
@@ -273,6 +283,7 @@ class ContentAssetRepository(MarketingDomainRepository):
         account_id: str,
         plan_id: str,
         platform: str,
+        production_kind: str,
     ) -> tuple[str | None, int]:
         revision_value = str(revision_of or "").strip()
         if not revision_value:
@@ -283,14 +294,14 @@ class ContentAssetRepository(MarketingDomainRepository):
             account_id=account_id,
         )
         content = parent.get("content") if isinstance(parent.get("content"), dict) else {}
-        if content.get("_production_kind") != "faceless_video":
-            raise ValueError("faceless revision parent has the wrong production kind")
+        if content.get("_production_kind") != production_kind:
+            raise ValueError("content revision parent has the wrong production kind")
         if content.get("_production_plan_id") != str(plan_id or "").strip():
-            raise ValueError("faceless revision must keep the same production plan")
+            raise ValueError("content revision must keep the same production plan")
         if parent.get("platform") != platform or parent.get("type") not in {"script", "video"}:
-            raise ValueError("faceless revision must keep the same platform and asset lane")
-        if parent.get("status") in {"superseded", "approved", "published"}:
-            raise ValueError(f"faceless revision cannot branch from {parent.get('status')}")
+            raise ValueError("content revision must keep the same platform and asset lane")
+        if parent.get("status") in {"superseded", "approved", "published", "archived"}:
+            raise ValueError(f"content revision cannot branch from {parent.get('status')}")
         return str(parent["id"]), int(parent.get("version") or 1) + 1
 
     def get_production_plan(
@@ -307,6 +318,43 @@ class ContentAssetRepository(MarketingDomainRepository):
         if row is None:
             raise KeyError("production plan not found in account scope")
         return _plan_record(row)
+
+    def list_production_plans(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """List bounded durable plans, including their preflight identity."""
+
+        safe_limit = max(1, min(int(limit), 100))
+        with self._connection() as db:
+            rows = db.execute(
+                """SELECT p.*,
+                          (SELECT id FROM marketing_preflight_records f
+                           WHERE f.plan_id=p.id AND f.user_id=p.user_id
+                             AND f.account_id=p.account_id
+                           ORDER BY f.created_at DESC,f.id DESC LIMIT 1) AS preflight_id,
+                          (SELECT decision_json FROM marketing_preflight_records f
+                           WHERE f.plan_id=p.id AND f.user_id=p.user_id
+                             AND f.account_id=p.account_id
+                           ORDER BY f.created_at DESC,f.id DESC LIMIT 1) AS preflight_decision_json
+                FROM content_production_plans p
+                WHERE p.user_id=? AND p.account_id=? AND p.status!='archived'
+                ORDER BY p.updated_at DESC,p.id DESC LIMIT ?""",
+                (user_id, account_id, safe_limit),
+            ).fetchall()
+        plans = []
+        for row in rows:
+            value = _plan_record(row)
+            value["preflight_id"] = row["preflight_id"]
+            decision = json.loads(row["preflight_decision_json"] or "{}")
+            preflight_decision = decision.get("preflight_decision") or {}
+            value["preflight_status"] = preflight_decision.get("status")
+            value["recommendation_eligible"] = preflight_decision.get("go") is True
+            plans.append(value)
+        return {"plans": plans, "total": len(plans)}
 
     def create_article_bundle(
         self,
@@ -348,6 +396,8 @@ class ContentAssetRepository(MarketingDomainRepository):
                 raise KeyError("article revision parent not found in account scope")
             if parent_row["platform"] != "multi_article" or parent_row["type"] != "script":
                 raise ValueError("article revision parent is not an ArticleBundle")
+            if parent_row["status"] == "archived":
+                raise ValueError("an archived article must be restored before revision")
             try:
                 parent_content = json.loads(parent_row["content_json"])
             except (TypeError, ValueError) as exc:
@@ -420,8 +470,8 @@ class ContentAssetRepository(MarketingDomainRepository):
         plan_id_value = _bounded_text(plan_id, "plan_id", 120)
         if asset_type not in ASSET_TYPES:
             raise ValueError(f"unsupported asset type: {asset_type}")
-        if platform not in CONTENT_ASSET_PLATFORMS:
-            raise ValueError(f"unsupported content platform: {platform}")
+        if platform not in {"multi_article", "multi_platform"}:
+            platform = normalize_platform_id(platform)
         if platform == "multi_article" and not allow_multi_article:
             raise ValueError("multi_article is reserved for validated article bundles")
         if production_kind not in CONTENT_KINDS:
@@ -475,6 +525,14 @@ class ContentAssetRepository(MarketingDomainRepository):
                     item not in {"zhihu", "wechat_official"} for item in plan_platforms
                 ):
                     raise ValueError("article bundle platforms do not match its plan")
+            elif platform == "multi_platform":
+                if production_kind != "cross_platform_campaign":
+                    raise ValueError("multi_platform is reserved for cross-platform campaigns")
+                payload["platform_variants"] = _validate_cross_platform_variants(
+                    payload,
+                    target_platforms=plan_platforms,
+                )
+                payload["platform_blueprints"] = platform_content_blueprints(plan_platforms)
             elif platform not in plan_platforms:
                 raise ValueError("draft platform is outside its production plan")
             payload["_production_plan_id"] = plan_id_value
@@ -660,7 +718,7 @@ class ContentAssetRepository(MarketingDomainRepository):
             ).fetchone()
             if row is None:
                 raise KeyError("content asset not found in account scope")
-            if row["status"] in {"superseded", "approved", "published"}:
+            if row["status"] in {"superseded", "approved", "published", "archived"}:
                 raise ValueError(f"content asset cannot be reviewed from {row['status']}")
             if decision_value == "accepted" and row["status"] != "review_ready":
                 raise ValueError("only a review_ready asset can be accepted by the user")
@@ -685,6 +743,93 @@ class ContentAssetRepository(MarketingDomainRepository):
                 )
         return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
 
+    def archive(
+        self,
+        *,
+        asset_id: str,
+        user_id: str,
+        account_id: str,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        """Soft-archive an unfinished content asset without deleting its history."""
+
+        if confirmed is not True:
+            raise ValueError("explicit archive confirmation is required")
+        now = _now()
+        with self._transaction() as db:
+            row = db.execute(
+                """SELECT status,human_review_status,content_json FROM content_assets
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (asset_id, user_id, account_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("content asset not found in account scope")
+            if row["status"] == "archived":
+                return self.get(
+                    asset_id=asset_id,
+                    user_id=user_id,
+                    account_id=account_id,
+                )
+            if row["status"] not in {"draft", "review_ready"}:
+                raise ValueError(
+                    f"content asset cannot be archived from {row['status']}"
+                )
+            if row["human_review_status"] == "accepted":
+                raise ValueError("an accepted content asset is not a draft")
+            db.execute(
+                """UPDATE content_assets
+                SET status='archived',archived_from_status=?,archived_at=?,updated_at=?
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (row["status"], now, now, asset_id, user_id, account_id),
+            )
+            _archive_plan(
+                db,
+                row["content_json"],
+                user_id=user_id,
+                account_id=account_id,
+                now=now,
+            )
+        return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
+
+    def restore_archived(
+        self,
+        *,
+        asset_id: str,
+        user_id: str,
+        account_id: str,
+    ) -> dict[str, Any]:
+        """Restore a soft-archived draft to its exact pre-archive status."""
+
+        now = _now()
+        with self._transaction() as db:
+            row = db.execute(
+                """SELECT status,archived_from_status,content_json FROM content_assets
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (asset_id, user_id, account_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("content asset not found in account scope")
+            if row["status"] != "archived":
+                raise ValueError("only an archived content asset can be restored")
+            restored_status = str(row["archived_from_status"] or "draft")
+            if restored_status not in {"draft", "review_ready"}:
+                restored_status = "draft"
+            db.execute(
+                """UPDATE content_assets
+                SET status=?,archived_from_status='',archived_at=NULL,updated_at=?
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (restored_status, now, asset_id, user_id, account_id),
+            )
+            _restore_plan(
+                db,
+                row["content_json"],
+                user_id=user_id,
+                account_id=account_id,
+                asset_status=restored_status,
+                now=now,
+            )
+        return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
+
     def list(
         self,
         *,
@@ -701,10 +846,10 @@ class ContentAssetRepository(MarketingDomainRepository):
             query += " AND status=?"
             params.append(status)
         else:
-            query += " AND status!='superseded'"
+            query += " AND status NOT IN ('superseded','archived')"
         if platform:
-            if platform not in CONTENT_ASSET_PLATFORMS:
-                raise ValueError(f"unsupported content platform: {platform}")
+            if platform not in {"multi_article", "multi_platform"}:
+                platform = normalize_platform_id(platform)
             query += " AND platform=?"
             params.append(platform)
         query += " ORDER BY updated_at DESC LIMIT ?"
@@ -772,7 +917,8 @@ class ContentAssetRepository(MarketingDomainRepository):
                     )
                 }
                 | {
-                    "production_kind": content.get("production_kind"),
+                    "production_kind": content.get("_production_kind")
+                    or content.get("production_kind"),
                     "review_status": content.get("review_status"),
                     "validation_ready": validation.get("ready"),
                     "validation_issue_count": len(validation.get("issues") or []),
@@ -801,6 +947,8 @@ class ContentAssetRepository(MarketingDomainRepository):
                     human_review_status TEXT NOT NULL DEFAULT 'pending',
                     human_review_note TEXT NOT NULL DEFAULT '',
                     human_reviewed_at TEXT,
+                    archived_from_status TEXT NOT NULL DEFAULT '',
+                    archived_at TEXT,
                     content_json TEXT NOT NULL DEFAULT '{}',
                     metrics_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
@@ -899,14 +1047,21 @@ class ContentAssetRepository(MarketingDomainRepository):
                 ready = False
                 encoded = _bounded_json(failed, "content", 500_000)
             now = _now()
+            migrated_status = (
+                row["status"]
+                if row["status"] in {"archived", "superseded", "approved", "published"}
+                else "review_ready"
+                if ready
+                else "draft"
+            )
             db.execute(
                 """UPDATE content_assets
                 SET content_json=?, status=?, version=version+1, updated_at=?
                 WHERE id=?""",
-                (encoded, "review_ready" if ready else "draft", now, row["id"]),
+                (encoded, migrated_status, now, row["id"]),
             )
             plan_id = previous.get("_production_plan_id")
-            if plan_id:
+            if plan_id and migrated_status in {"draft", "review_ready"}:
                 db.execute(
                     """UPDATE content_production_plans
                     SET status=?, updated_at=? WHERE id=? AND user_id=? AND account_id=?""",
@@ -918,6 +1073,126 @@ class ContentAssetRepository(MarketingDomainRepository):
                         row["account_id"],
                     ),
                 )
+
+
+def _production_plan_id(content_json: str) -> str:
+    try:
+        content = json.loads(content_json or "{}")
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(content, dict):
+        return ""
+    return str(content.get("_production_plan_id") or "").strip()
+
+
+def _validate_cross_platform_variants(
+    content: dict[str, Any], *, target_platforms: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Require one substantive, platform-native variant per campaign target."""
+
+    raw_variants = content.get("platform_variants")
+    if not isinstance(raw_variants, dict):
+        raise ValueError("cross-platform campaign requires platform_variants")
+    expected = normalize_platforms(target_platforms)
+    supplied = {normalize_platform_id(key) for key in raw_variants}
+    if supplied != set(expected):
+        missing = sorted(set(expected) - supplied)
+        extra = sorted(supplied - set(expected))
+        raise ValueError(
+            "cross-platform campaign variants must exactly match its plan"
+            f"; missing={missing}; extra={extra}"
+        )
+    normalized: dict[str, dict[str, Any]] = {}
+    fingerprints: dict[str, str] = {}
+    content_fields = {
+        "body_markdown",
+        "caption",
+        "carousel_cards",
+        "outline",
+        "script",
+        "short_text",
+        "thread",
+        "title",
+        "voiceover",
+    }
+    for platform in expected:
+        raw = raw_variants.get(platform)
+        if not isinstance(raw, dict):
+            raise ValueError(f"platform variant must be an object: {platform}")
+        format_value = str(raw.get("format") or "").strip()
+        if not format_value:
+            raise ValueError(f"platform variant requires format: {platform}")
+        if not any(raw.get(field) for field in content_fields):
+            raise ValueError(f"platform variant has no substantive content: {platform}")
+        adaptation = raw.get("adaptation_basis")
+        if not isinstance(adaptation, dict) or not all(
+            str(adaptation.get(field) or "").strip()
+            for field in ("audience_intent", "opening", "structure", "cta")
+        ):
+            raise ValueError(
+                f"platform variant requires audience/opening/structure/cta adaptation basis: {platform}"
+            )
+        value = dict(raw)
+        value["platform"] = platform
+        value["format"] = format_value[:80]
+        normalized[platform] = value
+        fingerprints[platform] = json.dumps(
+            {
+                key: value.get(key)
+                for key in sorted(content_fields)
+                if value.get(key)
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    if len(set(fingerprints.values())) != len(fingerprints):
+        raise ValueError("cross-platform campaign variants must be platform-distinct")
+    return normalized
+
+
+def _archive_plan(
+    db: sqlite3.Connection,
+    content_json: str,
+    *,
+    user_id: str,
+    account_id: str,
+    now: str,
+) -> None:
+    plan_id = _production_plan_id(content_json)
+    if plan_id:
+        db.execute(
+            """UPDATE content_production_plans
+            SET status='archived',updated_at=?
+            WHERE id=? AND user_id=? AND account_id=?""",
+            (now, plan_id, user_id, account_id),
+        )
+
+
+def _restore_plan(
+    db: sqlite3.Connection,
+    content_json: str,
+    *,
+    user_id: str,
+    account_id: str,
+    asset_status: str,
+    now: str,
+) -> None:
+    plan_id = _production_plan_id(content_json)
+    if plan_id:
+        db.execute(
+            """UPDATE content_production_plans
+            SET status=?,updated_at=?
+            WHERE id=? AND user_id=? AND account_id=?""",
+            (
+                "review_ready" if asset_status == "review_ready" else "draft_created",
+                now,
+                plan_id,
+                user_id,
+                account_id,
+            ),
+        )
+
 
 def _validated_sound_plan(
     value: Any,

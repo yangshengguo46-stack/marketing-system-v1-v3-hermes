@@ -12,41 +12,46 @@ import json
 import re
 from typing import Any
 
-from agent.marketing.domains import AccountContextRepository
+from agent.marketing.domains import (
+    AccountContextRepository,
+    OperatingEntityRepository,
+    TopicRecommendationRepository,
+)
 from agent.marketing.session_scope import resolve_account_scope
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_.:@/-]{1,240}$")
 _VIDEO_STAGES = frozenset({"setup", "storyboard", "dynamic", "edit", "final"})
-_OPERATION_KINDS = frozenset(
-    {
-        "account.analyze",
-        "account.bootstrap",
-        "account.model.review",
-        "account.prioritize",
-        "autopilot.configure",
-        "content.article.start",
-        "content.resume",
-        "content.revise",
-        "learning.review",
-        "materials.cloud.status",
-        "video.asset.select",
-        "video.autopilot",
-        "video.export",
-        "video.revision",
-        "video.scene.add",
-        "video.setup",
-        "video.stage.confirm",
-        "video.stage.modify",
-        "video.version.generate",
-    }
-)
+_OPERATION_KINDS = frozenset({
+    "account.analyze",
+    "account.bootstrap",
+    "account.model.review",
+    "account.prioritize",
+    "autopilot.configure",
+    "content.article.start",
+    "content.topic.start",
+    "content.resume",
+    "content.revise",
+    "learning.review",
+    "materials.cloud.status",
+    "video.asset.select",
+    "video.autopilot",
+    "video.export",
+    "video.revision",
+    "video.scene.add",
+    "video.setup",
+    "video.stage.confirm",
+    "video.stage.modify",
+    "video.version.generate",
+})
 
 
 def prepare_marketing_operation(
     params: dict[str, Any],
     *,
     account_repository: AccountContextRepository | None = None,
+    entity_repository: OperatingEntityRepository | None = None,
+    topic_repository: TopicRecommendationRepository | None = None,
 ) -> dict[str, Any]:
     """Validate one structured product action and build its native agent turn."""
 
@@ -63,7 +68,13 @@ def prepare_marketing_operation(
         account_id=account_id,
         repository=account_repository,
     )
-    operation = _normalized_operation(kind, params, scope)
+    operation = _normalized_operation(
+        kind,
+        params,
+        scope,
+        entity_repository=entity_repository,
+        topic_repository=topic_repository,
+    )
     visible_text, title, instruction = _operation_copy(operation)
     operation_json = json.dumps(
         operation,
@@ -97,6 +108,9 @@ def _normalized_operation(
     kind: str,
     params: dict[str, Any],
     scope: dict[str, Any],
+    *,
+    entity_repository: OperatingEntityRepository | None = None,
+    topic_repository: TopicRecommendationRepository | None = None,
 ) -> dict[str, Any]:
     operation: dict[str, Any] = {
         "account_id": scope["account_id"],
@@ -105,7 +119,13 @@ def _normalized_operation(
         "user_id": scope["user_id"],
     }
 
-    for field in ("asset_id", "media_asset_id", "production_id", "scene_id", "target_id"):
+    for field in (
+        "asset_id",
+        "media_asset_id",
+        "production_id",
+        "scene_id",
+        "target_id",
+    ):
         value = _optional_id(params, field)
         if value:
             operation[field] = value
@@ -139,7 +159,9 @@ def _normalized_operation(
         for value in document_refs:
             ref = str(value or "").strip()
             if not ref.startswith(("@file:", "@folder:")) or len(ref) > 1_000:
-                raise ValueError("document_refs must contain native file or folder refs")
+                raise ValueError(
+                    "document_refs must contain native file or folder refs"
+                )
             normalized_refs.append(ref)
         if normalized_refs:
             operation["document_refs"] = normalized_refs
@@ -152,15 +174,67 @@ def _normalized_operation(
             asset_id = str(selections.get(category) or "").strip()
             if asset_id:
                 if not _SAFE_ID.fullmatch(asset_id):
-                    raise ValueError(f"selections.{category} contains unsupported characters")
+                    raise ValueError(
+                        f"selections.{category} contains unsupported characters"
+                    )
                 normalized_selections[category] = asset_id
         if normalized_selections:
             operation["selections"] = normalized_selections
         if not operation.get("note") and not normalized_refs:
             raise ValueError("video.setup requires note or document_refs")
 
+    if kind == "content.topic.start":
+        candidate_id = _required_id(params, "target_id")
+        try:
+            recommendation = (
+                topic_repository or TopicRecommendationRepository()
+            ).get_candidate(
+                candidate_id=candidate_id,
+                user_id=str(scope["user_id"]),
+                entity_id=str(scope["entity_id"]),
+            )
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
+        if recommendation.get("recommendation_eligible") is not True:
+            raise ValueError(
+                "only a preflight-approved topic recommendation can start production"
+            )
+        execution_account_id = str(recommendation.get("account_id") or "").strip()
+        if not execution_account_id or not (
+            entity_repository or OperatingEntityRepository()
+        ).account_is_linked(
+            entity_id=str(scope["entity_id"]),
+            user_id=str(scope["user_id"]),
+            account_id=execution_account_id,
+        ):
+            raise ValueError(
+                "topic recommendation plan owner is no longer linked to this operating entity"
+            )
+        candidate = (
+            recommendation.get("candidate")
+            if isinstance(recommendation.get("candidate"), dict)
+            else {}
+        )
+        operation.update({
+            "candidate_id": recommendation["id"],
+            "execution_account_id": execution_account_id,
+            "plan_id": recommendation["plan_id"],
+            "preflight_id": recommendation["preflight_id"],
+            "topic": recommendation["topic"],
+            "angle": recommendation.get("angle") or "",
+            "target_platforms": recommendation.get("target_platforms") or [],
+            "evidence_refs": recommendation.get("evidence_refs") or [],
+            "signal_refs": recommendation.get("signal_refs") or [],
+            "recommendation_type": candidate.get("recommendation_type") or "general",
+            "recommended_platforms": candidate.get("recommended_platforms") or [],
+            "platform_matches": candidate.get("platform_matches") or [],
+            "platform_blueprints": candidate.get("platform_blueprints") or {},
+        })
+        operation["title"] = str(recommendation["topic"])
+
     required_fields = {
         "account.bootstrap": ("business_goal",),
+        "content.topic.start": ("target_id", "plan_id", "preflight_id"),
         "content.resume": ("target_id",),
         "content.revise": ("asset_id", "note"),
         "video.asset.select": ("production_id", "media_asset_id"),
@@ -189,7 +263,10 @@ def _operation_copy(operation: dict[str, Any]) -> tuple[str, str, str]:
         return (
             "排出今天的经营优先级",
             "今天的经营优先级",
-            "读取当前账号经营模型、正在推进的内容、待确认学习和真实发布回执。说明证据后，选择今天最值得推进的一件事并立即推进；高风险动作仍须单独确认。",
+            "读取当前经营主体、全部相关平台账号、正在推进的内容、待确认学习和真实发布回执。"
+            "如果最值得推进的是新选题，必须先用 marketing_plan_content_production 为这个确切选题和全部相关平台"
+            "建立计划并完成预演；只有预演未阻断时才能称为推荐，回复中必须给出 plan_id、preflight id、"
+            "阻断项、警告和逐平台判断。然后立即推进无需额外授权的下一步；高风险动作仍须单独确认。",
         )
     if kind == "account.bootstrap":
         return (
@@ -222,8 +299,21 @@ def _operation_copy(operation: dict[str, Any]) -> tuple[str, str, str]:
             "开始一篇新的图文作品",
             "图文创作",
             "把 note 作为用户已经提交的创作目标，立即读取经营上下文和可验证证据，并在当前账号作用域建立真实、"
-            "可持久化的图文内容对象。后续草稿、修订和审核必须回写原生 owner；不要要求用户重新发送目标，"
+            "可持久化的内容对象。目标涉及多个或混合形态平台时，建立 cross_platform_campaign：保留一个内容内核，"
+            "再按计划返回的平台蓝图分别生成不同载体、受众意图、开头、结构、互动、视觉和 CTA；平台集合不得写死，"
+            "未知海外平台必须保留研究缺口。后续草稿、修订和审核必须回写原生 owner；不要要求用户重新发送目标，"
             "也不要只输出一段孤立文案。需要用户判断时，把问题附着在这个内容对象上。",
+        )
+    if kind == "content.topic.start":
+        return (
+            f"把今日选题{target}交给内容工厂",
+            f"制作今日选题 · {title or '内容'}",
+            "这是每日选题管线已经逐条预演通过的推荐。按 candidate_id、plan_id 和 preflight_id 读取并核对原生回执，"
+            "不得重新规划成另一个选题，也不得绕过已有预演。使用 operation_json 中的 platform_blueprints，围绕同一个"
+            "内容内核为全部 target_platforms 分别创建符合平台性质的真实、可持久化草稿；保留各平台不同的载体、开头、"
+            "结构、视觉和 CTA。所有计划、预演、证据和草稿读写都使用 execution_account_id 指向的原生 owner，不能改用"
+            "启动页面当前展示的其他渠道账号。完成后把内容资产写回原生 owner 并进入内容工厂；缺少证据或回执失效时停止并明确说明，"
+            "付费生成、真实发布及其他高风险动作仍须单独确认。",
         )
     if kind == "account.analyze":
         platform = str(operation.get("platform") or "")

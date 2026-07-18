@@ -1,6 +1,33 @@
 """Marketing domain schema owned by Hermes ``state.db``."""
 
 MARKETING_DOMAIN_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS marketing_operating_entities (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(user_id,label)
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_operating_entities_user
+    ON marketing_operating_entities(user_id,status,updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS marketing_operating_entity_accounts (
+    entity_id TEXT NOT NULL REFERENCES marketing_operating_entities(id),
+    user_id TEXT NOT NULL,
+    account_id TEXT NOT NULL REFERENCES marketing_accounts(id),
+    role TEXT NOT NULL DEFAULT 'channel',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY(entity_id,account_id),
+    UNIQUE(user_id,account_id)
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_operating_entity_accounts_scope
+    ON marketing_operating_entity_accounts(user_id,entity_id,status,updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS marketing_account_adoptions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -13,9 +40,35 @@ CREATE TABLE IF NOT EXISTS marketing_account_adoptions (
     UNIQUE(user_id,prospect_account_id,target_account_id)
 );
 
+CREATE TABLE IF NOT EXISTS marketing_operations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
+    account_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'working',
+    live_session_id TEXT NOT NULL DEFAULT '',
+    stored_session_id TEXT NOT NULL DEFAULT '',
+    project_id TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    visible_text TEXT NOT NULL,
+    operation_json TEXT NOT NULL DEFAULT '{}',
+    baseline_json TEXT NOT NULL DEFAULT '{}',
+    results_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    completed_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_operations_scope
+    ON marketing_operations(user_id, account_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_marketing_operations_state
+    ON marketing_operations(state, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS account_strategy_projects (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     business_goal TEXT NOT NULL,
     constraints_json TEXT NOT NULL DEFAULT '{}',
@@ -24,8 +77,6 @@ CREATE TABLE IF NOT EXISTS account_strategy_projects (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_strategy_projects_one_active
-    ON account_strategy_projects(user_id, account_id) WHERE status='active';
 CREATE INDEX IF NOT EXISTS idx_strategy_projects_scope
     ON account_strategy_projects(user_id, account_id, status);
 
@@ -33,6 +84,7 @@ CREATE TABLE IF NOT EXISTS audience_hypotheses (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     version INTEGER NOT NULL,
     segments_json TEXT NOT NULL DEFAULT '[]',
@@ -64,6 +116,7 @@ CREATE TABLE IF NOT EXISTS creator_operating_profiles (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     version INTEGER NOT NULL,
     profile_json TEXT NOT NULL DEFAULT '{}',
@@ -78,6 +131,7 @@ CREATE TABLE IF NOT EXISTS market_route_hypotheses (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     version INTEGER NOT NULL,
     route_json TEXT NOT NULL DEFAULT '{}',
@@ -93,6 +147,7 @@ CREATE TABLE IF NOT EXISTS benchmark_accounts (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL DEFAULT '',
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     target_account_id TEXT NOT NULL DEFAULT '',
     platform TEXT NOT NULL DEFAULT '',
     platform_account_id TEXT NOT NULL DEFAULT '',
@@ -116,6 +171,7 @@ CREATE TABLE IF NOT EXISTS benchmark_observations (
     benchmark_account_id TEXT NOT NULL REFERENCES benchmark_accounts(id),
     project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     target_account_id TEXT NOT NULL,
     dimension TEXT NOT NULL,
     value_json TEXT NOT NULL DEFAULT '{}',
@@ -130,6 +186,7 @@ CREATE TABLE IF NOT EXISTS positioning_versions (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     version INTEGER NOT NULL,
     positioning_json TEXT NOT NULL DEFAULT '{}',
@@ -145,6 +202,7 @@ CREATE TABLE IF NOT EXISTS content_system_versions (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     positioning_id TEXT NOT NULL REFERENCES positioning_versions(id),
     version INTEGER NOT NULL,
@@ -160,6 +218,7 @@ CREATE TABLE IF NOT EXISTS account_influence_calibrations (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     source_candidate_id TEXT NOT NULL REFERENCES marketing_learning_candidates(id),
     version INTEGER NOT NULL,
@@ -182,6 +241,7 @@ CREATE TABLE IF NOT EXISTS account_experiments (
     source_key TEXT,
     project_id TEXT NOT NULL REFERENCES account_strategy_projects(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     content_system_id TEXT REFERENCES content_system_versions(id),
     hypothesis TEXT NOT NULL,
@@ -199,6 +259,7 @@ CREATE TABLE IF NOT EXISTS account_experiments (
 CREATE TABLE IF NOT EXISTS evidence_records (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     source_type TEXT NOT NULL,
     provider TEXT NOT NULL,
@@ -223,6 +284,7 @@ CREATE INDEX IF NOT EXISTS idx_evidence_scope_status
 CREATE TABLE IF NOT EXISTS content_production_plans (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     experiment_id TEXT REFERENCES account_experiments(id),
     kind TEXT NOT NULL,
@@ -239,6 +301,7 @@ CREATE INDEX IF NOT EXISTS idx_content_production_plan_scope
 CREATE TABLE IF NOT EXISTS content_assets (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL DEFAULT 'default',
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT,
     platform TEXT,
     title TEXT NOT NULL,
@@ -252,6 +315,8 @@ CREATE TABLE IF NOT EXISTS content_assets (
     human_review_status TEXT NOT NULL DEFAULT 'pending',
     human_review_note TEXT NOT NULL DEFAULT '',
     human_reviewed_at TEXT,
+    archived_from_status TEXT NOT NULL DEFAULT '',
+    archived_at TEXT,
     content_json TEXT NOT NULL DEFAULT '{}',
     metrics_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
@@ -265,6 +330,7 @@ CREATE INDEX IF NOT EXISTS idx_content_assets_scope
 CREATE TABLE IF NOT EXISTS media_asset_library (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT,
     name TEXT NOT NULL,
     media_type TEXT NOT NULL,
@@ -305,6 +371,7 @@ CREATE INDEX IF NOT EXISTS idx_media_asset_references_asset
 CREATE TABLE IF NOT EXISTS material_searches (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     query_json TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'completed',
@@ -319,6 +386,7 @@ CREATE TABLE IF NOT EXISTS material_candidates (
     id TEXT PRIMARY KEY,
     search_id TEXT NOT NULL REFERENCES material_searches(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     provider_asset_id TEXT NOT NULL,
@@ -351,6 +419,7 @@ CREATE TABLE IF NOT EXISTS marketing_audio_jobs (
     id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'voiceover',
     name TEXT NOT NULL,
@@ -374,6 +443,7 @@ CREATE TABLE IF NOT EXISTS marketing_video_productions (
     id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     source_asset_id TEXT NOT NULL REFERENCES content_assets(id),
     source_asset_version INTEGER NOT NULL,
@@ -386,6 +456,8 @@ CREATE TABLE IF NOT EXISTS marketing_video_productions (
     output_asset_id TEXT REFERENCES content_assets(id),
     receipt_json TEXT NOT NULL DEFAULT '{}',
     failure_code TEXT,
+    archived_from_status TEXT NOT NULL DEFAULT '',
+    archived_at TEXT,
     created_at TEXT NOT NULL,
     started_at TEXT,
     settled_at TEXT,
@@ -397,6 +469,7 @@ CREATE INDEX IF NOT EXISTS idx_video_production_scope
 CREATE TABLE IF NOT EXISTS marketing_preflight_records (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     platform TEXT,
     plan_id TEXT NOT NULL REFERENCES content_production_plans(id),
@@ -411,12 +484,73 @@ CREATE TABLE IF NOT EXISTS marketing_preflight_records (
 CREATE INDEX IF NOT EXISTS idx_marketing_preflight_scope
     ON marketing_preflight_records(account_id,platform,created_at);
 
+CREATE TABLE IF NOT EXISTS marketing_topic_recommendation_batches (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
+    account_id TEXT NOT NULL,
+    as_of_date TEXT NOT NULL,
+    source_session_id TEXT NOT NULL DEFAULT '',
+    target_platforms_json TEXT NOT NULL DEFAULT '[]',
+    input_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'building',
+    delivery_text TEXT NOT NULL DEFAULT '',
+    delivery_sha256 TEXT NOT NULL DEFAULT '',
+    recommended_count INTEGER NOT NULL DEFAULT 0,
+    research_only_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id,entity_id,as_of_date)
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_topic_batch_scope
+    ON marketing_topic_recommendation_batches(entity_id,as_of_date,status,updated_at);
+CREATE INDEX IF NOT EXISTS idx_marketing_topic_batch_session
+    ON marketing_topic_recommendation_batches(source_session_id,status,updated_at);
+
+CREATE TABLE IF NOT EXISTS marketing_topic_recommendation_candidates (
+    id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL REFERENCES marketing_topic_recommendation_batches(id),
+    user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
+    account_id TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    topic TEXT NOT NULL,
+    angle TEXT NOT NULL DEFAULT '',
+    plan_id TEXT NOT NULL REFERENCES content_production_plans(id),
+    preflight_id TEXT NOT NULL REFERENCES marketing_preflight_records(id),
+    target_platforms_json TEXT NOT NULL DEFAULT '[]',
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    signal_refs_json TEXT NOT NULL DEFAULT '[]',
+    decision_status TEXT NOT NULL,
+    recommendation_eligible INTEGER NOT NULL DEFAULT 0,
+    influence_score REAL NOT NULL DEFAULT 0,
+    candidate_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(batch_id,rank)
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_topic_candidate_batch
+    ON marketing_topic_recommendation_candidates(batch_id,recommendation_eligible,rank);
+
+CREATE TABLE IF NOT EXISTS marketing_topic_recommendation_delivery_receipts (
+    source_session_id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL REFERENCES marketing_topic_recommendation_batches(id),
+    delivery_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'prepared',
+    created_at TEXT NOT NULL,
+    validated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_topic_delivery_batch
+    ON marketing_topic_recommendation_delivery_receipts(batch_id,status,created_at);
+
 CREATE TABLE IF NOT EXISTS marketing_receipt_refs (
     id TEXT PRIMARY KEY,
     source_kind TEXT NOT NULL,
     source_id TEXT NOT NULL,
     receipt_type TEXT NOT NULL,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     platform TEXT,
     plan_id TEXT,
@@ -435,6 +569,7 @@ CREATE TABLE IF NOT EXISTS marketing_learning_candidates (
     source_key TEXT,
     candidate_type TEXT NOT NULL,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     platform TEXT,
     preflight_id TEXT REFERENCES marketing_preflight_records(id),
@@ -455,6 +590,7 @@ CREATE TABLE IF NOT EXISTS marketing_publish_actions (
     id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     asset_id TEXT NOT NULL REFERENCES content_assets(id),
     asset_version INTEGER NOT NULL,
@@ -481,6 +617,7 @@ CREATE TABLE IF NOT EXISTS marketing_metric_checkpoints (
     id TEXT PRIMARY KEY,
     publish_action_id TEXT NOT NULL REFERENCES marketing_publish_actions(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     platform TEXT NOT NULL,
     label TEXT NOT NULL,
@@ -502,6 +639,7 @@ CREATE TABLE IF NOT EXISTS marketing_knowledge_contributions (
     id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     source_candidate_id TEXT NOT NULL REFERENCES marketing_learning_candidates(id),
     consent_ref TEXT NOT NULL,
@@ -561,6 +699,7 @@ CREATE INDEX IF NOT EXISTS idx_marketing_sounds_platform_seen
 CREATE TABLE IF NOT EXISTS marketing_short_video_observations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     platform TEXT NOT NULL,
     source_item_id TEXT NOT NULL,
@@ -583,6 +722,7 @@ CREATE TABLE IF NOT EXISTS marketing_short_video_observations (
 CREATE TABLE IF NOT EXISTS marketing_public_content_cases (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     platform TEXT NOT NULL,
     source_item_id TEXT NOT NULL,
@@ -604,6 +744,7 @@ CREATE TABLE IF NOT EXISTS marketing_public_feedback_observations (
     id TEXT PRIMARY KEY,
     case_id TEXT NOT NULL REFERENCES marketing_public_content_cases(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     platform TEXT NOT NULL,
     evidence_id TEXT NOT NULL REFERENCES evidence_records(id),
@@ -624,6 +765,7 @@ CREATE INDEX IF NOT EXISTS idx_short_video_observation_sound
 CREATE TABLE IF NOT EXISTS marketing_account_portfolio_snapshots (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     platform TEXT NOT NULL,
     observed_at TEXT NOT NULL,
@@ -643,6 +785,7 @@ CREATE TABLE IF NOT EXISTS marketing_owned_content_observations (
     id TEXT PRIMARY KEY,
     snapshot_id TEXT NOT NULL REFERENCES marketing_account_portfolio_snapshots(id),
     user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT NOT NULL,
     platform TEXT NOT NULL,
     source_item_id TEXT NOT NULL,
@@ -664,6 +807,7 @@ CREATE TABLE IF NOT EXISTS marketing_knowledge_entries (
     id TEXT PRIMARY KEY,
     knowledge_base TEXT NOT NULL,
     user_id TEXT NOT NULL DEFAULT 'default',
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
     account_id TEXT,
     platform TEXT,
     region TEXT NOT NULL DEFAULT '',
@@ -694,7 +838,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_marketing_knowledge_identity
 # atomically. Sessions are intentionally absent: an existing conversation keeps
 # its immutable prospect scope, while the successor conversation starts bound
 # to the authenticated account.
-PROSPECT_SCOPE_COLUMNS = {
+ENTITY_OWNED_SCOPE_COLUMNS = {
+    "marketing_operations": "account_id",
     "account_strategy_projects": "account_id",
     "audience_hypotheses": "account_id",
     "creator_operating_profiles": "account_id",
@@ -708,8 +853,14 @@ PROSPECT_SCOPE_COLUMNS = {
     "evidence_records": "account_id",
     "content_production_plans": "account_id",
     "content_assets": "account_id",
+    "media_asset_library": "account_id",
+    "material_searches": "account_id",
+    "material_candidates": "account_id",
+    "marketing_audio_jobs": "account_id",
     "marketing_video_productions": "account_id",
     "marketing_preflight_records": "account_id",
+    "marketing_topic_recommendation_batches": "account_id",
+    "marketing_topic_recommendation_candidates": "account_id",
     "marketing_receipt_refs": "account_id",
     "marketing_learning_candidates": "account_id",
     "marketing_publish_actions": "account_id",
@@ -726,6 +877,10 @@ PROSPECT_SCOPE_COLUMNS = {
     "memory_candidates": "account_id",
 }
 
+# Account adoption uses the same inventory, but changes only the channel
+# provenance column.  ``entity_id`` remains stable across the adoption.
+PROSPECT_SCOPE_COLUMNS = ENTITY_OWNED_SCOPE_COLUMNS
+
 LEGACY_MARKETING_TABLES = (
     "account_strategy_projects",
     "audience_hypotheses",
@@ -741,6 +896,9 @@ LEGACY_MARKETING_TABLES = (
     "content_assets",
     "marketing_video_productions",
     "marketing_preflight_records",
+    "marketing_topic_recommendation_batches",
+    "marketing_topic_recommendation_candidates",
+    "marketing_topic_recommendation_delivery_receipts",
     "marketing_receipt_refs",
     "marketing_learning_candidates",
     "account_influence_calibrations",

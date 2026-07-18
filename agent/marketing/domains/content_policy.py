@@ -11,33 +11,27 @@ import re
 from typing import Any
 
 from agent.marketing.domains.article_drafts import article_stylebooks
+from agent.marketing.platform_catalog import (
+    PLATFORM_PROFILES,
+    content_lane_for_platform,
+    normalize_platforms,
+    platform_content_blueprints,
+)
 
 
-CONTENT_KINDS = {"article_soft", "faceless_video"}
+CONTENT_KINDS = {"article_soft", "faceless_video", "cross_platform_campaign"}
 EXTERNAL_CONTENT_KINDS = {"premium_human_video"}
-ARTICLE_PLATFORMS = {"zhihu", "wechat_official"}
-VIDEO_PLATFORMS = {
-    "douyin",
-    "bilibili",
-    "xiaohongshu",
-    "kuaishou",
-    "wechat_channels",
-    "tiktok",
-    "youtube",
+ARTICLE_BUNDLE_PLATFORMS = {"zhihu", "wechat_official"}
+# Compatibility exports for collectors/publishers whose provider support is
+# necessarily finite. Content planning itself uses the extensible catalog and
+# accepts safe unknown platform IDs with an explicit research gap.
+ARTICLE_PLATFORMS = {
+    platform
+    for platform in PLATFORM_PROFILES
+    if content_lane_for_platform(platform) == "article_soft"
 }
+VIDEO_PLATFORMS = set(PLATFORM_PROFILES) - ARTICLE_PLATFORMS
 VALID_PLATFORMS = ARTICLE_PLATFORMS | VIDEO_PLATFORMS
-
-PLATFORM_ALIASES = {
-    "知乎": "zhihu",
-    "公众号": "wechat_official",
-    "微信公众号": "wechat_official",
-    "抖音": "douyin",
-    "b站": "bilibili",
-    "哔哩哔哩": "bilibili",
-    "小红书": "xiaohongshu",
-    "快手": "kuaishou",
-    "视频号": "wechat_channels",
-}
 
 SHARED_CAPABILITIES = {
     "account_context": {
@@ -108,6 +102,28 @@ LANE_CONFIG = {
         "skills": ["humanizer", "baoyu-infographic", "manim-video", "p5js", "ascii-video"],
         "deliverables": ["voiceover_script", "shot_list", "material_manifest", "sound_plan", "timeline", "final_video"],
     },
+    "cross_platform_campaign": {
+        "label": "跨平台内容 campaign",
+        "default_platforms": [],
+        "asset_type": "script",
+        "capabilities": [
+            "account_context",
+            "evidence_research",
+            "copywriting",
+            "stock_material",
+            "generated_visual",
+            "audio",
+            "editing_render",
+        ],
+        "skills": ["humanizer", "baoyu-infographic"],
+        "deliverables": [
+            "content_kernel",
+            "platform_blueprints",
+            "platform_native_variants",
+            "shared_evidence_pack",
+            "shared_visual_material_pack",
+        ],
+    },
 }
 
 
@@ -128,6 +144,15 @@ class ContentProductionPolicy:
         kind_value = infer_content_kind(objective_value, kind=kind, platforms=platforms)
         config = LANE_CONFIG[kind_value]
         platform_values = normalize_platforms(platforms) or list(config["default_platforms"])
+        if not platform_values:
+            raise ValueError(
+                "cross-platform content planning requires at least one target platform"
+            )
+        if kind_value == "article_soft" and not set(platform_values) <= ARTICLE_BUNDLE_PLATFORMS:
+            raise ValueError(
+                "article_soft currently owns only the validated zhihu/wechat_official bundle; "
+                "use cross_platform_campaign for other domestic or overseas article platforms"
+            )
         evidence = _bounded_refs(evidence_refs or [], "evidence_refs")
         constraints_value = constraints or {}
         if not isinstance(constraints_value, dict):
@@ -197,6 +222,7 @@ class ContentProductionPolicy:
             "kind_label": config["label"],
             "objective": objective_value,
             "target_platforms": platform_values,
+            "platform_blueprints": platform_content_blueprints(platform_values),
             "asset_type": config["asset_type"],
             "account_scope": {
                 "account_id": context.get("account_id"),
@@ -274,9 +300,18 @@ def infer_content_kind(objective: str, *, kind: str = "auto", platforms: Any = N
     if requested in CONTENT_KINDS:
         return requested
     normalized_platforms = normalize_platforms(platforms)
-    if normalized_platforms and set(normalized_platforms) <= ARTICLE_PLATFORMS:
-        return "article_soft"
+    lanes = {content_lane_for_platform(item) for item in normalized_platforms}
+    if len(normalized_platforms) > 1 and len(lanes) > 1:
+        return "cross_platform_campaign"
+    if normalized_platforms and lanes == {"article_soft"}:
+        return (
+            "article_soft"
+            if set(normalized_platforms) <= ARTICLE_BUNDLE_PLATFORMS
+            else "cross_platform_campaign"
+        )
     text = str(objective or "").lower()
+    if any(word in text for word in ("全平台", "跨平台", "各平台", "每个平台", "多平台")):
+        return "cross_platform_campaign"
     if any(word in text for word in ("知乎", "公众号", "软文", "长文", "文章")):
         return "article_soft"
     if any(word in text for word in ("数字人", "真人", "ai人", "ai 人", "口播", "高质量视频")):
@@ -286,27 +321,19 @@ def infer_content_kind(objective: str, *, kind: str = "auto", platforms: Any = N
         )
     if any(word in text for word in ("不露脸", "素材拼接", "混剪", "空镜", "素材视频")):
         return "faceless_video"
-    if normalized_platforms and any(item in VIDEO_PLATFORMS for item in normalized_platforms):
+    if normalized_platforms and lanes == {"faceless_video"}:
         return "faceless_video"
     return "article_soft"
 
 
-def normalize_platforms(value: Any) -> list[str]:
-    if isinstance(value, str):
-        raw = re.split(r"[,，、/\s]+", value)
-    elif isinstance(value, (list, tuple, set)):
-        raw = [str(item) for item in value]
-    else:
-        raw = []
-    result: list[str] = []
-    for item in raw:
-        normalized = PLATFORM_ALIASES.get(item.strip(), item.strip().lower())
-        if normalized in VALID_PLATFORMS and normalized not in result:
-            result.append(normalized)
-    return result
-
-
 def _fallback(kind: str) -> dict[str, str]:
+    if kind == "cross_platform_campaign":
+        return {
+            "if_platform_guidance_missing": (
+                "保留内容内核和证据包，为未知平台输出通用可重排素材及明确研究缺口，"
+                "不得冒充已经完成平台适配。"
+            )
+        }
     if kind == "faceless_video":
         return {
             "if_materials_insufficient": "交付旁白脚本、分镜和素材缺口清单，不伪造最终视频。"

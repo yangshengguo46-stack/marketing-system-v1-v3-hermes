@@ -102,6 +102,7 @@ def _review_ready_asset(
     asset_id = f"asset-publish-{suffix}"
     now = "2026-07-11T00:00:00+00:00"
     content = {
+        "_production_kind": "article_soft",
         "_production_plan_id": plan["plan_id"],
         "platform_variants": {
             "zhihu": {"title": "测试文章", "body_markdown": "正文"},
@@ -555,6 +556,7 @@ def test_publish_action_prelogs_once_and_binds_native_approval(tmp_path):
     assert first["id"] == duplicate["id"]
     assert first["plan_id"] == plan["plan_id"]
     assert first["preflight_id"] == preflight["preflight_id"]
+    assert first["request"]["content_kind"] == "article_soft"
     assert executing["status"] == "executing"
     assert executing["approval_ref"].startswith("hermes-approval:")
     asset = ContentAssetRepository(paths).get(

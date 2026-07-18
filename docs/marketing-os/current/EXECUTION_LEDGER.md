@@ -31,13 +31,13 @@
 | Human/social model | `human-projection-model-v0.2` 将存在固定为不可直接观测/打分的本体前提；创作者与行为受众保存马斯洛需求投影、荣格认知投影和 `preserve/confirm/expand/continue` 存在策略软假设；诊断键、永久人格标签和高于 `0.7` 的伪确定性被原生 owner 拒绝 | automated | 真实长期对话校准、用户纠错体验、跨场景有效期复查 |
 | Agent perception layer | `vision_analyze`、`browser_vision`、`video_analyze` 作为 Marketing Agent 的原生底层感知能力；主业务 toolset、受约束媒体代码 worker、默认委派和文件读取引导均已贯通，视频能力在产品运行时不可被渐进披露隐藏 | automated | 真人长视频、多格式/损坏文件、音频转写联动与跨模型视觉一致性验收 |
 | Four knowledge bases | Platform/Market/Account/Content 四库进入 Hermes `state.db`；赛道库接收真实证据和签名聚合规律；账号知识只接收 Receipt-backed accepted learning；用户/模型写入被拒绝 | automated | 海量采集、规则与市场时效巡检、候选治理 UI |
-| Desktop | `apps/desktop` 唯一 UI/Electron；首轮经营、图文和视频动作提交结构化意图后由 Gateway 原子启动 Agent，结果回到原经营对象，不再跳新对话或要求二次发送 | automated | 开发机真人首半小时、Gateway 重启后的 operation 恢复、干净机安装 |
-| Session/account scope | SessionDB、AccountRegistry、会话级 MCP pool 与 Playwright contextGetter 已贯通；新会话自动获得稳定 `prospect_*` 作用域；MCP 真实登录验证后原子迁移经营事实，旧 session 不变、successor 从首轮绑定真实账号；`accounts.json` 仅一次迁移 | automated | 真人二维码/验证码校准、successor UI 切换、多账号恢复、冲突合并审查与打包浏览器策略 |
+| Desktop | `apps/desktop` 唯一 UI/Electron；首轮经营、图文和视频动作提交结构化意图后由 Gateway 原子启动 Agent，结果回到原经营对象，不再跳新对话或要求二次发送；一级草稿箱只投影 Hermes 半成品并回到原图文/视频管线 | automated | 开发机真人首半小时、Gateway 重启后的 operation 恢复、草稿箱真人视觉验收、干净机安装 |
+| Session/account scope | SessionDB 新增稳定经营主体 scope；一个 creator/brand 可关联多个平台账号，Agent 读取账号上下文、内容资产和证据时按主体聚合，登录/浏览器/发布仍固定 action account；新会话自动获得稳定 `prospect_*` 作用域；MCP 真实登录验证后原子迁移经营事实 | automated | 真人二维码/验证码校准、多经营主体显式建组/拆组 UI、历史账号误分组审查、successor UI 切换与打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、真实登录验证、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放登录窗口，后续以同一持久 profile 后台恢复；删除时清理 profile | automated | 真人多平台登录/退出、Cookie 信号随平台变更的巡检 |
 | Owned account diagnosis | 微信公众号已验证最近 9 篇逐篇内容分析指标；抖音已验证公开 3 条、私密 1 条的作品口径；Hermes 将作品、指标、EvidenceRecord、透明执行基线和数据缺口按账号写入 `state.db`；Desktop 只读展示 | dev-runtime | 新空 profile 真人扫码、多账号恢复、分页完整性巡检；评分继续区分执行基线、内容解释和受众反馈 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
-| Content plan/assets | 图文与不露脸素材视频双 lane policy、图文质量门、不可变版本资产、显式真人审核回执与发布门；计划固化结构化受众模型 | automated | 真实高质量内容与素材生产；公众号成品和重启后审核状态待最终 human-loop |
-| Preflight | InfluenceOS + 不可变记录 + draft gate；草稿自动把 Preflight 多维结果、匿名评论人群/主题/立场、需求投影、认知投影、存在策略、个体注意、群体扩散、平台分发和商业行动固化为 hash-bound `social_system_simulation` | automated | 真实账号历史校准、评论聚类 Provider、平台竞争/时段/投流先验 |
+| Content plan/assets | 图文、不露脸素材视频与 `cross_platform_campaign` 三 lane policy；同一内容内核按任意国内/海外平台集合生成不同受众、开头、结构、互动、CTA、视觉与格式合同；未知平台保留明确调研缺口；不可变版本、人审与草稿归档继续复用原 owner | automated | 真实模型五平台成品质量、人审与发布；平台画像时效来源；草稿归档/恢复真人验收 |
+| Preflight | InfluenceOS + 不可变记录 + draft gate；每个平台保存独立适配评估；经营优先级/选题推荐必须先产生 plan + preflight，返回 `recommended` 或 `research_only`，阻断候选不得伪装成推荐 | automated | 真实账号历史校准、自动推送任务真人验收、评论聚类 Provider、平台竞争/时段/投流先验 |
 | Receipt/Learning store | ReceiptRef、LearningCandidate、PublishAction、MetricCheckpoint 状态机；观察后自动执行投影机制链对账和分层 causal reflection，明确区分观察、预测误差、干预身份、反事实不可识别与混杂因素；显式接受后才投影 Account KB | automated | 真实平台指标 Provider、匹配变体与跨天真人数据 |
 | Hermes memory/Skill | 1 个产品运行 Skill、23 个原始营销 playbook 和 13 个内容/编剧/视频参考 Skill 已纳入源码；经营写入规则已加入 | automated | 候选治理 UI、重复成功流程沉淀；参考 Skill 升级必须逐项审查 |
 | Publishing/metrics | 原生发布 intent、一次性审批、Provider 插槽、unknown 恢复、回执校验、5 段 checkpoint；Hermes Cron 原生触发指标 Provider，支持领取、延期、崩溃恢复和 unavailable 回执 | automated | 缺实际 L3 发布/指标 Provider 和真人跨天验收 |
@@ -46,13 +46,15 @@
 
 ## 内容生产当前边界
 
-Marketing OS 内容生产只保留两种内部交付形态，共享同一条 Hermes 原生经营闭环：
+Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes 原生经营闭环：
 
 | 交付形态 | 当前原生能力 | 主要缺口 | 当前证据 |
 |---|---|---|---|
 | `article_soft` 软文 | 账号/实验绑定、EvidencePack、父稿与平台变体、质量门、版本资产、Preflight 和发布资格约束 | 真实账号调性、主张级多源核验、配图版权与真人审稿 | automated |
 | `faceless_video` 不露脸素材视频 | 账号/实验绑定、内容计划、素材需求、声音计划、特征快照、Preflight、不可变 Video IR/EDL、scene/IR/render-plan hash、能力路由、显式渲染批准、固定版本 Remotion/HyperFrames 镜头执行、真实 FFmpeg 规格化与合成、场景缓存、派生最终素材、不可变成品版本、失败重试与 Render Receipt；黑场/冻结/响度/技术规格自动 QA；用户素材优先的 Provider 中立检索、Pexels 官方视频适配、来源/许可证审查后下载与稳定身份去重；一次性批准后复用 Hermes TTS 并把真实输出导入素材库；授权 BGM 与旁白已通过真实 FFmpeg 混音和音轨 QA；原生视频理解支持 direct/sampled/auto；Desktop 已有真实 production/镜头/素材/时间线/成片/回执工作台和人工审片入口 | 配置真实 Pexels Key 后的在线下载、当前 Volcengine TTS 的一次性费用授权、真人认可整片 | automated（渲染器已达 packaged） |
-两种内部形态共同消费账号上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与受治理学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接人工确认，不拥有生产、素材、浏览器、发布或学习事实。
+| `cross_platform_campaign` 全平台 campaign | 一个内容内核绑定任意目标平台集合；内置抖音、公众号、视频号、知乎、小红书、B站、快手、TikTok、YouTube、Instagram、LinkedIn、X 的版本化内容画像，非内置安全平台 ID 以 `generic_unverified_requires_platform_research` 降级；每个平台变体必须内容实质不同并说明受众、开头、结构和 CTA 适配依据 | 真实模型成品、平台画像的证据/有效期治理、账号级效果校准、各平台发布 Provider | automated |
+
+三种内部形态共同消费经营主体上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与受治理学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接人工确认，不拥有生产、素材、浏览器、发布或学习事实。
 
 当前不能宣称“内容制作已完成”。不露脸视频自动化链已证明用户/Provider 素材候选、许可证确认、TTS 意图批准、真实音频导入、BGM 混音、渲染、QA、版本与回执可以贯通；但没有擅自调用当前可能计费的 `volcengine-speech`，也没有在未配置 Pexels Key 时伪造在线下载。仍缺真实账号输入、在线 Provider、真人认可成品、发布回执和跨天指标学习的 `human-loop` 证据。高级视频是独立产品，不属于本台账完成范围；迁移指针见 [`../deferred/high-end-video-volcengine.md`](../deferred/high-end-video-volcengine.md)。
 
@@ -270,7 +272,7 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 ### DESKTOP-UI-01 原生产品壳（第一轮已完成）
 
 - 直接改造 Hermes `apps/desktop` 原生 Shell，没有新建第二套 Electron 前端，也没有增加 UI 适配服务。
-- 一级导航改为工作台、新对话、内容工厂、素材库、账号管理和托管；内容工厂下固定图文创作与视频创作两个子入口。Skills、MCP、消息通道、Cron 等仍由 Hermes 原生 owner 管理，但不再以开发者概念占据用户一级入口。
+- 一级导航改为工作台、新对话、内容工厂、草稿箱、素材库、账号管理和托管；内容工厂下固定图文创作与视频创作两个子入口。Skills、MCP、消息通道、Cron 等仍由 Hermes 原生 owner 管理，但不再以开发者概念占据用户一级入口。
 - 工作台读取 `AccountContextRepository`、账号平台统计、内容资产和 learning candidate；只展示真实快照，缺数据时明确等待回执，不生成装饰性假曲线。
 - 内容工厂首页只负责选择创作方式和查看最近内容；图文审核与视频生产进入独立原生路由。视频页使用同一张连续导演工作台完成 `设定 → 分镜 → 动态 → 剪辑 → 成片`，左侧对象/镜头、中央主预览与当前目标自然语言修改框、右侧角色/场景/道具/声音/素材职责固定，剪辑和成片阶段在中央展开多轨时间线。纯素材视频复用同一套工作台；高阶视频已迁出，不保留无法执行的假入口。
 - 素材库把 Hermes 既有统一资产 owner 投影为本地素材与云端素材两栏。本地素材支持 Electron 原生文件/文件夹选择和拖入，只有显式版权确认后才由 Gateway 交给 `MediaAssetRepository` 复制入受控库；账号/全局作用域、SHA-256 去重、来源授权、引用删除保护和成片回执继承均有产品说明，原始绝对路径不进入业务投影。火山云端素材当前保持诚实空状态，未接 Provider、未放假数据、不会产生调用费用。
@@ -282,17 +284,17 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - 当前验证：Desktop TypeScript typecheck、目标 ESLint、Ruff、`git diff --check` 和正式 Vite build 通过；新导航/导演台/素材库/回执边界 React 定向 `16 passed`，素材库领域 `10 passed`，视频生产与经营闭环组合 `41 passed, 1 skipped`。这些是 automated 证据，不替代真人视觉、真实素材文件夹和整片审查。
 - 仍需真人视觉验收工作台、内容工厂、账号管理、托管与新对话五个入口；后续只根据真实使用反馈打磨信息密度，不恢复 Hermes 开发者控制台式信息架构。
 
-### FLOW-01 首个半小时与经营对象连续动线（automated，2026-07-17）
+### FLOW-01 经营首页与经营对象连续动线（automated，2026-07-17）
 
-- First-run Journey 固定为：选择账号或明确“暂不登录” → 输入经营目标 → 单次点击启动首次研究 → 形成首个内容经营对象 → 原地审核并作出第一次决定。模型供应商、API Key 和默认模型不属于这条旅程，本轮没有新增对应板块。
+- 2026-07-17 真人视觉反馈否决了独占首屏的 First-run Journey 大卡并将其删除。工作台无论是否已有经营目标，都保持原来的三个经营罗盘、真实增长路径和“今天的经营面”布局；首页首先回答浏览、涨粉、互动与作品表现，自动形成的选题/内容对象只进入下方“正在推进”列表，不再重复占据首屏。模型供应商、API Key 和默认模型仍不属于工作台旅程。
 - 工作台、图文和视频页面只调用 `marketing.operation.start/status`。账号、资产、生产任务、镜头、阶段、附件和用户输入以结构化意图交给 Gateway；Gateway 内部建立账号作用域 Agent session 并提交后端执行合同。Renderer 已删除 `prepare → session.create → prompt.submit` 编排，不展示或预填 prompt，也不要求用户再点发送。
 - 图文创作拥有独立 `/content/article` 工作区，选题/目标草稿按账号保留，任务完成后以 `content_asset` 结果引用回到同一资产列表和审核 Sheet；提出修改创建新版本，确认后可继续推进到发布准备。内容工厂入口不再跳普通 Chat。
 - Wayfinding 由稳定一级导航、当前账号标识、内容工厂返回入口、视频返回入口和任务结果路由共同承担。内部 `desktop-product` session 从普通对话列表过滤；Chat 保留为通用能力，不再成为经营按钮的默认目的地。
-- 页面返回状态：账号选择、首轮目标草稿、图文 brief、工作台时间范围/平台钻取/曲线模式、素材库 tab/filter/query、视频当前项目/镜头/检查器和左右栏折叠均保留；这些只属于 UI 展示状态，不复制内容、任务或生产事实。
+- 页面返回状态：账号选择、图文 brief、工作台时间范围/平台钻取/曲线模式、素材库 tab/filter/query、视频当前项目/镜头/检查器和左右栏折叠均保留；这些只属于 UI 展示状态，不复制内容、任务或生产事实。
 - 死胡同处理：账号空态可明确返回工作台并暂不登录；内容确认后提供继续推进；后台任务卡始终指向工作台、图文资产、视频导演台、素材库或托管对象，不再提供“查看执行”并把用户带回隐藏 Chat。
-- 代码路径：`agent/marketing/operation_entrypoints.py`、`tui_gateway/server.py`、`apps/desktop/src/app/desktop-controller.tsx`、`chat/sidebar/index.tsx`、`workbench/{operations,marketing-task-tray,index,first-run-journey,article-creation-view,business-surfaces,content-review-sheet,growth-dashboard,material-library-view,video-production-workbench}.tsx` 和 `store/marketing.ts`。
-- 自动化证据：结构化入口、缺失结果拒绝、隐藏 Agent 失败态和 Gateway start/status Python 专项 `9 passed`，相邻账号生命周期/内容资产/视频生产/Gateway 回归 `22 passed, 1 skipped`；首轮、图文、工作台、内容工厂、素材状态、视频和路由 React 定向 `25 passed`，Desktop 全量 `138` 个文件、`1,018/1,018` 通过；TypeScript typecheck、目标 ESLint、Ruff、`git diff --check` 与正式 Desktop production build/产物断言通过。构建仍保留既有单 chunk 约 `26.1 MB` 警告。
-- 当前证据只到 `automated`。未启动开发机真实 Agent 完成首个经营对象，未做 Electron 真人首半小时视觉/操作验收，未生成本轮安装包，也未验证 Gateway/应用重启后恢复 operation。因此 `dev-runtime`、`packaged` 和 `human-loop` 均不得标完成；下一步 owner 债务是 durable Hermes operation/task projection 与共享可校验 RPC contract。
+- 代码路径：`agent/marketing/operation_entrypoints.py`、`tui_gateway/server.py`、`apps/desktop/src/app/desktop-controller.tsx`、`chat/sidebar/index.tsx`、`workbench/{operations,marketing-task-tray,index,article-creation-view,business-surfaces,content-review-sheet,growth-dashboard,material-library-view,video-production-workbench}.tsx` 和 `store/marketing.ts`。
+- 自动化证据：结构化入口、缺失结果拒绝、隐藏 Agent 失败态和 Gateway start/status Python 专项已在后续 `REPAIR-01` 扩为 `10 passed`，相邻账号生命周期/内容资产/视频生产/Gateway 回归持续通过；删除首轮大卡并补回轻量目标入口后，Desktop 全量 `137` 个文件、`1,017/1,017` 通过；TypeScript typecheck、目标 ESLint、Ruff、`git diff --check` 与正式 Desktop production build/产物断言通过。构建仍保留单 chunk 约 `26.2 MB` 警告。
+- 当前证据只到 `automated`。工作台已在不恢复独占首屏大卡的前提下补回一行式经营目标输入，并直接启动 `account.bootstrap`；operation 产品投影已进入原生 `state.db`，自动化覆盖完成态重读和未完成 turn 重启后 fail-closed。尚未启动开发机真实 Agent 完成首个经营对象，未做 Electron 真人首半小时视觉/操作验收，也未生成本轮安装包。因此 `dev-runtime`、`packaged` 和 `human-loop` 均不得标完成；下一步协议债务是共享可校验 RPC contract，未完成 Agent turn 的自动续跑必须等待 Hermes 通用 task/checkpoint 具备可证明安全的恢复合同。
 
 ### REPO-AUDIT-01 台账、Git、UI 与边界收敛（2026-07-17）
 
@@ -301,13 +303,58 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - 当前唯一 remote 是上游代码源 `hermes-upstream`，不是 Marketing OS 产品备份目标。本轮只允许在当前产品分支建立本地 checkpoint；在用户提供或确认产品 remote 前不 push，也不把产品历史误推到上游 remote。
 - Desktop 测试入口已限定为 `src/**/*.{test,spec}.{ts,tsx}`，不再把 Electron `node:test`、脚本测试和 `build/product-runtime` 暂存副本误当 Vitest；Node 26 的全局 Storage accessor 由测试专用内存实现隔离。产品新安装仍默认中文，但 Python 与继承的 Desktop 行为测试在模块加载前固定英文，避免开发者本机语言污染基线。
 - `@assistant-ui/store` 的安装树曾漂移为 `0.2.19`，与锁定的 `@assistant-ui/tap 0.5.16` 不兼容；根目录 `npm ci` 已恢复 lock/override 指定的 `0.2.13`，`npm ls`、正式构建与类型检查恢复通过。不得用工作区内临时 `npm install` 改写这组版本。
-- Gateway 曾重复注册 `marketing.account.context`，后声明会静默覆盖前 handler。重复项已删除，RPC 注册器现在遇到任何重复方法名立即失败；当前 143 个方法名全部唯一。Desktop 使用 21 个 `marketing.*` RPC，Gateway 暴露 31 个；其余入口未完成消息渠道/未来 UI/兼容调用方审计前不删除。
-- Electron 经营任务卡已从持久 `localStorage` 改为只存在内存的后端会话展示投影，重启后不再出现无法对应后端 owner 的“幽灵任务”。真正任务、资产、账号、发布和学习状态继续由 Hermes 原生 owner 持久化。
-- 原任务协议泄漏已由 `FLOW-01` 收口：Desktop 不再执行 `marketing.operation.prepare → session.create → prompt.submit`，只消费 Gateway 的原子 start/status 和领域对象结果引用。剩余债务是 operation projection 尚未持久化到可跨 Gateway/应用重启恢复的 Hermes task owner，不得用 Electron 持久任务列表掩盖。
+- Gateway 曾重复注册 `marketing.account.context`，后声明会静默覆盖前 handler。重复项已删除，RPC 注册器现在遇到任何重复方法名立即失败；当前 148 个方法名全部唯一。Desktop 使用 25 个 `marketing.*` RPC，Gateway 暴露 36 个；其余入口未完成消息渠道/未来 UI/兼容调用方审计前不删除。
+- Electron 经营任务卡已从持久 `localStorage` 改为只存在内存的后端会话展示投影，重启后不再出现无法对应后端 owner 的“幽灵任务”。真正任务、资产、账号、发布和学习状态继续由 Hermes 原生 owner 持久化；后续 `REPAIR-01` 又把 operation 产品投影补入 `state.db`，没有把持久化责任放回 Electron。
+- 原任务协议泄漏已由 `FLOW-01` 收口：Desktop 不再执行 `marketing.operation.prepare → session.create → prompt.submit`，只消费 Gateway 的原子 start/status 和领域对象结果引用。当时 operation projection 尚未持久化的债务已由后续 `REPAIR-01` 收口为原生终态恢复；未完成 Agent turn 仍 fail-closed 并要求显式重试，不自动重放副作用。
 - UI 结构债务集中在 `desktop-controller.tsx`（约 1.6k 行）、`growth-dashboard.tsx`（约 1.2k 行）和 `video-production-workbench.tsx`（约 2.2k 行）。拆分目标是 typed query/command projection、任务启动和纯视图，不是按视觉卡片继续横向造 Store。完整边界记录在 [`NATIVE_ARCHITECTURE.md`](NATIVE_ARCHITECTURE.md)。
 - Python 首轮全量回归通过 `36,267` 项并暴露 `44` 项失败；失败全部归入跨平台路径/进程、systemd 能力、宿主代理污染、本机语言、测试替身漂移和三项 Web Provider 旧契约，没有发现营销 Repository 被 UI 反向依赖。每组修复均已定向回归通过；本轮没有为伪造“一次性全绿”再重复运行约 52 分钟的全量扫描。`scripts/run_tests.sh` 现固定英文测试语言，并为 loopback 设置 `NO_PROXY/no_proxy`，避免 macOS 系统代理劫持本地测试服务。
 - Desktop 继承测试债务已清零：Vitest `136` 个文件、`1,015/1,015` 通过；Electron/packaging `node:test` 为 `265 passed, 1 skipped`，跳过项是 Windows junction 平台限定。浏览器 MCP `23/23` 通过。Ruff、TypeScript、ESLint、`git diff --check`、正式 Vite production build 与产物断言均通过；npm 锁定树一致，root audit 为 `0 vulnerabilities`。当前 renderer 单 chunk 约 `26.1 MB`，仍有超过 `25 MB` 的构建警告，属于后续 bundle 拆分风险，不影响本轮构建成功。
 - 本轮 packaged 证据只到正式 renderer build、runtime staging 测试和产物存在性断言；没有生成签名安装包、没有在干净机安装，也没有替代真人 UI/账号/发布闭环，因此证据等级仍是 `automated build`，不能写成 `human-loop`。
+
+### REPAIR-01 继承一致性、首轮入口与任务恢复（automated，2026-07-17）
+
+- 本轮严格修改原生 owner 和现有产品 surface，没有新增 adapter、外层服务、Electron 业务状态或自动发布占位实现。审计起点已有的首屏大卡删除与工作台简化改动全部保留。
+- `PROSPECT_SCOPE_COLUMNS` 已补入 `media_asset_library`、`material_searches`、`material_candidates` 与 `marketing_audio_jobs`。登录继承会在同一事务中移动这些账号作用域事实，并把目标账号已有素材/搜索/音频事实视为显式合并冲突；`media_asset_references` 没有账号列，继续通过素材外键保留，不制造重复归属字段。新增回归覆盖完整迁移、引用保留、幂等和目标素材冲突。
+- ContentAsset 的规范持久字段仍为 `_production_kind`；摘要、发布 request 和学习 replay 现统一优先读取该字段并兼容旧 `production_kind`，避免内容类型在发布和后续 cohort 中变成空值。
+- 工作台不恢复被真人否决的 First-run Journey 大卡。只有在原生 lifecycle 尚无 `business_goal` 时，经营罗盘上方出现一行式目标输入；提交直接调用 `account.bootstrap`，目标由 `AccountLifecycleRepository` 持久化，Renderer 不保存第二份长期经营事实。
+- 新增原生 `marketing_operations` 表和 `MarketingOperationRepository`。start 在启动隐藏 Agent turn 前写入 `working` 投影，Agent 终态写回结果引用或错误；Gateway 重启后已完成 operation 可按原 ID 读取，未完成 turn 结算为保留原始输入的可重试错误，不返回 404、不自动重放发布等外部副作用。Desktop 任务卡仍是内存展示投影。
+- 自动化证据：Marketing OS 相关 Python `31` 个文件、`184/184` 通过，其中 operation 入口与重启恢复 `10 passed`；Desktop 全量 `137` 个文件、`1,017/1,017` 通过，工作台轻量首轮入口与原地内容审核定向 `2 passed`。首次 Desktop 全量运行有一个无关 TTS 设置等待用例发生并发抖动，该文件单跑 `7/7` 后立即全量复跑全绿，本轮未修改其源码。TypeScript typecheck、目标 ESLint、Ruff、`git diff --check`、正式 Vite production build 和产物断言通过；构建输出 `4,204` 个模块，单 JS chunk `26,160.56 kB`、gzip `5,396.97 kB`，继续超过 `25,000 kB` 告警线。构建标记为 `DIRTY`，只作为 automated 证据，不得发布。
+- 仍未完成：Marketing OS 产品远端备份、共享可校验 Desktop/Gateway RPC contract、真实发布 Provider/可靠人工核验、作品级指标、真人首半小时、签名安装与自然跨天 E2E。唯一 remote 仍是 `hermes-upstream`，用户未提供产品 remote 前禁止 push；真人账号未授权前 `PUBLISH-01` 不得升级证据等级。
+
+### DRAFT-01 内容工厂草稿箱与原管线恢复（automated，2026-07-17）
+
+- 本轮新增一级 `/drafts` 草稿箱。它按当前账号统一展示图文 `draft/review_ready` 与视频 `prepared/approved/running/failed`、未验收 `completed`；已验收视频、`superseded` 旧版本和被 production 代表的视频源资产不会混入或重复展示。
+- 本机真实库只读核对显示，“AI 教育”最新资产是第 4 版 `review_ready + pending`，第 2/3 版已 `superseded`。它没有丢失，只是原图文列表缺少集中管理入口；新草稿箱会自动把第 4 版投影为“等待审核”，点击“继续”回到 `/content/article?asset=...` 的原审核 Sheet。视频 production 则回到 `/content/video?production=...`；极少数尚未建立 production 的不露脸视频源资产交回原生 `content.resume`，不在 Renderer 续造生产状态。
+- `DraftBoxRepository` 只做账号作用域聚合与动作分派，业务真相仍由 `ContentAssetRepository`、`VideoProductionRepository`、`content_production_plans` 和 Hermes `state.db` 拥有。Electron 没有草稿 Store、LocalStorage 或第二生命周期；Gateway 新增 `marketing.drafts.list`、`marketing.draft.archive`、`marketing.draft.restore` 三个 RPC 后，Renderer 消费 25 个 `marketing.*` RPC，Gateway 暴露 36 个，仍无反向依赖。
+- 归档是显式确认后的软归档：内容资产、视频 production、关联的 source/output asset 和生产计划在同一原生事务边界内进入 `archived`，保存 `archived_from_status/archived_at`；恢复时回到归档前状态。运行中的视频拒绝归档，已验收成品不属于草稿，普通内容/视频列表默认排除 archived；历史版本、审核记录、EDL、素材引用和回执均不删除。
+- 数据库升级继续由 `SessionDB` 声明式 schema reconciliation 拥有；`content_assets` 与 `marketing_video_productions` 只新增归档字段，没有新数据库、JSON 双写或 Electron 迁移。旧图文 validation 迁移也已加生命周期保护，不能在重启时把 archived/superseded/approved/published 资产改回草稿。
+- 自动化证据：Marketing OS Python 全量 `168 passed, 1 skipped`；草稿专项、相邻内容/Gateway/视频组合 `22 passed, 1 skipped`，新增专项 `3/3`；Desktop 全量 `138` 个文件、`1,019/1,019` 通过，草稿/路由定向 `5/5`。TypeScript typecheck、变更范围 ESLint、Ruff、Python compile、`git diff --check` 和正式 Desktop production build/产物断言通过；构建输出 `4,205` 个模块，单 JS chunk `26,167.82 kB`、gzip `5,398.52 kB`，仍超过 `25,000 kB` 告警线。构建标记为 `DIRTY`，只作为 automated 证据。
+- 当前未做的事：没有替用户自动归档“AI 教育”，没有修改真实业务行，没有运行真人 Electron 视觉/点击验收，也没有提交、推送或生成签名安装包。因此本轮不能升级为 `dev-runtime`、`packaged` 或 `human-loop`；下一步真人验收应覆盖当前账号草稿汇总、继续审核、归档确认、已归档恢复和账号切换隔离。
+
+### SCOPE-06～09 经营主体、全平台生产与推荐预演（SCOPE-06 dev-runtime；SCOPE-08/09 automated，2026-07-17）
+
+- **SCOPE-06 / 致命跨账号读取问题：已修复关键读链。** `marketing_operating_entities` 与成员表成为账号之上的 creator/brand 身份；Session 保存稳定 `marketing_entity_id` 和独立 `marketing_account_id`。Agent 读取账号上下文、内容资产与 EvidencePack 时聚合主体下全部关联账号，公众号等单平台 portfolio 可显式指定任一已关联账号；未关联账号继续 fail-closed。登录、BrowserContext、采集写入、发布与其它外部 effect 仍固定 action account，不能因聚合读取而静默切号。旧单 owner 安装在首次解析时只做一次确定性默认分组；已有多个经营主体时不猜归属。
+- **SCOPE-07 / 不执行。** 用户确认现有工作台、内容工厂与草稿箱信息架构工作正常，本 scope 不再改导航、页面层级或现有生产入口；本轮后端管线直接接入现有界面。此前已完成的 `DRAFT-01` 草稿箱保持原样，不撤销也不重复重构。
+- **SCOPE-08 / 已从“双平台”改为可扩展全平台。** `platform_catalog.py` 是版本化内容行为目录，不等于登录 connector 白名单。内置 12 个国内/海外平台画像只是当前知识覆盖，不是允许列表；任意安全平台 ID 都能进入计划。未知平台只能获得通用可重排素材包和显式 `platform_guidance_unverified` 警告，不能伪造规则。`cross_platform_campaign` 保存一个共享内容内核、目标平台全集、逐平台 blueprint 与实质不同的 variants；每个变体必须声明格式及 audience/opening/structure/CTA 适配依据。`platforms=['all']` 展开当前经营主体全部已连接渠道，并可同时附加尚未连接的海外目标。
+- **SCOPE-09 / 推荐选题先预演，已覆盖主动对话与每日推送。** 历史行为没有硬保证，而且审计确认原实现并不存在正式的“每日抓取 → 建模 → 选题 → 推送”产品管线：`cron/product_tasks.py` 只跑指标 checkpoint 与知识同步，真实 profile 当时也没有 `jobs.json`。现在主动入口 `account.prioritize` 与新增每日入口都必须为每个确切候选建立 durable production plan 和 immutable preflight；`go=false` 只能进入 `research_only` 研究池，不得出现在推荐正文。每日 owner 使用 `marketing_topic_recommendation_batches/candidates` 保存主体、日期、来源会话、候选、`plan_id`、`preflight_id`、决策、规范推送正文与 SHA-256；同一主体同一天重跑复用同一批次，不重复制造推荐。
+- **SCOPE-09 / Cron 硬门禁。** `marketing-daily-topics` blueprint 会先读取经营主体全部已关联平台，再核验当日外部信号；搜索摘要不算证据，必须由原生 collector 形成 EvidencePack。Cron 在第一次模型调用前把运行会话绑定到稳定 `marketing_entity_id + marketing_account_id`，最终回复必须逐字等于 `marketing_preflight_daily_topic_recommendations.delivery_markdown`。通用 scheduler 在投递前按当前 Cron session 查询已完成批次并核对 SHA-256；漏调工具、无批次、加前后缀、改写正文或使用未通过候选都会使整个 job fail-closed，模型文案不能绕过产品回执。
+- **SCOPE-09 / 本机启用状态。** 开发 profile 已创建 job `9c032a57f7c1`（“每日选题预演推荐”），以已认证抖音动作账号绑定“我的经营主体”，`platforms=all` 会同时覆盖当前已关联抖音与公众号并允许以后追加任意海外平台；每天本地时间 `09:00` 运行，候选上限 5，结果保存在 Desktop 的 Cron 任务/运行会话中。当前没有经用户确认的 Telegram/飞书等外部投递目标，因此 `deliver=local`，不会擅自向外部渠道发消息；需要外部主动消息时只改 delivery 配置，不改变预演门禁。
+- **SCOPE-09 / 工作台选题收件箱。** 工作台底部原“今天的经营面/今日判断”占位区已改为“今日选题”：Gateway 按当前账号反查稳定经营主体，只投影最新 completed 批次中 `recommendation_eligible=true` 的候选；未通过项只显示研究池数量，不泄漏为推荐。界面展示预演分、为什么是现在、全平台集合，并可展开每个平台各自的载体、开头、结构、视觉与 CTA；未知平台保留通用方案和未校准提示，不写死国内双平台。工作台每 60 秒轻量刷新，也允许手动刷新；没有批次时诚实提示下一批每天 09:00 到达，不制造演示选题。
+- **SCOPE-09 / 通用选题与平台推荐。** 每日任务要求每个候选为每个目标平台提交 `platform_fit_hypotheses`（匹配假设、理由与可选证据），原生预演再用 65% 候选假设 + 25% 全局 InfluenceScore + 10% 平台知识置信度校准为 0–100 的“预演匹配度”；它是制作适配预测，不是真实表现或成功率。如果某平台假设缺失，后端会以 70% 全局预演 + 30% 平台知识置信度保守补分，不会让整批定时任务因单个模型字段漏交而丢失。至少两个平台达到 75 才进“通用选题”；否则进“平台推荐”，以最高分平台为主推，卡片小字展示如“抖音匹配度 91% / 小红书匹配度 60%”。未知平台仍可进入管线，但在完成平台研究前保守封顶 64，不能靠模型自评冒充强匹配。分类、分数、推荐平台和逐平台制作方案一起从 Cron 回执持久化到 Gateway，并原样注入 `content.topic.start`，Renderer 不在前端猜分类。
+- **SCOPE-09 / 进入内容工厂。** “交给内容工厂”调用新增结构化 `content.topic.start`，Renderer 只提交 candidate ID。Gateway 在启动 Agent turn 前重新核验候选属于当前经营主体、批次已完成且预演通过，再从原生 owner 注入不可替换的 `plan_id`、`preflight_id`、真实 topic、证据/信号引用、目标平台全集和 platform blueprints；前端标题不能覆盖原生选题。SCOPE-10 完成后 plan/preflight 的规范 owner 已是经营主体，候选记录中的 `execution_account_id` 只作为动作通道继续保留；隐藏 Agent session 不会因工作台偶然停留在另一渠道而切换动作账号，也不会把公众号和抖音事实拆成两个品牌。Agent 必须在已有计划下创建各平台真实草稿，不能重新规划成另一个题，也不能绕过预演；没有落成可见 content asset 的 turn 结算为错误，不假报完成。
+- 代表性回归使用“当前的 AI 是泡沫吗？”覆盖抖音、公众号、YouTube、LinkedIn 与未知 `mastodon`：同一 plan 生成五份不同 variant，未知平台诚实降级；中文平台别名与 X/Twitter 归一化也有单测。代码路径：`agent/marketing/platform_catalog.py`、`domains/{operating_entities,account_context,content_policy,content_assets}.py`、`intelligence/production_preflight.py`、`session_scope.py`、`tools/marketing_tools.py`、`operation_entrypoints.py`、`tui_gateway/server.py` 与 `hermes_state.py`。
+- SCOPE-10 已在下一节完成；仍未完成的是多品牌用户的显式建组/拆组/冲突审查 UI、平台画像来源/有效期/真实账号效果校准，以及五平台真实模型逐篇真人审稿、发布和跨天回收。后两项继续属于 `PLATFORM-KB calibration` 与 `E2E-01`，不得标成 human-loop。
+- 开发机真实 `agent-runtime/state.db` 已完成 schema 与成员迁移：当前“我的经营主体”关联已认证公众号和抖音两个渠道；真实聚合读取返回两个 linked contexts、共享抖音经营策略，并能在同一主体内读取当前内容资产。迁移没有改内容、portfolio、发布或指标事实。Desktop/Gateway 已重启到新代码，Vite `5174`、Electron CDP `9222` 与新的 Hermes dashboard 进程均存活；这只把 SCOPE-06 提升到 `dev-runtime`，不替代真人对话复测。
+- 当前自动化证据：新平台目录专项 `4/4`；经营主体、内容生产与 operation 定向 `36/36`；视频/账号相邻修复回归 `22 passed, 1 skipped`；此前 Marketing OS 宽回归 `217 passed, 1 skipped`；新增每日候选、真实跨平台 plan/preflight、批次幂等、规范正文哈希、缺失回执拒绝、Cron 会话绑定与模型改写拒绝均有专项覆盖。通用/平台推荐分类加入后，`tests/marketing + tests/cron` 最新全量为 `735 passed, 1 skipped`，平台匹配与 operation 定向 `17/17`；Desktop 全量复跑 `138` 文件、`1,020/1,020` 通过，工作台分组与匹配度展示 `3/3`。首次 Desktop 全量的旧 i18n 保存回滚用例受并发环境影响失败 1 项，该文件立即单跑 `10/10` 通过，随后全量复跑全绿；本轮未修改 i18n 代码。TypeScript、目标 ESLint、Ruff、Python compile 与 `git diff --check` 通过。`pkg_resources/websockets` 的 8 条第三方弃用 warning 未由本轮引入。
+
+### SCOPE-10 全量历史事实迁移到经营主体 ownership（dev-runtime，2026-07-18）
+
+- **所有权合同已落到数据库。** `ENTITY_OWNED_SCOPE_COLUMNS` 统一登记 33 张核心历史业务表，所有表都有 `entity_id TEXT NOT NULL` 规范 owner 和 `(user_id,entity_id)` 索引；`account_id` / `target_account_id` 不删除，语义收窄为采集来源、执行账号或渠道维度。发布 action、指标 checkpoint、账号 portfolio 等渠道事实因此仍能追溯具体平台账号，但品牌策略、受众、证据、内容、预演、推荐、知识和学习不会再以登录账号作为最终所有者。兼容库里的 `audience_snapshots`、`memory_candidates` 若存在，也会声明式补列并进入同一约束。
+- **迁移与新写入都 fail-closed。** schema 版本从 22 升到 23；启动时先按已有成员关系回填，旧单主体用户允许确定性归并，已有明确 `entity_id` 的事实保留原 owner，多主体但账号未分组或 prospect 事实无法唯一判断时直接拒绝启动并要求显式审查。每张表的数据库 trigger 会在同一写语句内解析主体、为明确的真实账号补成员关系，并拒绝空 owner、无效 owner 和跨主体 action account；不能再由某个漏传字段的 Repository 写出“孤儿事实”。`account_strategy_projects` 的唯一活跃约束也从 `(user_id,account_id)` 改成 `(user_id,entity_id)`，同一品牌的抖音与公众号复用一套经营策略。
+- **登录继承保持主体不变。** prospect adoption 现在先核对所有源事实只属于一个主体，再把已认证目标账号链接到该主体，最后只迁移渠道 provenance；`entity_id` 全程不变。目标账号已属于另一主体、已存在经营事实或源事实跨多个主体时继续拒绝隐式合并。旧会话仍保留原 prospect 路由，新会话绑定真实 action account，不改既有会话提示前缀。
+- **真实库升级证据。** 升级前通过 SQLite 在线 backup 生成 `state.db.pre-entity-v23.20260718-123637.bak` 回滚副本，并先在副本完成 22→23 试迁移。真实 `agent-runtime/state.db` 随后逐表升级：33 张表行数全部保持一致；11 张有数据的业务表分别为策略 `1`、受众 `1`、内容资产 `4`、生产计划 `11`、证据 `16`、账号 portfolio `2`、知识条目 `10`、自有内容观察 `11`、预演 `10`、推荐批次 `1`、推荐候选 `5`；空主体 `0`、无效主体 `0`、外键违规 `0`，`PRAGMA integrity_check=ok`。迁移识别出默认用户主体（关联抖音、公众号两个真实账号）与飞书用户空间的独立主体，没有跨用户混合。Desktop/Gateway 已在升级后重启，Vite `5174` 与 Electron CDP `9222` 正常。
+- **自动化证据。** 新增迁移专项 `6/6`，覆盖 33 表列/trigger 合同、旧可选表自动加列回填、重复启动幂等、多主体歧义拒绝、未分配真实账号跨主体写入拒绝，以及双平台账号共享同一主体策略；prospect 回归同时逐表证明 adoption 后 `entity_id` 不变、`account_id` 改为已认证账号。Marketing OS 宽回归首次运行只有旧库 import 的 trigger change 计数暴露 1 项并已修复为逻辑行数，失败文件复跑 `3/3`；随后 37 个营销相关文件全域复跑 `213/213`。SessionDB 与 Cron `876/876`、Desktop Vitest `1,020/1,020`、Electron/packaging `265 passed, 1 skipped`（Windows junction 限定）全部通过；TypeScript、Ruff lint、`git diff --check` 和正式 Desktop production build/产物断言通过，ESLint 为 `0 error` 并保留一个未修改测试文件的既有空行 warning。正式 build 输出 `4,205` 个模块，单 JS chunk `26,171.97 kB`、gzip `5,399.42 kB`，继续超过 `25,000 kB` 告警线，未生成签名安装包。
+- **本 scope 不冒充完成的事。** 数据 owner 与运行时约束已完成，但多品牌管理 UI、冲突审查 UI、平台知识时效校准、真实五平台成品人审、真实发布、自然跨天指标回收、签名安装包和产品远端备份仍未完成。当前唯一 remote 仍是 `hermes-upstream`，本轮只做本地 Git checkpoint，不 push。
 
 ## 暂停项
 

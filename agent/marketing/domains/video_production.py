@@ -42,6 +42,7 @@ PRODUCTION_STATUSES = {
     "running",
     "completed",
     "failed",
+    "archived",
 }
 _ALLOWED_VISUAL_ROLES = {"scene", "broll", "prop", "storyboard", "other"}
 _ALLOWED_AUDIO_ROLES = {"voice", "music", "sfx", "other"}
@@ -139,7 +140,7 @@ class VideoProductionRepository(MarketingDomainRepository):
         source_content = source.get("content") or {}
         if source_content.get("_production_kind") != "faceless_video":
             raise ValueError("video production requires a faceless_video content asset")
-        if source.get("status") in {"superseded", "approved", "published"}:
+        if source.get("status") in {"superseded", "approved", "published", "archived"}:
             raise ValueError("video production source asset is not current")
         if renderer != RENDERER:
             raise ValueError("renderer is not enabled in this product build")
@@ -497,6 +498,104 @@ class VideoProductionRepository(MarketingDomainRepository):
             raise KeyError("video production not found in account scope")
         return _record(row)
 
+    def archive(
+        self,
+        *,
+        production_id: str,
+        user_id: str,
+        account_id: str,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        """Soft-archive an unfinished production and its draft content records."""
+
+        if confirmed is not True:
+            raise ValueError("explicit archive confirmation is required")
+        now = _now()
+        with self._transaction() as db:
+            row = db.execute(
+                """SELECT * FROM marketing_video_productions
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (production_id, user_id, account_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("video production not found in account scope")
+            if row["status"] == "archived":
+                return _record(row)
+            if row["status"] == "running":
+                raise ValueError("a running video production cannot be archived")
+            if row["status"] not in {"prepared", "approved", "completed", "failed"}:
+                raise ValueError(
+                    f"video production cannot be archived from {row['status']}"
+                )
+            if row["status"] == "completed" and row["output_asset_id"]:
+                output = db.execute(
+                    """SELECT human_review_status FROM content_assets
+                    WHERE id=? AND user_id=? AND account_id=?""",
+                    (row["output_asset_id"], user_id, account_id),
+                ).fetchone()
+                if output is not None and output["human_review_status"] == "accepted":
+                    raise ValueError("an accepted video production is not a draft")
+            db.execute(
+                """UPDATE marketing_video_productions
+                SET status='archived',archived_from_status=?,archived_at=?,updated_at=?
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (row["status"], now, now, production_id, user_id, account_id),
+            )
+            _archive_related_content(
+                db,
+                asset_ids=(row["source_asset_id"], row["output_asset_id"]),
+                user_id=user_id,
+                account_id=account_id,
+                now=now,
+            )
+        return self.get(
+            production_id=production_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+
+    def restore_archived(
+        self,
+        *,
+        production_id: str,
+        user_id: str,
+        account_id: str,
+    ) -> dict[str, Any]:
+        """Restore an archived production and its linked content drafts."""
+
+        now = _now()
+        with self._transaction() as db:
+            row = db.execute(
+                """SELECT * FROM marketing_video_productions
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (production_id, user_id, account_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("video production not found in account scope")
+            if row["status"] != "archived":
+                raise ValueError("only an archived video production can be restored")
+            restored_status = str(row["archived_from_status"] or "prepared")
+            if restored_status not in {"prepared", "approved", "completed", "failed"}:
+                restored_status = "prepared"
+            db.execute(
+                """UPDATE marketing_video_productions
+                SET status=?,archived_from_status='',archived_at=NULL,updated_at=?
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (restored_status, now, production_id, user_id, account_id),
+            )
+            _restore_related_content(
+                db,
+                asset_ids=(row["source_asset_id"], row["output_asset_id"]),
+                user_id=user_id,
+                account_id=account_id,
+                now=now,
+            )
+        return self.get(
+            production_id=production_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+
     def list(
         self,
         *,
@@ -515,6 +614,8 @@ class VideoProductionRepository(MarketingDomainRepository):
         if status:
             query += " AND status=?"
             params.append(status)
+        else:
+            query += " AND status!='archived'"
         query += " ORDER BY updated_at DESC LIMIT ?"
         params.append(safe_limit)
         with self._connection() as db:
@@ -1363,6 +1464,8 @@ class VideoProductionRepository(MarketingDomainRepository):
                     output_asset_id TEXT REFERENCES content_assets(id),
                     receipt_json TEXT NOT NULL DEFAULT '{}',
                     failure_code TEXT,
+                    archived_from_status TEXT NOT NULL DEFAULT '',
+                    archived_at TEXT,
                     created_at TEXT NOT NULL,
                     started_at TEXT,
                     settled_at TEXT,
@@ -1382,6 +1485,101 @@ class VideoProductionRepository(MarketingDomainRepository):
                         f"ALTER TABLE marketing_video_productions "
                         f"ADD COLUMN {column} TEXT NOT NULL DEFAULT '{{}}'"
                     )
+            if "archived_from_status" not in columns:
+                db.execute(
+                    """ALTER TABLE marketing_video_productions
+                    ADD COLUMN archived_from_status TEXT NOT NULL DEFAULT ''"""
+                )
+            if "archived_at" not in columns:
+                db.execute(
+                    """ALTER TABLE marketing_video_productions
+                    ADD COLUMN archived_at TEXT"""
+                )
+
+
+def _content_plan_id(content_json: str) -> str:
+    try:
+        content = json.loads(content_json or "{}")
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(content, dict):
+        return ""
+    return str(content.get("_production_plan_id") or "").strip()
+
+
+def _archive_related_content(
+    db: sqlite3.Connection,
+    *,
+    asset_ids: Iterable[str | None],
+    user_id: str,
+    account_id: str,
+    now: str,
+) -> None:
+    for asset_id in dict.fromkeys(item for item in asset_ids if item):
+        row = db.execute(
+            """SELECT status,content_json FROM content_assets
+            WHERE id=? AND user_id=? AND account_id=?""",
+            (asset_id, user_id, account_id),
+        ).fetchone()
+        if row is None or row["status"] not in {"draft", "review_ready"}:
+            continue
+        db.execute(
+            """UPDATE content_assets
+            SET status='archived',archived_from_status=?,archived_at=?,updated_at=?
+            WHERE id=? AND user_id=? AND account_id=?""",
+            (row["status"], now, now, asset_id, user_id, account_id),
+        )
+        plan_id = _content_plan_id(row["content_json"])
+        if plan_id:
+            db.execute(
+                """UPDATE content_production_plans
+                SET status='archived',updated_at=?
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (now, plan_id, user_id, account_id),
+            )
+
+
+def _restore_related_content(
+    db: sqlite3.Connection,
+    *,
+    asset_ids: Iterable[str | None],
+    user_id: str,
+    account_id: str,
+    now: str,
+) -> None:
+    for asset_id in dict.fromkeys(item for item in asset_ids if item):
+        row = db.execute(
+            """SELECT status,archived_from_status,content_json FROM content_assets
+            WHERE id=? AND user_id=? AND account_id=?""",
+            (asset_id, user_id, account_id),
+        ).fetchone()
+        if row is None or row["status"] != "archived":
+            continue
+        restored_status = str(row["archived_from_status"] or "draft")
+        if restored_status not in {"draft", "review_ready"}:
+            restored_status = "draft"
+        db.execute(
+            """UPDATE content_assets
+            SET status=?,archived_from_status='',archived_at=NULL,updated_at=?
+            WHERE id=? AND user_id=? AND account_id=?""",
+            (restored_status, now, asset_id, user_id, account_id),
+        )
+        plan_id = _content_plan_id(row["content_json"])
+        if plan_id:
+            db.execute(
+                """UPDATE content_production_plans
+                SET status=?,updated_at=?
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (
+                    "review_ready"
+                    if restored_status == "review_ready"
+                    else "draft_created",
+                    now,
+                    plan_id,
+                    user_id,
+                    account_id,
+                ),
+            )
 
 
 def _timestamp(value: float) -> str:

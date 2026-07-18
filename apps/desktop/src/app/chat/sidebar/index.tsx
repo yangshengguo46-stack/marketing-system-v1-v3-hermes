@@ -117,6 +117,7 @@ import {
   ACCOUNT_CENTER_ROUTE,
   type AppView,
   CONTENT_FACTORY_ROUTE,
+  DRAFT_BOX_ROUTE,
   MANAGED_ROUTE,
   MATERIAL_LIBRARY_ROUTE,
   WORKBENCH_ROUTE
@@ -178,6 +179,12 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
     label: '',
     icon: props => <Codicon name="edit" {...props} />,
     route: CONTENT_FACTORY_ROUTE
+  },
+  {
+    id: 'drafts',
+    label: '',
+    icon: props => <Codicon name="archive" {...props} />,
+    route: DRAFT_BOX_ROUTE
   },
   {
     id: 'materials',
@@ -1256,6 +1263,7 @@ export function ChatSidebar({
                 const active =
                   (item.id === 'workbench' && currentView === 'workbench') ||
                   (item.id === 'content' && ['content', 'article-creation', 'video-creation'].includes(currentView)) ||
+                  (item.id === 'drafts' && currentView === 'drafts') ||
                   (item.id === 'materials' && currentView === 'materials') ||
                   (item.id === 'accounts' && currentView === 'accounts') ||
                   (item.id === 'managed' && currentView === 'managed')

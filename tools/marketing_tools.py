@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from agent.marketing.domains import (
     AccountContextRepository,
@@ -15,17 +16,24 @@ from agent.marketing.domains import (
     KnowledgeBaseRepository,
     MaterialSourcingRepository,
     MediaAssetRepository,
+    OperatingEntityRepository,
     ProductionAudioRepository,
     PublishingRepository,
     PublicContentObservationRepository,
     ShortVideoSignalRepository,
     VideoProductionRepository,
 )
-from agent.marketing.session_scope import enforce_tool_account_scope
+from agent.marketing.session_scope import (
+    enforce_tool_account_scope,
+    read_tool_session_scope,
+)
 from agent.marketing.providers import get_publish_provider, has_publish_providers
 from agent.marketing.intelligence import (
     OperatingLoopRepository,
     create_content_production_preflight,
+)
+from agent.marketing.intelligence.topic_recommendations import (
+    build_daily_topic_recommendation_batch,
 )
 from tools.registry import registry
 
@@ -43,10 +51,11 @@ LIST_ACCOUNTS_SCHEMA = {
 READ_ACCOUNT_CONTEXT_SCHEMA = {
     "name": "marketing_read_account_context",
     "description": (
-        "Read one account's verified operating context: connected account summary, lifecycle stage, "
-        "confirmed audience hypothesis, approved positioning, Account DNA and the latest first-party "
-        "audience snapshot. Use it before proposing positioning, topics, content or growth actions. "
-        "Missing fields are evidence gaps and must not be invented."
+        "Read the bound creator/brand operating entity and all of its linked platform-account "
+        "contexts: shared strategy, confirmed audience, positioning, Account DNA, first-party "
+        "portfolio facts and explicit conflicts. account_id optionally focuses one linked channel; "
+        "it does not hide the other channels. Use this before positioning, topic, content or growth "
+        "work. Missing fields are evidence gaps and must not be invented."
     ),
     "parameters": {
         "type": "object",
@@ -61,7 +70,7 @@ READ_ACCOUNT_CONTEXT_SCHEMA = {
                 "default": "default",
             },
         },
-        "required": ["account_id"],
+        "required": [],
     },
 }
 
@@ -179,7 +188,8 @@ UPDATE_ACCOUNT_LIFECYCLE_SCHEMA = {
 PLAN_CONTENT_PRODUCTION_SCHEMA = {
     "name": "marketing_plan_content_production",
     "description": (
-        "Build a Hermes-native production work order for a soft article or faceless material video. "
+        "Build a Hermes-native production work order for a soft article, faceless material video, "
+        "or one content kernel adapted into platform-native variants across any requested platform set. "
         "High-end human, digital-human, and AI film production belongs to the standalone video-studio "
         "product and is intentionally outside this tool. It reads the current conversation's account context, "
         "selects a lane and shared capabilities, then persists an immutable InfluenceOS preflight "
@@ -192,10 +202,23 @@ PLAN_CONTENT_PRODUCTION_SCHEMA = {
             "objective": {"type": "string"},
             "kind": {
                 "type": "string",
-                "enum": ["auto", "article_soft", "faceless_video"],
+                "enum": [
+                    "auto",
+                    "article_soft",
+                    "faceless_video",
+                    "cross_platform_campaign",
+                ],
                 "default": "auto",
             },
-            "platforms": {"type": "array", "items": {"type": "string"}},
+            "platforms": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Any domestic or overseas platform IDs. Use 'all' to expand every currently "
+                    "linked channel, and add named unconnected targets such as instagram or a new "
+                    "platform ID when planning future distribution."
+                ),
+            },
             "audience": {"type": "string"},
             "evidence_refs": {"type": "array", "items": {"type": "string"}},
             "constraints": {"type": "object"},
@@ -210,10 +233,99 @@ PLAN_CONTENT_PRODUCTION_SCHEMA = {
     },
 }
 
+PREFLIGHT_DAILY_TOPIC_RECOMMENDATIONS_SCHEMA = {
+    "name": "marketing_preflight_daily_topic_recommendations",
+    "description": (
+        "Finalize one daily topic-candidate batch for the operating entity bound to this "
+        "session. Every candidate is converted into an all-requested-platform production "
+        "plan and immutable InfluenceOS preflight. Only candidates whose deterministic "
+        "preflight returns go=true appear in delivery_markdown; blocked candidates remain "
+        "research-only. For a scheduled recommendation, call this exactly once and return "
+        "delivery_markdown verbatim as the entire final response."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "platforms": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Use 'all' for every linked platform. Named domestic or overseas targets "
+                    "may be added; the list is extensible and never limited to two platforms."
+                ),
+            },
+            "candidates": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string"},
+                        "angle": {"type": "string"},
+                        "why_now": {"type": "string"},
+                        "audience": {"type": "string"},
+                        "platforms": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional extra future/overseas targets for this topic.",
+                        },
+                        "evidence_refs": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Verified EvidencePack IDs captured by native collectors. "
+                                "Without verified evidence the candidate cannot be recommended."
+                            ),
+                        },
+                        "signal_refs": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Durable IDs of the owned/public/model signals used.",
+                        },
+                        "platform_fit_hypotheses": {
+                            "type": "array",
+                            "description": (
+                                "A platform-by-platform predictive hypothesis, not observed performance. "
+                                "Cover every requested platform. The preflight engine recalibrates these "
+                                "scores before classifying a topic as general or platform-specific."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "platform": {"type": "string"},
+                                    "match_score": {
+                                        "type": "number",
+                                        "minimum": 0,
+                                        "maximum": 100,
+                                    },
+                                    "rationale": {"type": "string"},
+                                    "evidence_refs": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": (
+                                            "Optional subset of this candidate's verified evidence IDs "
+                                            "that specifically supports the platform-fit rationale."
+                                        ),
+                                    },
+                                },
+                                "required": ["platform", "match_score", "rationale"],
+                            },
+                        },
+                    },
+                    "required": ["topic", "evidence_refs"],
+                },
+            },
+        },
+        "required": ["candidates"],
+    },
+}
+
 READ_CONTENT_ASSETS_SCHEMA = {
     "name": "marketing_read_content_assets",
     "description": (
-        "List durable content drafts and assets for the account bound to this conversation. "
+        "List durable content drafts and assets across every platform account linked to the "
+        "operating entity bound to this conversation. "
         "Use it to resume prior work instead of recreating or storing drafts in long-term memory."
     ),
     "parameters": {
@@ -250,8 +362,8 @@ READ_VIDEO_PRODUCTIONS_SCHEMA = {
 READ_EVIDENCE_PACK_SCHEMA = {
     "name": "marketing_read_evidence_pack",
     "description": (
-        "Read evidence records automatically captured from successful native collectors for the "
-        "account bound to this conversation. Cite the returned evidence IDs in production tools. "
+        "Read evidence records automatically captured from successful native collectors across "
+        "the bound operating entity's linked accounts. Cite the returned evidence IDs in production tools. "
         "A verified record proves source integrity, capture time and content hash; it does not by "
         "itself prove every claim on the source page is true."
     ),
@@ -375,7 +487,17 @@ INTERPRET_PUBLIC_CONTENT_SCHEMA = {
                                         },
                                         "cognitive_projection": {
                                             "type": "string",
-                                            "enum": ["Se", "Si", "Ne", "Ni", "Te", "Ti", "Fe", "Fi", "unknown"],
+                                            "enum": [
+                                                "Se",
+                                                "Si",
+                                                "Ne",
+                                                "Ni",
+                                                "Te",
+                                                "Ti",
+                                                "Fe",
+                                                "Fi",
+                                                "unknown",
+                                            ],
                                         },
                                         "existence_strategy": {
                                             "type": "string",
@@ -448,12 +570,22 @@ READ_ACCOUNT_PORTFOLIO_SCHEMA = {
     "name": "marketing_read_account_portfolio",
     "description": (
         "Read the latest verified owned-content portfolio and transparent execution baseline for "
-        "the account bound to this conversation. For a WeChat Official Account, call "
+        "one explicitly requested platform account linked to the bound operating entity. If omitted, "
+        "the action account is used. For a WeChat Official Account, call "
         "browser_collect_wechat_official_portfolio first to refresh its published articles. "
         "Separate observed facts, qualitative interpretation and recommendations; missing response "
         "metrics are data gaps and must not be invented."
     ),
-    "parameters": {"type": "object", "properties": {}, "required": []},
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "account_id": {
+                "type": "string",
+                "description": "Optional linked platform account id; defaults to the action account.",
+            }
+        },
+        "required": [],
+    },
 }
 
 READ_KNOWLEDGE_SCHEMA = {
@@ -581,8 +713,9 @@ REACTION_SCENARIOS_SCHEMA = {
 CREATE_CONTENT_DRAFT_SCHEMA = {
     "name": "marketing_draft_content_create",
     "description": (
-        "Save a substantive, reversible video/image/caption draft for the account bound to this "
-        "conversation. Article drafts must use marketing_draft_article_create so parent/variant and "
+        "Save a substantive, reversible video/image/caption or cross-platform campaign draft for the "
+        "operating entity bound to this conversation. Article drafts must use "
+        "marketing_draft_article_create so parent/variant and "
         "citation checks cannot be bypassed. At least one verified EvidencePack ID is required. The "
         "draft must include anonymous social reaction scenarios for later comment-cluster retro. The "
         "account id is taken from the Hermes session and cannot be supplied or overridden by the model."
@@ -600,7 +733,7 @@ CREATE_CONTENT_DRAFT_SCHEMA = {
             "platform": {"type": "string"},
             "production_kind": {
                 "type": "string",
-                "enum": ["article_soft", "faceless_video"],
+                "enum": ["article_soft", "faceless_video", "cross_platform_campaign"],
             },
             "topic": {"type": "string"},
             "hook": {"type": "string"},
@@ -609,7 +742,11 @@ CREATE_CONTENT_DRAFT_SCHEMA = {
                 "description": (
                     "Draft payload. Video drafts should include sound_plan with mode, mix_role and "
                     "opening_cue_ms; trend_sound additionally requires a verified sound_id returned "
-                    "by marketing_read_sound_trends."
+                    "by marketing_read_sound_trends. cross_platform_campaign drafts use "
+                    "platform=multi_platform and must contain one substantive platform_variants "
+                    "entry for every planned platform. Every entry needs format plus an "
+                    "adaptation_basis with audience_intent, opening, structure and cta; unknown "
+                    "platforms must retain the plan's explicit research gap instead of inventing rules."
                 ),
             },
             "evidence_refs": {"type": "array", "items": {"type": "string"}},
@@ -959,8 +1096,54 @@ QUERY_PUBLISH_SCHEMA = {
 }
 
 
-def _list_accounts(_args: dict, **_kwargs) -> str:
-    return json.dumps(AccountContextRepository().list_accounts(), ensure_ascii=False)
+def _list_accounts(_args: dict, **kwargs) -> str:
+    result = AccountContextRepository().list_accounts()
+    scope = read_tool_session_scope(
+        task_id=kwargs.get("task_id"), session_id=kwargs.get("session_id")
+    )
+    if scope and scope.get("entity_id"):
+        entity = OperatingEntityRepository().get(
+            entity_id=str(scope["entity_id"]), user_id=str(scope["user_id"])
+        )
+        result["operating_entity"] = {
+            "id": entity["id"],
+            "label": entity["label"],
+            "account_ids": entity.get("account_ids", []),
+            "platforms": entity.get("platforms", []),
+        }
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _entity_account_ids(scope: dict | None, *, fallback: str) -> list[str]:
+    """Resolve the bounded entity read set without changing the action account."""
+
+    if not scope or not scope.get("entity_id"):
+        return [fallback]
+    entity = OperatingEntityRepository().get(
+        entity_id=str(scope["entity_id"]), user_id=str(scope["user_id"])
+    )
+    values = [str(item) for item in entity.get("account_ids", []) if str(item)]
+    return values or [fallback]
+
+
+def _resolved_plan_platforms(value, *, entity_platforms: list[str]) -> list[str] | None:
+    """Expand an all-platform marker to current channels while retaining named targets."""
+
+    if value is None:
+        return None
+    raw = [value] if isinstance(value, str) else list(value or [])
+    all_markers = {"*", "all", "all_platforms", "全平台", "所有平台"}
+    has_all = any(str(item or "").strip().lower() in all_markers for item in raw)
+    named = [item for item in raw if str(item or "").strip().lower() not in all_markers]
+    if not has_all:
+        return named
+    return list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in [*entity_platforms, *named]
+            if str(item).strip()
+        )
+    )
 
 
 def _read_account_context(args: dict, **kwargs) -> str:
@@ -969,10 +1152,20 @@ def _read_account_context(args: dict, **kwargs) -> str:
         task_id=kwargs.get("task_id"),
         session_id=kwargs.get("session_id"),
     )
-    result = AccountContextRepository().read(
-        user_id=user_id,
-        account_id=account_id,
+    scope = read_tool_session_scope(
+        task_id=kwargs.get("task_id"), session_id=kwargs.get("session_id")
     )
+    if scope and scope.get("entity_id"):
+        result = AccountContextRepository().read_operating_entity(
+            user_id=user_id,
+            entity_id=str(scope["entity_id"]),
+            focus_account_id=account_id,
+        )
+    else:
+        result = AccountContextRepository().read(
+            user_id=user_id,
+            account_id=account_id,
+        )
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -1161,7 +1354,30 @@ def _plan_content_production(args: dict, **kwargs) -> str:
         session_id=kwargs.get("session_id"),
         require_bound=True,
     )
-    context = AccountContextRepository().read(user_id=user_id, account_id=account_id)
+    context_repository = AccountContextRepository()
+    action_context = context_repository.read(user_id=user_id, account_id=account_id)
+    scope = read_tool_session_scope(
+        task_id=kwargs.get("task_id"), session_id=kwargs.get("session_id")
+    )
+    entity_context: dict = {}
+    entity_platforms: list[str] = []
+    if scope and scope.get("entity_id"):
+        entity_context = context_repository.read_operating_entity(
+            user_id=user_id,
+            entity_id=str(scope["entity_id"]),
+            focus_account_id=account_id,
+        )
+        entity_platforms = list(
+            (entity_context.get("operating_entity") or {}).get("platforms") or []
+        )
+    shared_context = entity_context.get("shared_operating_context") or action_context
+    context = {
+        **shared_context,
+        "account_id": account_id,
+        "connected": action_context.get("connected", False),
+        "account": action_context.get("account"),
+        "entity_id": (scope or {}).get("entity_id"),
+    }
     experiment_id = str(args.get("experiment_id") or "").strip()
     if experiment_id:
         project_id = str((context.get("lifecycle") or {}).get("project_id") or "")
@@ -1188,10 +1404,22 @@ def _plan_content_production(args: dict, **kwargs) -> str:
                 evidence_ids=evidence_refs,
             )
         ]
+    objective = str(args.get("objective") or "")
+    requested_kind = str(args.get("kind") or "auto")
+    requested_platforms = _resolved_plan_platforms(
+        args.get("platforms"), entity_platforms=entity_platforms
+    )
+    asks_for_all_platforms = any(
+        marker in objective for marker in ("全平台", "所有平台", "各平台", "每个平台")
+    )
+    if requested_platforms is None and (
+        requested_kind == "cross_platform_campaign" or asks_for_all_platforms
+    ):
+        requested_platforms = entity_platforms
     result = ContentProductionPolicy().plan(
-        objective=str(args.get("objective") or ""),
-        kind=str(args.get("kind") or "auto"),
-        platforms=args.get("platforms"),
+        objective=objective,
+        kind=requested_kind,
+        platforms=requested_platforms,
         audience=str(args.get("audience") or ""),
         evidence_refs=evidence_refs,
         constraints=args.get("constraints") or {},
@@ -1257,7 +1485,97 @@ def _plan_content_production(args: dict, **kwargs) -> str:
                 "decision": preflight["preflight_decision"],
                 "publish_eligible": preflight["decision"]["publish_eligible"],
                 "influence_score": preflight["influence_score"],
+                "platform_assessments": preflight["platform_assessments"],
+                "recommendation_eligible": preflight["preflight_decision"].get("go")
+                is True,
+                "recommendation_status": (
+                    "recommended"
+                    if preflight["preflight_decision"].get("go") is True
+                    else "research_only"
+                ),
             },
+            "operating_entity": entity_context.get("operating_entity"),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _preflight_daily_topic_recommendations(args: dict, **kwargs) -> str:
+    session_id = str(kwargs.get("session_id") or kwargs.get("task_id") or "").strip()
+    if not session_id:
+        raise ValueError("daily topic preflight requires a durable session")
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    scope = read_tool_session_scope(
+        task_id=kwargs.get("task_id"), session_id=kwargs.get("session_id")
+    )
+    if not scope or not scope.get("entity_id"):
+        raise ValueError("daily topic preflight requires an operating-entity scope")
+    entity = OperatingEntityRepository().get(
+        entity_id=str(scope["entity_id"]), user_id=user_id
+    )
+    requested = args.get("platforms")
+    if requested is None:
+        platforms = list(entity.get("platforms") or [])
+    else:
+        platforms = (
+            _resolved_plan_platforms(
+                requested, entity_platforms=list(entity.get("platforms") or [])
+            )
+            or []
+        )
+    if not platforms:
+        raise ValueError(
+            "daily topic preflight requires a linked platform or an explicit target platform"
+        )
+    batch = build_daily_topic_recommendation_batch(
+        user_id=user_id,
+        entity_id=str(scope["entity_id"]),
+        account_id=account_id,
+        session_id=session_id,
+        as_of_date=datetime.now().astimezone().date().isoformat(),
+        candidates=args.get("candidates") or [],
+        target_platforms=platforms,
+    )
+    return json.dumps(
+        {
+            "contract": "marketing.daily_topic_recommendations.v1",
+            "batch_id": batch["id"],
+            "status": batch["status"],
+            "recommended_count": batch["recommended_count"],
+            "research_only_count": batch["research_only_count"],
+            "delivery_sha256": batch["delivery_sha256"],
+            "delivery_markdown": batch["delivery_text"],
+            "candidate_receipts": [
+                {
+                    "rank": item["rank"],
+                    "topic": item["topic"],
+                    "plan_id": item["plan_id"],
+                    "preflight_id": item["preflight_id"],
+                    "decision_status": item["decision_status"],
+                    "recommendation_eligible": item["recommendation_eligible"],
+                    "recommendation_type": (item.get("candidate") or {}).get(
+                        "recommendation_type"
+                    ),
+                    "recommended_platforms": (item.get("candidate") or {}).get(
+                        "recommended_platforms"
+                    )
+                    or [],
+                    "platform_matches": (item.get("candidate") or {}).get(
+                        "platform_matches"
+                    )
+                    or [],
+                }
+                for item in batch["candidates"]
+            ],
+            "final_response_contract": (
+                "Return delivery_markdown verbatim with no prefix, suffix, explanation, "
+                "rewriting, code fence, or extra whitespace."
+            ),
         },
         ensure_ascii=False,
     )
@@ -1270,13 +1588,32 @@ def _read_content_assets(args: dict, **kwargs) -> str:
         session_id=kwargs.get("session_id"),
         require_bound=True,
     )
-    result = ContentAssetRepository().list(
-        user_id=user_id,
-        account_id=account_id,
-        status=str(args.get("status") or "") or None,
-        platform=str(args.get("platform") or "") or None,
-        limit=int(args.get("limit") or 20),
+    scope = read_tool_session_scope(
+        task_id=kwargs.get("task_id"), session_id=kwargs.get("session_id")
     )
+    limit = int(args.get("limit") or 20)
+    repository = ContentAssetRepository()
+    account_ids = _entity_account_ids(scope, fallback=account_id)
+    assets = [
+        asset
+        for scoped_account_id in account_ids
+        for asset in repository.list(
+            user_id=user_id,
+            account_id=scoped_account_id,
+            status=str(args.get("status") or "") or None,
+            platform=str(args.get("platform") or "") or None,
+            limit=limit,
+        ).get("assets", [])
+    ]
+    assets.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    result = {
+        "user_id": user_id,
+        "entity_id": (scope or {}).get("entity_id"),
+        "action_account_id": account_id,
+        "account_ids": account_ids,
+        "assets": assets[:limit],
+        "total": min(len(assets), limit),
+    }
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -1303,12 +1640,34 @@ def _read_evidence_pack(args: dict, **kwargs) -> str:
         session_id=kwargs.get("session_id"),
         require_bound=True,
     )
-    result = EvidenceRepository().list(
-        user_id=user_id,
-        account_id=account_id,
-        status=str(args.get("status") or "verified"),
-        limit=int(args.get("limit") or 20),
+    scope = read_tool_session_scope(
+        task_id=kwargs.get("task_id"), session_id=kwargs.get("session_id")
     )
+    limit = int(args.get("limit") or 20)
+    repository = EvidenceRepository()
+    account_ids = _entity_account_ids(scope, fallback=account_id)
+    records = [
+        record
+        for scoped_account_id in account_ids
+        for record in repository.list(
+            user_id=user_id,
+            account_id=scoped_account_id,
+            status=str(args.get("status") or "verified"),
+            limit=limit,
+        ).get("records", [])
+    ]
+    records.sort(key=lambda item: str(item.get("captured_at") or ""), reverse=True)
+    result = {
+        "user_id": user_id,
+        "entity_id": (scope or {}).get("entity_id"),
+        "action_account_id": account_id,
+        "account_ids": account_ids,
+        "records": records[:limit],
+        "total": min(len(records), limit),
+        "verification_semantics": (
+            "verified means source integrity is complete; it does not assert every claim is true"
+        ),
+    }
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -1367,9 +1726,9 @@ def _interpret_public_content(args: dict, **kwargs) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def _read_account_portfolio(_args: dict, **kwargs) -> str:
+def _read_account_portfolio(args: dict, **kwargs) -> str:
     user_id, account_id = enforce_tool_account_scope(
-        {},
+        args,
         task_id=kwargs.get("task_id"),
         session_id=kwargs.get("session_id"),
         require_bound=True,
@@ -1831,6 +2190,15 @@ registry.register(
     handler=_plan_content_production,
     description="Plan one account-scoped content production job with explicit evidence and rights gates.",
     emoji="🗺️",
+)
+
+registry.register(
+    name="marketing_preflight_daily_topic_recommendations",
+    toolset="marketing",
+    schema=PREFLIGHT_DAILY_TOPIC_RECOMMENDATIONS_SCHEMA,
+    handler=_preflight_daily_topic_recommendations,
+    description="Preflight and receipt-bind every candidate in one daily recommendation batch.",
+    emoji="🎯",
 )
 
 registry.register(

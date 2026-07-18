@@ -1348,6 +1348,7 @@ export const zhHant = defineLocale({
     nav: {
       workbench: '工作台',
       'new-session': '新工作階段',
+      drafts: '草稿箱',
       skills: '技能與工具',
       messaging: '訊息平台',
       artifacts: '成品'

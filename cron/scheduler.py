@@ -2505,6 +2505,33 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             session_id=_cron_session_id,
             session_db=_session_db,
         )
+
+        # Product-owned Cron jobs must run inside the same durable Marketing
+        # scope as interactive sessions. Bind before the first model call so
+        # every model tool is entity-scoped and cross-account access is checked.
+        _product_contract = str(job.get("product_contract") or "").strip()
+        if _product_contract:
+            if _session_db is None:
+                raise RuntimeError(
+                    "product Cron contract requires the durable session database"
+                )
+            from agent.marketing.session_scope import resolve_account_scope
+
+            _marketing_scope = resolve_account_scope(
+                user_id="default",
+                account_id=str(job.get("marketing_account_id") or ""),
+            )
+            agent._ensure_db_session()
+            if not _session_db.update_session_marketing_scope(
+                _cron_session_id,
+                marketing_user_id=str(_marketing_scope["user_id"]),
+                marketing_entity_id=str(_marketing_scope["entity_id"]),
+                marketing_account_id=str(_marketing_scope["account_id"]),
+                require_pristine=True,
+            ):
+                raise RuntimeError(
+                    "could not bind product Cron session to its Marketing OS account"
+                )
         
         # Run the agent with an *inactivity*-based timeout: the job can run
         # for hours if it's actively calling tools / receiving stream tokens,
@@ -2654,6 +2681,14 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                     turn_exit_reason,
                 )
                 final_response = ""
+        if job.get("product_contract"):
+            from cron.product_output_contracts import validate_product_cron_output
+
+            validate_product_cron_output(
+                job=job,
+                session_id=_cron_session_id,
+                content=final_response,
+            )
         # Use a separate variable for log display; keep final_response clean
         # for delivery logic (empty response = no delivery).
         logged_response = final_response if final_response else "(No response generated)"

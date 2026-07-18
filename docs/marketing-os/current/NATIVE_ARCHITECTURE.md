@@ -36,17 +36,20 @@ Memory/Skill     Marketing domain  MCP/Channels
 | 工具执行 | Hermes tool registry/middleware | 原生注册账号、证据、内容能力；预演在 action 前自动发生 |
 | 外部副作用 | Hermes approval/effect boundary | 发布、付费、敏感账号动作必须生成可验证回执 |
 | 记忆 | Hermes memory/Skill ecosystem | 只接收治理通过的候选；不保存草稿和瞬时热点 |
+| 内容半成品生命周期 | `ContentAssetRepository` / `VideoProductionRepository` | 原状态软归档与恢复；`DraftBoxRepository` 只做账号投影和分派 |
 | 消息渠道 | Hermes Gateway | 飞书/微信只是同一会话 surface |
 | 定时任务 | Hermes cron/scheduler | 指标 checkpoint、复盘和异常提醒 |
 | 产品界面 | `apps/desktop` | 展示结论、资产、回执和控制，不拥有第二业务状态机 |
 
 ## Desktop / Gateway 合同审计（2026-07-17）
 
-当前依赖方向是单向的：Desktop 通过 Gateway 读取或提交结构化意图，后端不导入 Desktop；账号、素材、内容、视频、发布和学习事实仍由 Hermes Repository 与 `state.db` 拥有。Renderer 当前消费 22 个 `marketing.*` RPC，Gateway 暴露 33 个；未被 Desktop 使用的 11 个入口可能供消息渠道、后续治理界面或兼容路径使用，未经调用方审计不得按“前端没用”删除。Gateway 注册器已改为重复方法名立即失败，避免后声明静默覆盖前 handler。
+当前依赖方向是单向的：Desktop 通过 Gateway 读取或提交结构化意图，后端不导入 Desktop；账号、素材、内容、视频、发布和学习事实仍由 Hermes Repository 与 `state.db` 拥有。Renderer 当前消费 25 个 `marketing.*` RPC，Gateway 暴露 36 个；未被 Desktop 使用的 11 个入口可能供消息渠道、后续治理界面或兼容路径使用，未经调用方审计不得按“前端没用”删除。Gateway 注册器已改为重复方法名立即失败，避免后声明静默覆盖前 handler。
 
-任务协议泄漏已在本轮收口：Desktop 只向 `marketing.operation.start` 提交账号、资产、生产任务、场景、阶段和用户真实输入，Gateway 在后端内部完成校验、附件原生化、账号作用域 session、Agent 启动和提示合同；Renderer 不再读取后端 prompt，不再调用 `session.create` / `prompt.submit`，也不再用通用 `session.status=idle` 猜测业务完成。`marketing.operation.status` 统一返回 `working / waiting / complete / error` 和新建或绑定的领域对象引用；`desktop-product` 内部 session 不进入普通 Chat 历史。UI 任务卡仍只是内存展示投影，页面切换依靠 operation id 继续读取后端状态，内容、视频和经营结果继续由原生领域 owner 持久化。
+草稿箱不建立新的 owner。`marketing.drafts.list` 只把当前账号的未完成 ContentAsset 与 VideoProduction 汇总成 bounded projection，并抑制 production source/output 的重复展示；`marketing.draft.archive/restore` 再分别委托原生内容或视频 Repository。归档字段、关联计划与视频 source/output 资产在 `state.db` 中同步结算，Electron 只收集确认并按资产/production ID 回到原图文审核或视频导演台。运行中任务不能归档，已验收成品不进入草稿投影，删除历史不属于该合同。
 
-剩余债务有两类。第一，operation projection 目前绑定 Gateway 活跃 session，尚未成为可在 Gateway/应用重启后恢复的持久 Hermes task projection；在补齐 durable owner 之前不能宣称重启恢复。第二，Desktop 各页面仍有手写 RPC payload，缺少共享的可校验 contract；`desktop-controller.tsx`、`growth-dashboard.tsx`、`video-production-workbench.tsx` 仍然较大。后续拆分必须按 native owner 的 query/command projection 切，不得借拆组件新建 Electron Store 或第二任务状态机。Electron 直接能力目前只用于用户文件/文件夹选择、拖入路径解析和远程附件读取，仍属于交互输入，不拥有素材导入、授权、复制或生产状态。
+任务协议泄漏已在本轮收口：Desktop 只向 `marketing.operation.start` 提交账号、资产、生产任务、场景、阶段和用户真实输入，Gateway 在后端内部完成校验、附件原生化、账号作用域 session、Agent 启动和提示合同；Renderer 不再读取后端 prompt，不再调用 `session.create` / `prompt.submit`，也不再用通用 `session.status=idle` 猜测业务完成。`marketing.operation.status` 统一返回 `working / waiting / complete / error` 和新建或绑定的领域对象引用；`desktop-product` 内部 session 不进入普通 Chat 历史。UI 任务卡仍只是内存展示投影，页面切换依靠 operation id 继续读取后端状态，内容、视频和经营结果继续由原生领域 owner 持久化。operation 的产品投影现由 `state.db` 中的 `marketing_operations` 和原生 `MarketingOperationRepository` 持久化；Gateway 重启后已完成结果可继续读取，未完成 Agent turn 会明确结算为可重试错误且绝不自动重放外部副作用。
+
+剩余债务有两类。第一，当前只完成 operation 产品投影和终态恢复，没有在进程崩溃后自动恢复未完成 Agent turn；这类 turn 必须由用户基于已保留的原始输入显式重试，直到 Hermes 通用 task/checkpoint 提供可证明安全的续跑合同。第二，Desktop 各页面仍有手写 RPC payload，缺少共享的可校验 contract；`desktop-controller.tsx`、`growth-dashboard.tsx`、`video-production-workbench.tsx` 仍然较大。后续拆分必须按 native owner 的 query/command projection 切，不得借拆组件新建 Electron Store 或第二任务状态机。Electron 直接能力目前只用于用户文件/文件夹选择、拖入路径解析和远程附件读取，仍属于交互输入，不拥有素材导入、授权、复制或生产状态。
 
 ## 经营领域
 
@@ -57,7 +60,7 @@ agent/product.py
 agent/marketing/
   domains/
     account_*.py                  # 账号上下文、生命周期、经营策略与组合
-    content_*.py / article_drafts.py
+    content_*.py / article_drafts.py / drafts.py
     evidence.py / browser_payloads.py
     human_model.py / knowledge_*.py
     media_assets.py / material_sourcing.py / production_audio.py
@@ -83,6 +86,8 @@ apps/desktop/src/app/workbench/
 ## 唯一业务状态库与数据飞轮
 
 Hermes `state.db` 是会话、账号、受众、内容、预演、回执、指标和学习候选的唯一产品数据库 owner。历史 `agent_core.db` 只允许一次性、可校验迁移，不再接收新写入；Electron 不决定业务数据库路径。
+
+账号之上新增 `marketing_operating_entities` 原生身份层。`entity_id` 表示同一个 creator/brand，`account_id` 表示一个具体平台渠道与外部 effect 边界；Session 同时保存两者。读模型可以按 entity 聚合关联账号的策略、内容、证据和 portfolio，但浏览器、登录、采集写入、发布和其它不可逆动作必须保留明确 action account。未关联账号不能借聚合读取越权；多 entity 时不允许自动猜归属。当前历史领域表仍由 `account_id` 写入，entity projection 是迁移阶段的原生上层 owner，不是 Electron adapter；全表 entity ownership 迁移必须逐表处理唯一键、发布归属和 prospect adoption 后再执行。
 
 - 私有经营事实保留 user/account scope，驱动本地记忆、账号策略和技能学习。
 - 匿名知识贡献必须显式授权、去标识化、结构化并经过最小群组阈值，才能进入未来中央知识库。
@@ -155,8 +160,8 @@ Hermes local facts
 
 ```text
 User goal
-→ Session account scope
-→ AccountContext
+→ Session operating-entity scope + action-account boundary
+→ aggregate AccountContext / channel facts
 → EvidencePack
 → ContentProductionPolicy
 → production plan checkpoint
@@ -226,6 +231,8 @@ Candidate_t = interpret(Retro_t, repeated evidence, user feedback)
 - PlatformOps：格式、分发闸门、合规、标签、时长、编辑器和平台表达。
 - 同一父内容生成平台变体，但共享同一事实、受众目标和经营假设。
 - 平台知识必须带来源、地区、版本、生效/失效时间。
+- 登录/浏览器 connector 目录可以是有限实现集；内容适配目录不是 connector 白名单。任意安全国内或海外平台 ID 都能进入 `cross_platform_campaign`，但未知平台必须标记调研缺口并只输出通用可重排素材，不得套用相似平台规则冒充原生适配。
+- 跨平台 campaign 的每个平台变体都必须保存格式以及 audience/opening/structure/CTA 适配依据，并与其它平台变体保持实质差异；共享的是 content kernel 和 EvidencePack，不是复制粘贴的成稿。
 
 ## 账号浏览器是原生 MCP
 

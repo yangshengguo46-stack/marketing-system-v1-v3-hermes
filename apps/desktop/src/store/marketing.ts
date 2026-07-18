@@ -58,7 +58,6 @@ export interface MarketingMaterialViewState {
 
 export const $marketingAccounts = atom<MarketingAccountSummary[]>([])
 export const $selectedMarketingAccountId = persistentAtom('marketing-os.desktop.selected-account', '', Codecs.text)
-export const $marketingJourneyGoalDraft = persistentAtom('marketing-os.desktop.journey-goal-draft', '', Codecs.text)
 export const $marketingArticleDrafts = persistentAtom<Record<string, string>>(
   'marketing-os.desktop.article-drafts',
   {},

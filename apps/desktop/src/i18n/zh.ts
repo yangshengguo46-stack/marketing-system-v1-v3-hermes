@@ -1459,6 +1459,7 @@ export const zh: Translations = {
       content: '内容工厂',
       'article-creation': '图文创作',
       'video-creation': '视频创作',
+      drafts: '草稿箱',
       materials: '素材库',
       accounts: '账号管理',
       managed: '托管',

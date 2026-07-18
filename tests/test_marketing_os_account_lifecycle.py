@@ -260,10 +260,26 @@ def test_native_tool_writes_only_the_conversation_bound_account(
             enabled_toolsets=["marketing"],
         )
     )
+    unlinked_account = json.loads(
+        handle_function_call(
+            "marketing_read_account_context",
+            {"account_id": "acct-not-in-entity"},
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
 
     assert begun["account_context"]["account_id"] == "acct-1"
     assert confirmed["account_context"]["lifecycle"]["stage"] == "audience_hypothesis_ready"
-    assert "does not match the bound conversation" in cross_account["error"]
+    assert cross_account["entity_id"].startswith("entity_")
+    assert cross_account["focus_account_id"] == "acct-2"
+    assert set(cross_account["operating_entity"]["account_ids"]) == {
+        "acct-1",
+        "acct-2",
+    }
+    assert cross_account["shared_operating_context"]["account_id"] == "acct-1"
+    assert "not linked to the bound operating entity" in unlinked_account["error"]
     assert AccountContextRepository(paths).read(
         user_id="default", account_id="acct-2"
     )["lifecycle"]["stage"] == "not_started"

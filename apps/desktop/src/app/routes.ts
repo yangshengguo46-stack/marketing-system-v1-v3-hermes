@@ -4,6 +4,7 @@ export const WORKBENCH_ROUTE = '/'
 export const CONTENT_FACTORY_ROUTE = '/content'
 export const ARTICLE_CREATION_ROUTE = '/content/article'
 export const VIDEO_CREATION_ROUTE = '/content/video'
+export const DRAFT_BOX_ROUTE = '/drafts'
 export const MATERIAL_LIBRARY_ROUTE = '/materials'
 export const ACCOUNT_CENTER_ROUTE = '/accounts'
 export const MANAGED_ROUTE = '/managed'
@@ -31,6 +32,7 @@ export type AppView =
   | 'content'
   | 'article-creation'
   | 'video-creation'
+  | 'drafts'
   | 'materials'
   | 'managed'
 
@@ -49,6 +51,7 @@ export type AppRouteId =
   | 'content'
   | 'article-creation'
   | 'video-creation'
+  | 'drafts'
   | 'materials'
   | 'managed'
 
@@ -63,6 +66,7 @@ export const APP_ROUTES = [
   { id: 'content', path: CONTENT_FACTORY_ROUTE, view: 'content' },
   { id: 'article-creation', path: ARTICLE_CREATION_ROUTE, view: 'article-creation' },
   { id: 'video-creation', path: VIDEO_CREATION_ROUTE, view: 'video-creation' },
+  { id: 'drafts', path: DRAFT_BOX_ROUTE, view: 'drafts' },
   { id: 'materials', path: MATERIAL_LIBRARY_ROUTE, view: 'materials' },
   { id: 'accounts', path: ACCOUNT_CENTER_ROUTE, view: 'accounts' },
   { id: 'managed', path: MANAGED_ROUTE, view: 'managed' },

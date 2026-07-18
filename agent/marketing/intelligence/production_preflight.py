@@ -16,6 +16,10 @@ from __future__ import annotations
 from typing import Any
 
 from agent.marketing.domains.content_policy import ContentProductionPolicy
+from agent.marketing.platform_catalog import (
+    platform_content_blueprints,
+    platform_profile_confidence,
+)
 
 from .influence_score import build_influence_score
 from .preflight_decision import build_preflight_decision
@@ -92,17 +96,11 @@ def _memory_signal(params: dict[str, Any]) -> float:
 
 def _platform_fit(plan: dict[str, Any]) -> float:
     platforms = plan.get("target_platforms") or []
-    kind = plan.get("kind")
     if not platforms:
         return 0.45
-    if kind == "article_soft" and set(platforms).issubset({"zhihu", "wechat_official"}):
-        return 0.82
-    if kind == "faceless_video" and any(
-        item in {"douyin", "wechat_channels", "bilibili", "xiaohongshu", "kuaishou"}
-        for item in platforms
-    ):
-        return 0.78
-    return 0.62
+    return _clamp(
+        sum(platform_profile_confidence(item) for item in platforms) / len(platforms)
+    )
 
 
 def _production_feasibility(kind: str, url_evidence: int, has_audience: bool) -> float:
@@ -110,6 +108,8 @@ def _production_feasibility(kind: str, url_evidence: int, has_audience: bool) ->
         return _clamp(0.58 + (0.18 if url_evidence else 0.0) + (0.12 if has_audience else 0.0))
     if kind == "faceless_video":
         return _clamp(0.42 + (0.18 if url_evidence else 0.0) + (0.12 if has_audience else 0.0))
+    if kind == "cross_platform_campaign":
+        return _clamp(0.36 + (0.18 if url_evidence else 0.0) + (0.12 if has_audience else 0.0))
     return 0.45
 
 
@@ -151,9 +151,20 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
     audience_fit = 0.78 if has_audience else 0.34
     evidence_strength = _clamp(0.28 + min(0.45, 0.15 * url_evidence))
     platform_fit = _platform_fit(plan)
+    platform_blueprints = platform_content_blueprints(plan.get("target_platforms") or [])
+    platform_assessments = {
+        platform: {
+            "fit": platform_profile_confidence(platform),
+            "guidance_status": blueprint["guidance_status"],
+            "recommended_formats": blueprint["recommended_formats"],
+            "discovery_mode": blueprint["discovery_mode"],
+            "audience_intent": blueprint["audience_intent"],
+        }
+        for platform, blueprint in platform_blueprints.items()
+    }
     production_feasibility = _production_feasibility(kind, url_evidence, has_audience)
     cost_safety = 0.82
-    if kind == "faceless_video":
+    if kind in {"faceless_video", "cross_platform_campaign"}:
         cost_safety = 0.68
 
     scores = {
@@ -207,12 +218,15 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         blockers.append("audience_context_missing")
     if not has_current_strategy:
         warnings.append("account_strategy_missing_or_stale_exploratory_draft_only")
-    if kind in {"article_soft", "faceless_video"} and url_evidence == 0:
+    if kind in {"article_soft", "faceless_video", "cross_platform_campaign"} and url_evidence == 0:
         blockers.append("url_evidence_missing")
-    if kind == "faceless_video" and "stock_material" in (plan.get("capabilities") or {}):
+    if kind in {"faceless_video", "cross_platform_campaign"} and "stock_material" in (plan.get("capabilities") or {}):
         warnings.append("material_license_check_required")
     if kind == "faceless_video" and not sound_candidates:
         warnings.append("bgm_trend_evidence_missing")
+    for platform, assessment in platform_assessments.items():
+        if str(assessment.get("guidance_status") or "").startswith("generic_"):
+            warnings.append(f"platform_guidance_unverified:{platform}")
 
     influence_score = build_influence_score({
         "preflight_scores": scores,
@@ -254,6 +268,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         "influence_score": influence_score,
         "preflight_decision": preflight_decision,
         "decision": decision,
+        "platform_assessments": platform_assessments,
         "input": {
             "objective": plan["objective"],
             "kind": kind,
@@ -277,6 +292,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
                 if isinstance(item, dict) and item.get("id")
             ],
             "knowledge_counts": knowledge_counts,
+            "platform_assessments": platform_assessments,
             "influence_calibration_id": _text(params.get("influence_calibration_id")),
         },
         "separation": {

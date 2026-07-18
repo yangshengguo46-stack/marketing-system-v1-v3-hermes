@@ -220,7 +220,12 @@ def _replay_case_audit(store: Any, candidate: dict[str, Any]) -> dict[str, Any]:
         "has_preflight": preflight is not None,
         "has_prediction": prediction is not None,
         "feature_snapshot": snapshot,
-        "asset_kind": snapshot.get("kind") if snapshot else ((asset or {}).get("content") or {}).get("production_kind"),
+        "asset_kind": snapshot.get("kind")
+        if snapshot
+        else (
+            ((asset or {}).get("content") or {}).get("_production_kind")
+            or ((asset or {}).get("content") or {}).get("production_kind")
+        ),
         "preflight_status": preflight_decision.get("status"),
         "prediction_status": (prediction or {}).get("status"),
         "metric_label_buckets": _label_buckets(candidate),

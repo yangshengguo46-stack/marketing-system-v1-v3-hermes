@@ -194,9 +194,21 @@ class AccountRegistry:
         require_pristine: bool = True,
     ) -> bool:
         self._require(account_id, user_id=user_id)
+        from agent.marketing.domains.operating_entities import OperatingEntityRepository
+        from agent.marketing.data_paths import MarketingDataPaths
+
+        default_paths = MarketingDataPaths.from_env()
+        entity = OperatingEntityRepository(
+            MarketingDataPaths(
+                user_data=default_paths.user_data,
+                config_dir=default_paths.config_dir,
+                agent_db=self.db.db_path,
+            )
+        ).ensure_for_account(user_id=user_id, account_id=account_id)
         return self.db.update_session_marketing_scope(
             session_id,
             marketing_user_id=user_id,
+            marketing_entity_id=entity["id"],
             marketing_account_id=account_id,
             require_pristine=require_pristine,
         )
@@ -229,6 +241,7 @@ class AccountRegistry:
         return self.db.update_session_marketing_scope(
             session_id,
             marketing_user_id=None,
+            marketing_entity_id=None,
             marketing_account_id=None,
             require_pristine=require_pristine,
         )

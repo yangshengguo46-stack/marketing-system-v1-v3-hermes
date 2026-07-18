@@ -159,7 +159,12 @@ def _jobs_lock():
 # as a filesystem path component under ``OUTPUT_DIR``; allowing it to be
 # updated lets an unsafe value (``../escape``, absolute path, nested) leak
 # into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+_IMMUTABLE_JOB_FIELDS = frozenset(
+    {"id", "product_contract", "marketing_account_id"}
+)
+
+_SAFE_PRODUCT_CONTRACT = re.compile(r"^[a-z][a-z0-9_.-]{0,119}$")
+_SAFE_MARKETING_ACCOUNT_ID = re.compile(r"^[A-Za-z0-9_.:@-]{1,160}$")
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -865,6 +870,8 @@ def create_job(
     workdir: Optional[str] = None,
     no_agent: bool = False,
     attach_to_session: Optional[bool] = None,
+    product_contract: Optional[str] = None,
+    marketing_account_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -909,6 +916,9 @@ def create_job(
                 and deliver its stdout directly. Empty stdout = silent (no
                 delivery). Requires ``script`` to be set. Ideal for classic
                 watchdogs and periodic alerts that don't need LLM reasoning.
+        product_contract: Optional internal product delivery contract. Contract jobs
+                fail closed before delivery if the product receipt is missing.
+        marketing_account_id: Stable Marketing OS account bound to a product job.
 
     Returns:
         The created job dict
@@ -941,6 +951,18 @@ def create_job(
     normalized_workdir = _normalize_workdir(workdir)
     normalized_no_agent = bool(no_agent)
     normalized_attach = attach_to_session if isinstance(attach_to_session, bool) else None
+    normalized_contract = str(product_contract or "").strip() or None
+    normalized_marketing_account = str(marketing_account_id or "").strip() or None
+    if normalized_contract and not _SAFE_PRODUCT_CONTRACT.fullmatch(normalized_contract):
+        raise ValueError("product_contract contains unsupported characters")
+    if normalized_marketing_account and not _SAFE_MARKETING_ACCOUNT_ID.fullmatch(
+        normalized_marketing_account
+    ):
+        raise ValueError("marketing_account_id contains unsupported characters")
+    if bool(normalized_contract) != bool(normalized_marketing_account):
+        raise ValueError(
+            "product_contract and marketing_account_id must be configured together"
+        )
 
     # no_agent jobs are meaningless without a script — the script IS the job.
     # Surface this as a clear ValueError at create time so bad configs never
@@ -1008,6 +1030,9 @@ def create_job(
         "enabled_toolsets": normalized_toolsets,
         "workdir": normalized_workdir,
     }
+    if normalized_contract:
+        job["product_contract"] = normalized_contract
+        job["marketing_account_id"] = normalized_marketing_account
     # Only persist attach_to_session when explicitly set, so existing jobs and
     # the common case stay byte-identical (absent key => fall back to the
     # global cron.mirror_delivery config, default off).

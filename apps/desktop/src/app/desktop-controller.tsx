@@ -138,6 +138,7 @@ import {
   ARTICLE_CREATION_ROUTE,
   CONTENT_FACTORY_ROUTE,
   CRON_ROUTE,
+  DRAFT_BOX_ROUTE,
   NEW_CHAT_ROUTE,
   routeSessionId,
   sessionRoute,
@@ -193,6 +194,10 @@ const ArticleCreationView = lazy(async () => ({
 
 const VideoCreationView = lazy(async () => ({
   default: (await import('./workbench/business-surfaces')).VideoCreationView
+}))
+
+const DraftBoxView = lazy(async () => ({
+  default: (await import('./workbench/draft-box-view')).DraftBoxView
 }))
 
 const MaterialLibraryView = lazy(async () => ({
@@ -1505,6 +1510,21 @@ export function DesktopController() {
               </Suspense>
             }
             path="content/video"
+          />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <DraftBoxView
+                  onOpenArticle={assetId => navigate(`${ARTICLE_CREATION_ROUTE}?asset=${encodeURIComponent(assetId)}`)}
+                  onOpenVideo={productionId =>
+                    navigate(`${VIDEO_CREATION_ROUTE}?production=${encodeURIComponent(productionId)}`)
+                  }
+                  onStartOperation={startMarketingOperation}
+                  requestGateway={requestGateway}
+                />
+              </Suspense>
+            }
+            path={DRAFT_BOX_ROUTE.slice(1)}
           />
           <Route
             element={

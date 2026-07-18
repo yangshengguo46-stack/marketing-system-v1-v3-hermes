@@ -1278,6 +1278,7 @@ export const en: Translations = {
       content: 'Content studio',
       'article-creation': 'Article creation',
       'video-creation': 'Video creation',
+      drafts: 'Drafts',
       materials: 'Media library',
       accounts: 'Accounts',
       managed: 'Autopilot',

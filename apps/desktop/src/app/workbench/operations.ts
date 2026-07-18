@@ -5,6 +5,7 @@ export type MarketingOperationKind =
   | 'account.prioritize'
   | 'autopilot.configure'
   | 'content.article.start'
+  | 'content.topic.start'
   | 'content.resume'
   | 'content.revise'
   | 'learning.review'

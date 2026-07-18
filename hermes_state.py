@@ -27,6 +27,7 @@ from pathlib import Path
 
 from agent.memory_manager import sanitize_context
 from agent.marketing.schema import (
+    ENTITY_OWNED_SCOPE_COLUMNS,
     LEGACY_MARKETING_TABLES,
     MARKETING_DOMAIN_SCHEMA_SQL,
     PROSPECT_SCOPE_COLUMNS,
@@ -143,7 +144,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 # ---------------------------------------------------------------------------
 # WAL-compatibility fallback
@@ -699,6 +700,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     rewind_count INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     marketing_user_id TEXT,
+    marketing_entity_id TEXT,
     marketing_account_id TEXT,
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
 );
@@ -1361,12 +1363,21 @@ class SessionDB:
                 if not columns:
                     continue
                 quoted = ",".join(f'"{name}"' for name in columns)
-                before = self._conn.total_changes
+                before = int(
+                    cursor.execute(
+                        f'SELECT COUNT(*) FROM main."{table}"'
+                    ).fetchone()[0]
+                )
                 cursor.execute(
                     f'INSERT OR IGNORE INTO main."{table}" ({quoted}) '
                     f'SELECT {quoted} FROM legacy_marketing."{table}"'
                 )
-                imported[table] = self._conn.total_changes - before
+                after = int(
+                    cursor.execute(
+                        f'SELECT COUNT(*) FROM main."{table}"'
+                    ).fetchone()[0]
+                )
+                imported[table] = after - before
             cursor.execute(
                 "INSERT OR REPLACE INTO state_meta(key,value) VALUES (?,?)",
                 (
@@ -1390,6 +1401,604 @@ class SessionDB:
                     cursor.execute("DETACH DATABASE legacy_marketing")
                 except sqlite3.DatabaseError:
                     pass
+
+    @staticmethod
+    def _default_marketing_entity_id(user_id: str) -> str:
+        digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:20]
+        return f"entity_{digest}"
+
+    @staticmethod
+    def _marketing_table_columns(
+        cursor: sqlite3.Cursor, table_name: str
+    ) -> set[str]:
+        return {
+            str(row["name"] if isinstance(row, sqlite3.Row) else row[1])
+            for row in cursor.execute(
+                f'PRAGMA table_info("{table_name}")'
+            ).fetchall()
+        }
+
+    def _install_marketing_entity_ownership_triggers(
+        self,
+        cursor: sqlite3.Cursor,
+        tables: list[tuple[str, str]],
+    ) -> None:
+        """Make entity ownership invariant for every future business write.
+
+        Repositories may continue to accept an action/source account while the
+        database resolves the canonical owner.  Resolution is intentionally
+        narrow: an existing account membership, an explicitly supplied entity,
+        or the user's sole active entity.  Multi-entity ambiguity aborts the
+        write instead of silently crossing brands.
+        """
+
+        now_sql = "CAST(strftime('%s','now') AS REAL)"
+        for table, account_column in tables:
+            insert_trigger = f"trg_{table}_entity_owner_ai"
+            update_trigger = f"trg_{table}_entity_owner_au"
+            cursor.execute(f'DROP TRIGGER IF EXISTS "{insert_trigger}"')
+            cursor.execute(f'DROP TRIGGER IF EXISTS "{update_trigger}"')
+
+            # AFTER INSERT is deliberate: legacy-compatible columns use an
+            # empty-string default so ALTER TABLE can add a NOT NULL owner to
+            # populated databases.  The trigger resolves that placeholder in
+            # the same statement, before deferred FK validation completes.
+            cursor.execute(
+                f'''
+                CREATE TRIGGER "{insert_trigger}"
+                AFTER INSERT ON "{table}"
+                FOR EACH ROW
+                BEGIN
+                    INSERT INTO marketing_operating_entities
+                    (id,user_id,label,status,metadata_json,created_at,updated_at)
+                    SELECT
+                        CASE
+                            WHEN TRIM(COALESCE(NEW.entity_id,''))<>''
+                                THEN TRIM(NEW.entity_id)
+                            ELSE 'entity_auto_' || LOWER(HEX(RANDOMBLOB(10)))
+                        END,
+                        NEW.user_id,
+                        '我的经营主体',
+                        'active',
+                        '{{"migration":"database-owner-default-v1"}}',
+                        {now_sql},
+                        {now_sql}
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM marketing_operating_entities e
+                        WHERE e.user_id=NEW.user_id AND e.status='active'
+                    );
+
+                    INSERT INTO marketing_operating_entity_accounts
+                    (entity_id,user_id,account_id,role,status,created_at,updated_at)
+                    SELECT
+                        CASE
+                            WHEN TRIM(COALESCE(NEW.entity_id,''))<>''
+                                THEN TRIM(NEW.entity_id)
+                            WHEN EXISTS (
+                                SELECT 1 FROM marketing_operating_entity_accounts m
+                                WHERE m.user_id=NEW.user_id
+                                  AND m.account_id=NEW."{account_column}"
+                                  AND m.status='active'
+                            ) THEN (
+                                SELECT m.entity_id
+                                FROM marketing_operating_entity_accounts m
+                                WHERE m.user_id=NEW.user_id
+                                  AND m.account_id=NEW."{account_column}"
+                                  AND m.status='active'
+                                LIMIT 1
+                            )
+                            ELSE (
+                                SELECT MIN(e.id)
+                                FROM marketing_operating_entities e
+                                WHERE e.user_id=NEW.user_id AND e.status='active'
+                                HAVING COUNT(*)=1
+                            )
+                        END,
+                        NEW.user_id,
+                        NEW."{account_column}",
+                        'channel',
+                        'active',
+                        {now_sql},
+                        {now_sql}
+                    WHERE EXISTS (
+                        SELECT 1 FROM marketing_accounts a
+                        WHERE a.id=NEW."{account_column}"
+                          AND a.user_id=NEW.user_id
+                          AND a.deleted_at IS NULL
+                    )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM marketing_operating_entity_accounts m
+                        WHERE m.user_id=NEW.user_id
+                          AND m.account_id=NEW."{account_column}"
+                          AND m.status='active'
+                    )
+                      AND EXISTS (
+                        SELECT 1 FROM marketing_operating_entities e
+                        WHERE e.id=CASE
+                            WHEN TRIM(COALESCE(NEW.entity_id,''))<>''
+                                THEN TRIM(NEW.entity_id)
+                            ELSE (
+                                SELECT MIN(e2.id)
+                                FROM marketing_operating_entities e2
+                                WHERE e2.user_id=NEW.user_id AND e2.status='active'
+                                HAVING COUNT(*)=1
+                            )
+                        END
+                          AND e.user_id=NEW.user_id
+                          AND e.status='active'
+                    )
+                    ON CONFLICT(user_id,account_id) DO UPDATE SET
+                        entity_id=excluded.entity_id,
+                        role='channel',
+                        status='active',
+                        updated_at=excluded.updated_at;
+
+                    UPDATE "{table}"
+                    SET entity_id=COALESCE(
+                        CASE
+                            WHEN TRIM(COALESCE(NEW.entity_id,''))<>''
+                                THEN TRIM(NEW.entity_id)
+                            WHEN EXISTS (
+                                SELECT 1 FROM marketing_operating_entity_accounts m
+                                WHERE m.user_id=NEW.user_id
+                                  AND m.account_id=NEW."{account_column}"
+                                  AND m.status='active'
+                            ) THEN (
+                                SELECT m.entity_id
+                                FROM marketing_operating_entity_accounts m
+                                WHERE m.user_id=NEW.user_id
+                                  AND m.account_id=NEW."{account_column}"
+                                  AND m.status='active'
+                                LIMIT 1
+                            )
+                            ELSE (
+                                SELECT MIN(e.id)
+                                FROM marketing_operating_entities e
+                                WHERE e.user_id=NEW.user_id AND e.status='active'
+                                HAVING COUNT(*)=1
+                            )
+                        END,
+                        NEW.entity_id,
+                        ''
+                    )
+                    WHERE rowid=NEW.rowid;
+
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1
+                        FROM marketing_operating_entities e
+                        WHERE e.id=(
+                            SELECT owned.entity_id FROM "{table}" owned
+                            WHERE owned.rowid=NEW.rowid
+                        )
+                          AND e.user_id=NEW.user_id
+                          AND e.status='active'
+                    ) THEN RAISE(ABORT,
+                        'marketing entity ownership is missing or ambiguous for {table}'
+                    ) END;
+
+                    SELECT CASE WHEN EXISTS (
+                        SELECT 1 FROM marketing_accounts a
+                        WHERE a.id=NEW."{account_column}"
+                          AND a.user_id=NEW.user_id
+                          AND a.deleted_at IS NULL
+                    ) AND NOT EXISTS (
+                        SELECT 1
+                        FROM marketing_operating_entity_accounts m
+                        JOIN "{table}" owned ON owned.rowid=NEW.rowid
+                        WHERE m.user_id=NEW.user_id
+                          AND m.account_id=NEW."{account_column}"
+                          AND m.entity_id=owned.entity_id
+                          AND m.status='active'
+                    ) THEN RAISE(ABORT,
+                        'marketing action account is outside the owning entity for {table}'
+                    ) END;
+                END
+                '''
+            )
+
+            cursor.execute(
+                f'''
+                CREATE TRIGGER "{update_trigger}"
+                AFTER UPDATE OF user_id,entity_id,"{account_column}" ON "{table}"
+                FOR EACH ROW
+                WHEN COALESCE(OLD.user_id,'')<>COALESCE(NEW.user_id,'')
+                  OR COALESCE(OLD.entity_id,'')<>COALESCE(NEW.entity_id,'')
+                  OR COALESCE(OLD."{account_column}",'')<>
+                     COALESCE(NEW."{account_column}",'')
+                BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM marketing_operating_entities e
+                        WHERE e.id=NEW.entity_id
+                          AND e.user_id=NEW.user_id
+                          AND e.status='active'
+                    ) THEN RAISE(ABORT,
+                        'marketing entity ownership is invalid for {table}'
+                    ) END;
+
+                    SELECT CASE WHEN EXISTS (
+                        SELECT 1 FROM marketing_accounts a
+                        WHERE a.id=NEW."{account_column}"
+                          AND a.user_id=NEW.user_id
+                          AND a.deleted_at IS NULL
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM marketing_operating_entity_accounts m
+                        WHERE m.user_id=NEW.user_id
+                          AND m.account_id=NEW."{account_column}"
+                          AND m.entity_id=NEW.entity_id
+                          AND m.status='active'
+                    ) THEN RAISE(ABORT,
+                        'marketing action account is outside the owning entity for {table}'
+                    ) END;
+                END
+                '''
+            )
+
+    def _reconcile_marketing_entity_ownership(
+        self,
+        cursor: sqlite3.Cursor,
+        *,
+        record_marker: bool = True,
+    ) -> None:
+        """Backfill and enforce canonical entity owners for Marketing OS facts."""
+
+        cursor.execute("SAVEPOINT marketing_entity_ownership_v1")
+        try:
+            available: list[tuple[str, str]] = []
+            missing_entity_columns = False
+            for table, account_column in ENTITY_OWNED_SCOPE_COLUMNS.items():
+                exists = cursor.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                if exists is None:
+                    continue
+                columns = self._marketing_table_columns(cursor, table)
+                if "user_id" not in columns or account_column not in columns:
+                    continue
+                if "entity_id" not in columns:
+                    missing_entity_columns = True
+                    cursor.execute(
+                        f'ALTER TABLE "{table}" ADD COLUMN entity_id '
+                        "TEXT NOT NULL DEFAULT ''"
+                    )
+                available.append((table, account_column))
+
+            # Repository constructors may open SessionDB while another domain
+            # transaction is already in progress.  Once v23 is installed,
+            # startup must therefore stay genuinely read-only unless drift is
+            # detected; otherwise a harmless nested repository read would
+            # contend for SQLite's single writer lock.
+            marker_exists = cursor.execute(
+                "SELECT 1 FROM state_meta "
+                "WHERE key='marketing_entity_ownership_reconcile_v1'"
+            ).fetchone() is not None
+            trigger_count = int(
+                cursor.execute(
+                    "SELECT COUNT(*) FROM sqlite_master "
+                    "WHERE type='trigger' AND name LIKE 'trg_%_entity_owner_a_'"
+                ).fetchone()[0]
+            )
+            strategy_index = cursor.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='index' AND name='idx_strategy_projects_one_active'"
+            ).fetchone()
+            strategy_is_entity_owned = bool(
+                strategy_index is not None
+                and "entity_id" in str(strategy_index[0] or "").lower()
+            )
+            ownership_drift = False
+            if (
+                not missing_entity_columns
+                and marker_exists
+                and trigger_count == len(available) * 2
+                and strategy_is_entity_owned
+            ):
+                for table, account_column in available:
+                    invalid = cursor.execute(
+                        f'''SELECT 1 FROM "{table}" facts
+                        LEFT JOIN marketing_operating_entities e
+                          ON e.id=facts.entity_id
+                         AND e.user_id=facts.user_id
+                         AND e.status='active'
+                        LEFT JOIN marketing_accounts a
+                          ON a.id=facts."{account_column}"
+                         AND a.user_id=facts.user_id
+                         AND a.deleted_at IS NULL
+                        LEFT JOIN marketing_operating_entity_accounts m
+                          ON m.user_id=facts.user_id
+                         AND m.account_id=facts."{account_column}"
+                         AND m.entity_id=facts.entity_id
+                         AND m.status='active'
+                        WHERE facts.entity_id IS NULL
+                           OR TRIM(facts.entity_id)=''
+                           OR e.id IS NULL
+                           OR (a.id IS NOT NULL AND m.entity_id IS NULL)
+                        LIMIT 1'''
+                    ).fetchone()
+                    if invalid is not None:
+                        ownership_drift = True
+                        break
+                if not ownership_drift:
+                    cursor.execute("RELEASE SAVEPOINT marketing_entity_ownership_v1")
+                    return
+
+            users: set[str] = {
+                str(row[0])
+                for row in cursor.execute(
+                    "SELECT DISTINCT user_id FROM marketing_accounts "
+                    "WHERE user_id IS NOT NULL AND TRIM(user_id)<>''"
+                ).fetchall()
+            }
+            claimed_entities: dict[str, set[str]] = {}
+            for table, _account_column in available:
+                for row in cursor.execute(
+                    f'SELECT DISTINCT user_id,entity_id FROM "{table}" '
+                    "WHERE user_id IS NOT NULL AND TRIM(user_id)<>'' "
+                    "AND entity_id IS NOT NULL AND TRIM(entity_id)<>''"
+                ).fetchall():
+                    user = str(row[0])
+                    entity = str(row[1]).strip()
+                    users.add(user)
+                    claimed_entities.setdefault(user, set()).add(entity)
+                users.update(
+                    str(row[0])
+                    for row in cursor.execute(
+                        f'SELECT DISTINCT user_id FROM "{table}" '
+                        "WHERE user_id IS NOT NULL AND TRIM(user_id)<>''"
+                    ).fetchall()
+                )
+
+            for user in sorted(users):
+                active = {
+                    str(row[0])
+                    for row in cursor.execute(
+                        "SELECT id FROM marketing_operating_entities "
+                        "WHERE user_id=? AND status='active'",
+                        (user,),
+                    ).fetchall()
+                }
+                claims = claimed_entities.get(user, set())
+                if not active:
+                    if len(claims) > 1:
+                        raise ValueError(
+                            "legacy Marketing OS facts claim multiple unknown entities "
+                            f"for user {user}; explicit ownership review is required"
+                        )
+                    entity_id = (
+                        next(iter(claims))
+                        if claims
+                        else self._default_marketing_entity_id(user)
+                    )
+                    collision = cursor.execute(
+                        "SELECT user_id,status FROM marketing_operating_entities WHERE id=?",
+                        (entity_id,),
+                    ).fetchone()
+                    if collision is not None and str(collision["user_id"]) != user:
+                        raise ValueError(
+                            f"operating entity id {entity_id} belongs to another user"
+                        )
+                    if collision is not None:
+                        cursor.execute(
+                            "UPDATE marketing_operating_entities "
+                            "SET status='active',updated_at=? WHERE id=? AND user_id=?",
+                            (time.time(), entity_id, user),
+                        )
+                    else:
+                        label = "我的经营主体"
+                        if cursor.execute(
+                            "SELECT 1 FROM marketing_operating_entities "
+                            "WHERE user_id=? AND label=?",
+                            (user, label),
+                        ).fetchone() is not None:
+                            label = f"我的经营主体（迁移 {entity_id[-6:]}）"
+                        now = time.time()
+                        cursor.execute(
+                            """INSERT INTO marketing_operating_entities
+                            (id,user_id,label,status,metadata_json,created_at,updated_at)
+                            VALUES (?,?,?,'active',?,?,?)""",
+                            (
+                                entity_id,
+                                user,
+                                label,
+                                json.dumps(
+                                    {"migration": "entity-ownership-v1"},
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                                now,
+                                now,
+                            ),
+                        )
+                    active = {entity_id}
+                unknown_claims = claims - active
+                if unknown_claims:
+                    raise ValueError(
+                        "legacy Marketing OS facts reference unknown/inactive entities "
+                        f"for user {user}: {', '.join(sorted(unknown_claims))}"
+                    )
+
+            # Existing explicit facts are valid evidence for an unassigned
+            # real account only when every table agrees on one active entity.
+            for row in cursor.execute(
+                """SELECT id,user_id FROM marketing_accounts
+                WHERE deleted_at IS NULL
+                  AND status IN ('pending','active','stale','disconnected')
+                ORDER BY user_id,id"""
+            ).fetchall():
+                account = str(row["id"])
+                user = str(row["user_id"])
+                membership = cursor.execute(
+                    """SELECT entity_id FROM marketing_operating_entity_accounts
+                    WHERE user_id=? AND account_id=? AND status='active'""",
+                    (user, account),
+                ).fetchone()
+                if membership is not None:
+                    entity_id = str(membership["entity_id"])
+                    valid = cursor.execute(
+                        """SELECT 1 FROM marketing_operating_entities
+                        WHERE id=? AND user_id=? AND status='active'""",
+                        (entity_id, user),
+                    ).fetchone()
+                    if valid is None:
+                        raise ValueError(
+                            f"account {account} has an invalid operating entity membership"
+                        )
+                    continue
+
+                fact_claims: set[str] = set()
+                for table, account_column in available:
+                    fact_claims.update(
+                        str(item[0]).strip()
+                        for item in cursor.execute(
+                            f'SELECT DISTINCT entity_id FROM "{table}" '
+                            f'WHERE user_id=? AND "{account_column}"=? '
+                            "AND entity_id IS NOT NULL AND TRIM(entity_id)<>''",
+                            (user, account),
+                        ).fetchall()
+                    )
+                if len(fact_claims) > 1:
+                    raise ValueError(
+                        f"account {account} is claimed by multiple operating entities"
+                    )
+                active = [
+                    str(item[0])
+                    for item in cursor.execute(
+                        "SELECT id FROM marketing_operating_entities "
+                        "WHERE user_id=? AND status='active' ORDER BY id",
+                        (user,),
+                    ).fetchall()
+                ]
+                selected = next(iter(fact_claims)) if fact_claims else None
+                if selected is None and len(active) == 1:
+                    selected = active[0]
+                if selected is None:
+                    continue
+                if selected not in active:
+                    raise ValueError(
+                        f"account {account} claims inactive entity {selected}"
+                    )
+                now = time.time()
+                cursor.execute(
+                    """INSERT INTO marketing_operating_entity_accounts
+                    (entity_id,user_id,account_id,role,status,created_at,updated_at)
+                    VALUES (?,?,?,'channel','active',?,?)
+                    ON CONFLICT(user_id,account_id) DO UPDATE SET
+                        entity_id=excluded.entity_id,
+                        role='channel',status='active',updated_at=excluded.updated_at""",
+                    (selected, user, account, now, now),
+                )
+
+            backfilled: dict[str, int] = {}
+            totals: dict[str, int] = {}
+            for table, account_column in available:
+                updated = cursor.execute(
+                    f'''UPDATE "{table}"
+                    SET entity_id=COALESCE(
+                        (
+                            SELECT m.entity_id
+                            FROM marketing_operating_entity_accounts m
+                            WHERE m.user_id="{table}".user_id
+                              AND m.account_id="{table}"."{account_column}"
+                              AND m.status='active'
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT MIN(e.id)
+                            FROM marketing_operating_entities e
+                            WHERE e.user_id="{table}".user_id
+                              AND e.status='active'
+                            HAVING COUNT(*)=1
+                        ),
+                        entity_id
+                    )
+                    WHERE entity_id IS NULL OR TRIM(entity_id)='' '''
+                ).rowcount
+                if updated:
+                    backfilled[table] = int(updated)
+
+                unresolved = int(
+                    cursor.execute(
+                        f'SELECT COUNT(*) FROM "{table}" '
+                        "WHERE entity_id IS NULL OR TRIM(entity_id)=''"
+                    ).fetchone()[0]
+                )
+                invalid_owner = int(
+                    cursor.execute(
+                        f'''SELECT COUNT(*) FROM "{table}" facts
+                        LEFT JOIN marketing_operating_entities e
+                          ON e.id=facts.entity_id
+                         AND e.user_id=facts.user_id
+                         AND e.status='active'
+                        WHERE e.id IS NULL'''
+                    ).fetchone()[0]
+                )
+                invalid_account = int(
+                    cursor.execute(
+                        f'''SELECT COUNT(*) FROM "{table}" facts
+                        JOIN marketing_accounts a
+                          ON a.id=facts."{account_column}"
+                         AND a.user_id=facts.user_id
+                         AND a.deleted_at IS NULL
+                        LEFT JOIN marketing_operating_entity_accounts m
+                          ON m.user_id=facts.user_id
+                         AND m.account_id=facts."{account_column}"
+                         AND m.entity_id=facts.entity_id
+                         AND m.status='active'
+                        WHERE m.entity_id IS NULL'''
+                    ).fetchone()[0]
+                )
+                if unresolved or invalid_owner or invalid_account:
+                    raise ValueError(
+                        f"entity ownership migration cannot safely resolve {table}: "
+                        f"unresolved={unresolved}, invalid_owner={invalid_owner}, "
+                        f"invalid_account={invalid_account}"
+                    )
+                totals[table] = int(
+                    cursor.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                )
+                index_name = f"idx_{table}_entity_owner"
+                cursor.execute(
+                    f'CREATE INDEX IF NOT EXISTS "{index_name}" '
+                    f'ON "{table}"(user_id,entity_id)'
+                )
+
+            # Strategy is a creator/brand decision, not a login-account
+            # decision.  Rebuilding this old index is the only semantic index
+            # migration in v23; a collision correctly requires explicit merge
+            # review instead of choosing one active strategy silently.
+            cursor.execute("DROP INDEX IF EXISTS idx_strategy_projects_one_active")
+            cursor.execute(
+                """CREATE UNIQUE INDEX idx_strategy_projects_one_active
+                ON account_strategy_projects(user_id,entity_id)
+                WHERE status='active'"""
+            )
+
+            self._install_marketing_entity_ownership_triggers(cursor, available)
+            if record_marker:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO state_meta(key,value) VALUES (?,?)",
+                    (
+                        "marketing_entity_ownership_reconcile_v1",
+                        json.dumps(
+                            {
+                                "reconciled_at": time.time(),
+                                "table_count": len(available),
+                                "rows": totals,
+                                "backfilled": backfilled,
+                                "ownership": "entity_id",
+                                "account_semantics": "action_or_source_channel",
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    ),
+                )
+            cursor.execute("RELEASE SAVEPOINT marketing_entity_ownership_v1")
+        except BaseException:
+            cursor.execute("ROLLBACK TO SAVEPOINT marketing_entity_ownership_v1")
+            cursor.execute("RELEASE SAVEPOINT marketing_entity_ownership_v1")
+            raise
 
     def _init_schema(self):
         """Create tables and FTS if they don't exist, reconcile columns.
@@ -1415,9 +2024,22 @@ class SessionDB:
         # column gets created here.
         self._reconcile_columns(cursor)
 
-        # Data migration happens only after the native target schema exists.
-        # The legacy file remains untouched as rollback evidence.
+        # Install entity-owner guards before importing the retired database.
+        # Fresh v23 tables carry a legacy-compatible empty default; the guards
+        # resolve it inside each import statement so foreign keys never observe
+        # an ownerless row.  The marker is written only by the post-import pass.
+        self._reconcile_marketing_entity_ownership(cursor, record_marker=False)
+
+        # Data import happens only after the native target schema and ownership
+        # guards exist.  The legacy file remains untouched as rollback evidence.
         self._migrate_legacy_marketing_state(cursor)
+
+        # v23 data migration: the creator/brand entity owns durable business
+        # facts; account_id remains the source/action channel.  This runs on
+        # every startup as an invariant reconciler, not only at a version gate,
+        # so optional compatibility tables and later repository writes cannot
+        # drift back to account ownership.
+        self._reconcile_marketing_entity_ownership(cursor)
 
         # Indexes that reference reconciler-added columns must be created
         # AFTER _reconcile_columns runs — declaring them in SCHEMA_SQL
@@ -1643,6 +2265,7 @@ class SessionDB:
         chat_type: str = None,
         thread_id: str = None,
         marketing_user_id: str = None,
+        marketing_entity_id: str = None,
         marketing_account_id: str = None,
         parent_session_id: str = None,
         cwd: str = None,
@@ -1650,15 +2273,17 @@ class SessionDB:
         """Shared INSERT OR IGNORE for session rows."""
         def _do(conn):
             scope_user_id = marketing_user_id
+            scope_entity_id = marketing_entity_id
             scope_account_id = marketing_account_id
             if parent_session_id and not scope_account_id:
                 parent_scope = conn.execute(
-                    "SELECT marketing_user_id, marketing_account_id "
+                    "SELECT marketing_user_id, marketing_entity_id, marketing_account_id "
                     "FROM sessions WHERE id = ?",
                     (parent_session_id,),
                 ).fetchone()
                 if parent_scope is not None:
                     scope_user_id = parent_scope["marketing_user_id"]
+                    scope_entity_id = parent_scope["marketing_entity_id"]
                     scope_account_id = parent_scope["marketing_account_id"]
             if not scope_account_id:
                 scope_user_id, scope_account_id = default_marketing_scope(
@@ -1668,9 +2293,9 @@ class SessionDB:
                 """INSERT OR IGNORE INTO sessions (
                    id, source, user_id, session_key, chat_id, chat_type, thread_id,
                    model, model_config, system_prompt, marketing_user_id,
-                   marketing_account_id, parent_session_id, cwd, started_at
+                   marketing_entity_id, marketing_account_id, parent_session_id, cwd, started_at
                 )
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     source,
@@ -1683,6 +2308,7 @@ class SessionDB:
                     json.dumps(model_config) if model_config else None,
                     system_prompt,
                     scope_user_id,
+                    scope_entity_id,
                     scope_account_id,
                     parent_session_id,
                     cwd,
@@ -2029,6 +2655,7 @@ class SessionDB:
         session_id: str,
         *,
         marketing_user_id: Optional[str],
+        marketing_entity_id: Optional[str] = None,
         marketing_account_id: Optional[str],
         require_pristine: bool = True,
     ) -> bool:
@@ -2043,10 +2670,11 @@ class SessionDB:
         def _do(conn):
             sql = (
                 "UPDATE sessions SET marketing_user_id = ?, "
-                "marketing_account_id = ? WHERE id = ?"
+                "marketing_entity_id = ?, marketing_account_id = ? WHERE id = ?"
             )
             params: tuple[Any, ...] = (
                 marketing_user_id,
+                marketing_entity_id,
                 marketing_account_id,
                 session_id,
             )
@@ -2089,10 +2717,18 @@ class SessionDB:
                 (user, prospect, target),
             ).fetchone()
             if previous is not None:
+                membership = conn.execute(
+                    """SELECT entity_id FROM marketing_operating_entity_accounts
+                    WHERE user_id=? AND account_id=? AND status='active'""",
+                    (user, target),
+                ).fetchone()
                 return {
                     **dict(previous),
                     "moved_counts": json.loads(previous["moved_counts_json"] or "{}"),
                     "operation": "already_complete",
+                    "entity_id": (
+                        str(membership["entity_id"]) if membership is not None else ""
+                    ),
                 }
 
             account = conn.execute(
@@ -2108,6 +2744,7 @@ class SessionDB:
             available: list[tuple[str, str]] = []
             target_counts: dict[str, int] = {}
             source_counts: dict[str, int] = {}
+            source_entities: set[str] = set()
             for table, scope_column in PROSPECT_SCOPE_COLUMNS.items():
                 exists = conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
@@ -2137,6 +2774,16 @@ class SessionDB:
                 )
                 if source_count:
                     source_counts[table] = source_count
+                    if "entity_id" in columns:
+                        source_entities.update(
+                            str(row[0]).strip()
+                            for row in conn.execute(
+                                f'SELECT DISTINCT entity_id FROM "{table}" '
+                                f'WHERE user_id=? AND "{scope_column}"=? '
+                                "AND entity_id IS NOT NULL AND TRIM(entity_id)<>''",
+                                (user, prospect),
+                            ).fetchall()
+                        )
                 if target_count:
                     target_counts[table] = target_count
 
@@ -2146,6 +2793,53 @@ class SessionDB:
                     "target account already has operating facts; explicit merge review is required: "
                     + names
                 )
+
+            if len(source_entities) > 1:
+                raise ValueError(
+                    "prospect facts span multiple operating entities; explicit merge review is required"
+                )
+            if source_entities:
+                entity_id = next(iter(source_entities))
+            else:
+                active_entities = conn.execute(
+                    """SELECT id FROM marketing_operating_entities
+                    WHERE user_id=? AND status='active' ORDER BY id""",
+                    (user,),
+                ).fetchall()
+                if len(active_entities) != 1:
+                    raise ValueError(
+                        "prospect ownership is ambiguous; explicit operating entity selection is required"
+                    )
+                entity_id = str(active_entities[0]["id"])
+
+            if conn.execute(
+                """SELECT 1 FROM marketing_operating_entities
+                WHERE id=? AND user_id=? AND status='active'""",
+                (entity_id, user),
+            ).fetchone() is None:
+                raise ValueError("prospect operating entity is missing or inactive")
+            target_membership = conn.execute(
+                """SELECT entity_id FROM marketing_operating_entity_accounts
+                WHERE user_id=? AND account_id=? AND status='active'""",
+                (user, target),
+            ).fetchone()
+            if (
+                target_membership is not None
+                and str(target_membership["entity_id"]) != entity_id
+            ):
+                raise ValueError(
+                    "target account belongs to another operating entity; explicit merge review is required"
+                )
+            now = time.time()
+            conn.execute(
+                """INSERT INTO marketing_operating_entity_accounts
+                (entity_id,user_id,account_id,role,status,created_at,updated_at)
+                VALUES (?,?,?,'channel','active',?,?)
+                ON CONFLICT(user_id,account_id) DO UPDATE SET
+                    entity_id=excluded.entity_id,
+                    role='channel',status='active',updated_at=excluded.updated_at""",
+                (entity_id, user, target, now, now),
+            )
 
             moved: dict[str, int] = {}
             for table, scope_column in available:
@@ -2159,7 +2853,6 @@ class SessionDB:
                 if updated:
                     moved[table] = int(updated)
 
-            now = time.time()
             adoption_id = "adoption_" + hashlib.sha256(
                 f"{user}\0{prospect}\0{target}".encode("utf-8")
             ).hexdigest()[:28]
@@ -2188,6 +2881,7 @@ class SessionDB:
                 "created_at": now,
                 "completed_at": now,
                 "operation": "adopted",
+                "entity_id": entity_id,
                 "sessions_rebound": 0,
             }
 

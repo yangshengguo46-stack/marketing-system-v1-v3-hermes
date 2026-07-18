@@ -132,7 +132,11 @@ class PublishingRepository(MarketingDomainRepository):
                 "sound_plan": content.get("sound_plan")
                 if isinstance(content.get("sound_plan"), dict)
                 else None,
-                "content_kind": str(content.get("production_kind") or ""),
+                "content_kind": str(
+                    content.get("_production_kind")
+                    or content.get("production_kind")
+                    or ""
+                ),
                 "experiment_id": str(asset["experiment_id"] or "") or None,
                 "prediction": content.get("prediction")
                 if isinstance(content.get("prediction"), dict)

@@ -203,7 +203,8 @@ def test_session_scope_keeps_only_stable_routing_identity_in_prompt(tmp_path):
     )
     prompt = build_account_scope_prompt(scope)
 
-    assert scope == {
+    assert scope["entity_id"].startswith("entity_")
+    assert {key: value for key, value in scope.items() if key != "entity_id"} == {
         "user_id": "default",
         "account_id": "acct-1",
         "platform": "douyin",

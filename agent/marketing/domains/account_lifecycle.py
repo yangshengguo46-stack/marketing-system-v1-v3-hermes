@@ -33,11 +33,19 @@ class AccountLifecycleRepository(MarketingDomainRepository):
         if not isinstance(constraints_value, dict):
             raise ValueError("constraints must be an object")
         constraints_json = _bounded_json(constraints_value, field="constraints", limit=8_000)
+        from agent.marketing.domains.operating_entities import OperatingEntityRepository
+
+        entity_id = str(
+            OperatingEntityRepository(self.paths).ensure_for_account(
+                user_id=user_id,
+                account_id=account_id,
+            )["id"]
+        )
         with self._transaction() as db:
             existing = db.execute(
                 """SELECT * FROM account_strategy_projects
-                WHERE user_id=? AND account_id=? AND status='active'""",
-                (user_id, account_id),
+                WHERE user_id=? AND entity_id=? AND status='active'""",
+                (user_id, entity_id),
             ).fetchone()
             if existing is not None:
                 return _project_record(existing, operation="existing")
@@ -45,9 +53,19 @@ class AccountLifecycleRepository(MarketingDomainRepository):
             project_id = f"strategy_{uuid.uuid4().hex}"
             db.execute(
                 """INSERT INTO account_strategy_projects
-                (id,user_id,account_id,business_goal,constraints_json,stage,status,created_at,updated_at)
-                VALUES (?,?,?,?,?,'goal_defined','active',?,?)""",
-                (project_id, user_id, account_id, goal, constraints_json, now, now),
+                (id,user_id,entity_id,account_id,business_goal,constraints_json,
+                 stage,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,'goal_defined','active',?,?)""",
+                (
+                    project_id,
+                    user_id,
+                    entity_id,
+                    account_id,
+                    goal,
+                    constraints_json,
+                    now,
+                    now,
+                ),
             )
             row = db.execute(
                 "SELECT * FROM account_strategy_projects WHERE id=?",
@@ -118,13 +136,13 @@ class AccountLifecycleRepository(MarketingDomainRepository):
             "data_gaps_json": _bounded_list(data_gaps or [], field="data_gaps"),
         }
         with self._transaction() as db:
-            _require_active_project(
+            project = _require_active_project(
                 db, user_id=user_id, account_id=account_id, project_id=project_id
             )
             selected_route = db.execute(
                 """SELECT id FROM market_route_hypotheses
-                WHERE project_id=? AND user_id=? AND account_id=? AND status='selected'""",
-                (project_id, user_id, account_id),
+                WHERE project_id=? AND user_id=? AND entity_id=? AND status='selected'""",
+                (project_id, user_id, project["entity_id"]),
             ).fetchone()
             if selected_route is None:
                 raise ValueError("selected market route is required before audience modeling")
@@ -137,16 +155,17 @@ class AccountLifecycleRepository(MarketingDomainRepository):
             hypothesis_id = f"audience_{uuid.uuid4().hex}"
             db.execute(
                 """INSERT INTO audience_hypotheses
-                (id,project_id,user_id,account_id,version,segments_json,pains_json,
+                (id,project_id,user_id,entity_id,account_id,version,segments_json,pains_json,
                  scenarios_json,jobs_json,current_alternatives_json,trust_barriers_json,
                  desired_outcomes_json,behavior_signals_json,existence_strategy_hypotheses_json,
                  need_projection_hypotheses_json,cognitive_projection_hypotheses_json,
                  exclusions_json,data_gaps_json,status,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?)""",
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?)""",
                 (
                     hypothesis_id,
                     project_id,
                     user_id,
+                    project["entity_id"],
                     account_id,
                     version,
                     payload["segments_json"],
@@ -183,13 +202,13 @@ class AccountLifecycleRepository(MarketingDomainRepository):
         if confirmed_by_user is not True:
             raise ValueError("explicit user confirmation is required")
         with self._transaction() as db:
-            _require_active_project(
+            project = _require_active_project(
                 db, user_id=user_id, account_id=account_id, project_id=project_id
             )
             row = db.execute(
                 """SELECT * FROM audience_hypotheses
-                WHERE id=? AND project_id=? AND user_id=? AND account_id=?""",
-                (hypothesis_id, project_id, user_id, account_id),
+                WHERE id=? AND project_id=? AND user_id=? AND entity_id=?""",
+                (hypothesis_id, project_id, user_id, project["entity_id"]),
             ).fetchone()
             if row is None:
                 raise KeyError("audience hypothesis not found in account scope")
@@ -226,14 +245,37 @@ class AccountLifecycleRepository(MarketingDomainRepository):
 def _require_active_project(
     db: sqlite3.Connection, *, user_id: str, account_id: str, project_id: str
 ) -> sqlite3.Row:
+    entity_id = _resolve_entity_id(db, user_id=user_id, account_id=account_id)
     row = db.execute(
         """SELECT * FROM account_strategy_projects
-        WHERE id=? AND user_id=? AND account_id=? AND status='active'""",
-        (project_id, user_id, account_id),
+        WHERE id=? AND user_id=? AND entity_id=? AND status='active'""",
+        (project_id, user_id, entity_id),
     ).fetchone()
     if row is None:
-        raise KeyError("active strategy project not found in account scope")
+        raise KeyError("active strategy project not found in operating entity scope")
     return row
+
+
+def _resolve_entity_id(
+    db: sqlite3.Connection, *, user_id: str, account_id: str
+) -> str:
+    membership = db.execute(
+        """SELECT entity_id FROM marketing_operating_entity_accounts
+        WHERE user_id=? AND account_id=? AND status='active'""",
+        (user_id, account_id),
+    ).fetchone()
+    if membership is not None:
+        return str(membership["entity_id"])
+    entities = db.execute(
+        """SELECT id FROM marketing_operating_entities
+        WHERE user_id=? AND status='active' ORDER BY id""",
+        (user_id,),
+    ).fetchall()
+    if len(entities) != 1:
+        raise ValueError(
+            "action account is not linked to one operating entity; explicit selection is required"
+        )
+    return str(entities[0]["id"])
 
 
 def _project_record(row: sqlite3.Row, *, operation: str) -> dict[str, Any]:

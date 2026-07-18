@@ -1395,6 +1395,7 @@ export const ja = defineLocale({
     nav: {
       workbench: 'ワークベンチ',
       'new-session': '新しいセッション',
+      drafts: '下書き',
       skills: 'スキルとツール',
       messaging: 'メッセージング',
       artifacts: 'アーティファクト'

@@ -20,6 +20,59 @@ class _AccountRepository:
         }
 
 
+class _TopicRepository:
+    def get_candidate(self, *, candidate_id: str, user_id: str, entity_id: str) -> dict:
+        assert candidate_id == "topic-candidate-1"
+        assert user_id == "default"
+        assert entity_id
+        return {
+            "id": candidate_id,
+            "account_id": "acct_plan_owner",
+            "topic": "当前的 AI 是泡沫吗？",
+            "angle": "区分估值、需求和生产率",
+            "plan_id": "production_plan_1",
+            "preflight_id": "preflight_1",
+            "target_platforms": ["douyin", "wechat_official", "youtube"],
+            "evidence_refs": ["evidence-1", "evidence-2"],
+            "signal_refs": ["signal-today"],
+            "recommendation_eligible": True,
+            "candidate": {
+                "recommendation_type": "general",
+                "recommended_platforms": [
+                    "douyin",
+                    "wechat_official",
+                    "youtube",
+                ],
+                "platform_matches": [
+                    {
+                        "platform": "douyin",
+                        "match_score": 91,
+                        "strong_match": True,
+                    },
+                    {
+                        "platform": "wechat_official",
+                        "match_score": 86,
+                        "strong_match": True,
+                    },
+                ],
+                "platform_blueprints": {
+                    "douyin": {"opening_contract": "前三秒给结论"},
+                    "wechat_official": {"opening_contract": "先定义争议"},
+                    "youtube": {"opening_contract": "用问题建立悬念"},
+                },
+            },
+        }
+
+
+class _EntityRepository:
+    def account_is_linked(
+        self, *, entity_id: str, user_id: str, account_id: str
+    ) -> bool:
+        assert entity_id
+        assert user_id == "default"
+        return account_id == "acct_plan_owner"
+
+
 def test_video_stage_action_keeps_visible_copy_separate_from_execution_contract():
     result = prepare_marketing_operation(
         {
@@ -74,6 +127,49 @@ def test_first_run_goal_starts_research_without_asking_for_a_second_send():
     assert result["visible_text"] == "围绕经营目标启动首次研究"
     assert "不要要求用户重新发送目标" in result["prompt"]
     assert "第一个可在产品界面审阅的经营对象" in result["prompt"]
+
+
+def test_daily_topic_start_is_bound_to_the_approved_plan_and_platform_blueprints():
+    result = prepare_marketing_operation(
+        {
+            "account_id": "acct_wechat",
+            "kind": "content.topic.start",
+            "target_id": "topic-candidate-1",
+            "title": "不能覆盖原生选题",
+        },
+        account_repository=_AccountRepository(),
+        entity_repository=_EntityRepository(),
+        topic_repository=_TopicRepository(),
+    )
+
+    operation = result["operation"]
+    assert operation["topic"] == "当前的 AI 是泡沫吗？"
+    assert operation["title"] == operation["topic"]
+    assert operation["execution_account_id"] == "acct_plan_owner"
+    assert operation["plan_id"] == "production_plan_1"
+    assert operation["preflight_id"] == "preflight_1"
+    assert operation["evidence_refs"] == ["evidence-1", "evidence-2"]
+    assert operation["signal_refs"] == ["signal-today"]
+    assert operation["recommendation_type"] == "general"
+    assert operation["recommended_platforms"] == [
+        "douyin",
+        "wechat_official",
+        "youtube",
+    ]
+    assert operation["platform_matches"][0]["match_score"] == 91
+    assert operation["target_platforms"] == [
+        "douyin",
+        "wechat_official",
+        "youtube",
+    ]
+    assert set(operation["platform_blueprints"]) == {
+        "douyin",
+        "wechat_official",
+        "youtube",
+    }
+    assert result["visible_text"] == "把今日选题「当前的 AI 是泡沫吗？」交给内容工厂"
+    assert "不得重新规划成另一个选题" in result["prompt"]
+    assert "全部 target_platforms" in result["prompt"]
 
 
 def test_video_setup_persists_ui_selections_as_structured_native_context():
@@ -138,9 +234,13 @@ def test_gateway_exposes_the_structured_operation_entrypoint(monkeypatch):
     assert response["result"]["visible_text"] == "排出今天的经营优先级"
 
 
-def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(monkeypatch):
+def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(
+    tmp_path, monkeypatch
+):
     from agent.marketing import operation_entrypoints
     from tui_gateway import server
+
+    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(tmp_path / "state.db"))
 
     captured = {}
 
@@ -152,6 +252,7 @@ def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(m
             "kind": params["kind"],
             "operation": {
                 "account_id": params["account_id"],
+                "execution_account_id": "acct_plan_owner",
                 "kind": params["kind"],
             },
             "prompt": "hidden backend execution contract",
@@ -159,14 +260,19 @@ def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(m
             "visible_text": "排出今天的经营优先级",
         },
     )
-    monkeypatch.setattr(
-        server,
-        "_marketing_operation_snapshot",
-        lambda kind, *, user_id, account_id: {
+    snapshot_calls = {"count": 0}
+
+    def operation_snapshot(kind, *, user_id, account_id):
+        snapshot_calls["count"] += 1
+        return {
             "content_assets": [],
+            "content_plans": (
+                [] if snapshot_calls["count"] == 1 else ["plan_preflighted"]
+            ),
             "video_productions": [],
-        },
-    )
+        }
+
+    monkeypatch.setattr(server, "_marketing_operation_snapshot", operation_snapshot)
 
     def create_session(rid, params):
         captured["create"] = params
@@ -203,6 +309,7 @@ def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(m
     assert "prompt" not in started["result"]
     assert started["result"]["state"] == "working"
     assert captured["create"]["source"] == "desktop-product"
+    assert captured["create"]["marketing_account_id"] == "acct_plan_owner"
     assert captured["submit"] == {
         "session_id": "product-operation-live",
         "text": "hidden backend execution contract",
@@ -226,8 +333,59 @@ def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(m
             "object_id": "acct_wechat",
             "object_type": "account",
             "title": "账号经营上下文",
-        }
+        },
+        {
+            "object_id": "plan_preflighted",
+            "object_type": "content_plan",
+            "title": "已预演选题计划",
+        },
     ]
+
+    server._sessions.pop("product-operation-live")
+    recovered = server._methods["marketing.operation.status"](
+        "operation-status-after-restart",
+        {"operation_id": operation_id},
+    )
+    assert recovered["result"] == complete["result"]
+
+
+def test_gateway_recovers_an_inflight_operation_as_a_retryable_error_after_restart(
+    tmp_path, monkeypatch
+):
+    from agent.marketing.domains import MarketingOperationRepository
+    from tui_gateway import server
+
+    monkeypatch.setenv("MARKETING_OS_AGENT_DB", str(tmp_path / "state.db"))
+    operation_id = "marketing_operation_restart_test"
+    MarketingOperationRepository().create(
+        {
+            "account_id": "acct_wechat",
+            "baseline": {"content_assets": [], "video_productions": []},
+            "created_at": 1_752_700_000.0,
+            "kind": "content.article.start",
+            "operation": {
+                "account_id": "acct_wechat",
+                "kind": "content.article.start",
+                "note": "写一篇真实内容",
+            },
+            "operation_id": operation_id,
+            "stored_session_id": "stored-before-restart",
+            "title": "图文创作",
+            "user_id": "default",
+            "visible_text": "开始一篇新的图文作品",
+        },
+        live_session_id="live-before-restart",
+    )
+
+    response = server._methods["marketing.operation.status"](
+        "operation-status-after-interrupted-restart",
+        {"operation_id": operation_id},
+    )
+
+    assert response["result"]["state"] == "error"
+    assert "Gateway 已重启" in response["result"]["error"]
+    assert "安全重试" in response["result"]["error"]
+    assert MarketingOperationRepository().get(operation_id)["state"] == "error"
 
 
 def test_gateway_does_not_call_an_object_producing_operation_complete_without_an_object(

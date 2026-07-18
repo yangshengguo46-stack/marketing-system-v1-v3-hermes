@@ -163,6 +163,50 @@ class EvidenceRepository(MarketingDomainRepository):
             )
         return [found[ref] for ref in refs]
 
+    def require_verified_across_accounts(
+        self,
+        *,
+        user_id: str,
+        account_ids: list[str],
+        evidence_ids: list[str],
+        require_any: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Resolve evidence inside an already-authorized operating-entity set."""
+
+        refs = _evidence_ids(evidence_ids)
+        owners = list(
+            dict.fromkeys(
+                str(item or "").strip()
+                for item in account_ids
+                if str(item or "").strip()
+            )
+        )
+        if require_any and not refs:
+            raise ValueError(
+                "content production requires at least one verified EvidencePack record"
+            )
+        if not refs:
+            return []
+        if not owners:
+            raise ValueError("operating entity has no evidence-owning accounts")
+        account_slots = ",".join("?" for _ in owners)
+        evidence_slots = ",".join("?" for _ in refs)
+        with self._connection() as db:
+            rows = db.execute(
+                f"""SELECT * FROM evidence_records
+                WHERE user_id=? AND account_id IN ({account_slots}) AND status='verified'
+                  AND id IN ({evidence_slots})""",
+                [user_id, *owners, *refs],
+            ).fetchall()
+        found = {row["id"]: _record(row) for row in rows}
+        missing = [ref for ref in refs if ref not in found]
+        if missing:
+            raise ValueError(
+                "evidence_refs must be verified inside the bound operating entity: "
+                + ", ".join(missing)
+            )
+        return [found[ref] for ref in refs]
+
     def list(
         self,
         *,

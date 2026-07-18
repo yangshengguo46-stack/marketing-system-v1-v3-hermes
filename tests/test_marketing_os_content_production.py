@@ -201,6 +201,126 @@ def test_native_planner_rejects_external_video_studio_work():
         )
 
 
+def test_one_topic_persists_distinct_variants_for_an_extensible_platform_set(
+    tmp_path, monkeypatch
+):
+    _bind_session(tmp_path, monkeypatch)
+    _, evidence_id = _capture_evidence()
+    platforms = [
+        "douyin",
+        "wechat_official",
+        "youtube",
+        "linkedin",
+        "mastodon",
+    ]
+    planned = json.loads(
+        handle_function_call(
+            "marketing_plan_content_production",
+            {
+                "objective": "当前的 AI 是泡沫吗？在各平台做原生内容",
+                "kind": "cross_platform_campaign",
+                "platforms": platforms,
+                "audience": "关注 AI 产业变化的知识工作者",
+                "evidence_refs": [evidence_id],
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+    variants = {
+        "douyin": {
+            "format": "short_video",
+            "script": "AI 是泡沫吗？先看三组相互矛盾的市场信号。",
+            "adaptation_basis": {
+                "audience_intent": "刷流中快速判断",
+                "opening": "首秒给争议结论",
+                "structure": "结论、证据、边界",
+                "cta": "评论你看到的泡沫信号",
+            },
+        },
+        "wechat_official": {
+            "format": "long_article",
+            "body_markdown": "从资本、收入、生产率三个层次拆解 AI 泡沫命题。",
+            "adaptation_basis": {
+                "audience_intent": "系统理解并转发",
+                "opening": "交代判断框架",
+                "structure": "问题、证据、反方、行动",
+                "cta": "转发给正在做 AI 决策的人",
+            },
+        },
+        "youtube": {
+            "format": "long_video",
+            "outline": "用章节比较互联网泡沫与当前 AI 的收入和基础设施周期。",
+            "adaptation_basis": {
+                "audience_intent": "深度检索和观看",
+                "opening": "兑现标题与缩略图承诺",
+                "structure": "路线图、证据、反方、结论",
+                "cta": "观看下一期产业周期分析",
+            },
+        },
+        "linkedin": {
+            "format": "document",
+            "short_text": "AI 是否泡沫，取决于你讨论的是估值、需求还是生产率。",
+            "adaptation_basis": {
+                "audience_intent": "职业判断和同行讨论",
+                "opening": "从业务决策冲突切入",
+                "structure": "观点、数据、边界、启发",
+                "cta": "邀请同行提供业务反例",
+            },
+        },
+        "mastodon": {
+            "format": "generic_material_pack",
+            "thread": "保留证据卡、核心判断和反方观点；发布格式待平台调研。",
+            "adaptation_basis": {
+                "audience_intent": "未知，等待平台调研",
+                "opening": "暂用清楚价值承诺",
+                "structure": "可重排证据与边界",
+                "cta": "仅使用低风险讨论问题",
+            },
+        },
+    }
+    created = json.loads(
+        handle_function_call(
+            "marketing_draft_content_create",
+            {
+                "title": "当前的 AI 是泡沫吗？全平台 campaign",
+                "plan_id": planned["plan_id"],
+                "type": "script",
+                "platform": "multi_platform",
+                "production_kind": "cross_platform_campaign",
+                "topic": "AI 泡沫",
+                "content": {
+                    "schema": "marketing.cross_platform_campaign.v1",
+                    "content_kernel": {
+                        "claim": "泡沫必须分估值、需求和生产率讨论",
+                        "evidence_refs": [evidence_id],
+                    },
+                    "platform_variants": variants,
+                },
+                "evidence_refs": [evidence_id],
+                "reaction_scenarios": _reaction_scenarios(evidence_id),
+            },
+            task_id="session-1",
+            session_id="session-1",
+            enabled_toolsets=["marketing"],
+        )
+    )
+
+    assert planned["kind"] == "cross_platform_campaign"
+    assert planned["target_platforms"] == platforms
+    assert set(planned["preflight"]["platform_assessments"]) == set(platforms)
+    assert planned["preflight"]["recommendation_status"] in {
+        "recommended",
+        "research_only",
+    }
+    assert created["platform"] == "multi_platform"
+    assert set(created["content"]["platform_variants"]) == set(platforms)
+    assert created["content"]["platform_blueprints"]["mastodon"][
+        "guidance_status"
+    ] == "generic_unverified_requires_platform_research"
+
+
 def test_native_content_tools_plan_save_and_resume_in_bound_account(
     tmp_path, monkeypatch
 ):
@@ -442,10 +562,12 @@ def test_content_write_schema_cannot_override_account_scope():
         "auto",
         "article_soft",
         "faceless_video",
+        "cross_platform_campaign",
     ]
     assert create_properties["production_kind"]["enum"] == [
         "article_soft",
         "faceless_video",
+        "cross_platform_campaign",
     ]
     assert "marketing_read_evidence_pack" in by_name
     assert "marketing_read_sound_trends" in by_name

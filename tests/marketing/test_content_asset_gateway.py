@@ -14,7 +14,7 @@ def test_gateway_lists_bounded_content_summaries_and_loads_body_on_demand(tmp_pa
     SessionDB(db_path=state_path).close()
     content = {
         "schema": "marketing.article_bundle.v1",
-        "production_kind": "article_soft",
+        "_production_kind": "article_soft",
         "review_status": "ready_for_human_review",
         "parent_draft": {"body_markdown": "很长的正文"},
         "platform_variants": {"zhihu": {"body_markdown": "知乎版本"}},
@@ -60,6 +60,7 @@ def test_gateway_lists_bounded_content_summaries_and_loads_body_on_demand(tmp_pa
     )["result"]
     assert listed["total"] == 1
     summary = listed["assets"][0]
+    assert summary["production_kind"] == "article_soft"
     assert summary["review_status"] == "ready_for_human_review"
     assert summary["validation_ready"] is True
     assert summary["target_platforms"] == ["zhihu"]

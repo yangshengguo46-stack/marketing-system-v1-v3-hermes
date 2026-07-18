@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   appViewForPath,
   ARTICLE_CREATION_ROUTE,
+  DRAFT_BOX_ROUTE,
   isNewChatRoute,
   MATERIAL_LIBRARY_ROUTE,
   NEW_CHAT_ROUTE,
@@ -21,13 +22,15 @@ describe('Marketing OS native routes', () => {
     expect(isNewChatRoute('/chat')).toBe(true)
   })
 
-  it('keeps article, video and materials as native product destinations', () => {
+  it('keeps drafts, article, video and materials as native product destinations', () => {
     expect(ARTICLE_CREATION_ROUTE).toBe('/content/article')
     expect(VIDEO_CREATION_ROUTE).toBe('/content/video')
     expect(MATERIAL_LIBRARY_ROUTE).toBe('/materials')
+    expect(DRAFT_BOX_ROUTE).toBe('/drafts')
     expect(appViewForPath(ARTICLE_CREATION_ROUTE)).toBe('article-creation')
     expect(appViewForPath(VIDEO_CREATION_ROUTE)).toBe('video-creation')
     expect(appViewForPath(MATERIAL_LIBRARY_ROUTE)).toBe('materials')
+    expect(appViewForPath(DRAFT_BOX_ROUTE)).toBe('drafts')
   })
 
   it('round-trips native session routes without confusing them with product routes', () => {
