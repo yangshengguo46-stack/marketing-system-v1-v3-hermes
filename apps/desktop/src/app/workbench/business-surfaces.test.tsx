@@ -462,9 +462,10 @@ describe('Marketing OS business surfaces', () => {
     expect(screen.getByText('Remotion')).toBeTruthy()
     expect(screen.getByText('自动质检通过')).toBeTruthy()
     expect(screen.getByText('无需检查')).toBeTruthy()
+    expect(screen.queryByText('火山声音库')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '声音' }))
-    const soundLibrary = screen.getByRole('group', { name: '声音素材库' })
-    expect(await within(soundLibrary).findByText('火山声音库')).toBeTruthy()
+    const soundLibrary = await screen.findByRole('dialog', { name: '选择旁白音色' })
+    expect(within(soundLibrary).getByText('火山声音库')).toBeTruthy()
     expect(within(soundLibrary).getByText('常驻已接通')).toBeTruthy()
     expect(screen.getAllByText('火山声音库')).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: /小何 2.0/ }))
@@ -475,6 +476,8 @@ describe('Marketing OS business surfaces', () => {
       })
     )
     expect(await screen.findByText('小何 2.0 · seed-tts-2.0')).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByText('火山声音库')).toBeNull())
 
     fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
     expect(startOperation).toHaveBeenCalledWith({

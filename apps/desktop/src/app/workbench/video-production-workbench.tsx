@@ -13,6 +13,7 @@ import {
 } from '@/components/chat/composer-dock'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   AlertCircle,
   AudioLines,
@@ -1703,6 +1704,8 @@ function DirectorInspector({
   summary?: VideoProductionSummary
   totalDuration: number
 }) {
+  const [voiceLibraryOpen, setVoiceLibraryOpen] = useState(false)
+
   const tabs: Array<{ id: InspectorTab; icon: typeof FileImage; label: string }> = [
     { id: 'characters', icon: Users, label: '角色' },
     { id: 'scenes', icon: Layers3, label: '场景' },
@@ -1738,7 +1741,6 @@ function DirectorInspector({
           {tabs.map(tab => {
             const asset = assets.find(item => assetMatchesTab(item, tab.id))
             const soundTab = tab.id === 'sound'
-            const expandedSoundLibrary = soundTab && activeTab === 'sound'
             const ready = Boolean(asset || (soundTab && audioCatalog?.configured_voice))
 
             const summaryText = soundTab
@@ -1750,15 +1752,20 @@ function DirectorInspector({
             return (
               <div
                 aria-label={soundTab ? '声音素材库' : undefined}
-                className={expandedSoundLibrary ? 'overflow-hidden rounded-xl border border-(--ui-accent)' : ''}
                 key={tab.id}
                 role={soundTab ? 'group' : undefined}
               >
                 <button
-                  aria-expanded={soundTab ? expandedSoundLibrary : undefined}
+                  aria-haspopup={soundTab ? 'dialog' : undefined}
                   aria-label={tab.label}
-                  className={`grid min-h-20 w-full grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-3 p-1.5 text-left transition ${expandedSoundLibrary ? 'bg-(--ui-row-active-background)' : `rounded-xl border ${activeTab === tab.id ? 'border-(--ui-accent) bg-(--ui-row-active-background)' : 'border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) hover:border-(--ui-stroke-primary)'}`}`}
-                  onClick={() => onTab(tab.id)}
+                  className={`grid min-h-20 w-full grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border p-1.5 text-left transition ${activeTab === tab.id ? 'border-(--ui-accent) bg-(--ui-row-active-background)' : 'border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) hover:border-(--ui-stroke-primary)'}`}
+                  onClick={() => {
+                    onTab(tab.id)
+
+                    if (soundTab) {
+                      setVoiceLibraryOpen(true)
+                    }
+                  }}
                   type="button"
                 >
                   <ReferenceThumb asset={asset} icon={tab.icon} />
@@ -1775,14 +1782,6 @@ function DirectorInspector({
                   )}
                 </button>
 
-                {expandedSoundLibrary ? (
-                  <VoiceLibrary
-                    catalog={audioCatalog}
-                    embedded
-                    onSelect={onSelectVoice}
-                    selectingVoiceId={selectingVoiceId}
-                  />
-                ) : null}
               </div>
             )
           })}
@@ -1858,6 +1857,23 @@ function DirectorInspector({
           {confirmLabel}
         </Button>
       </div>
+
+      <Dialog onOpenChange={setVoiceLibraryOpen} open={voiceLibraryOpen}>
+        <DialogContent className="max-h-[82vh] max-w-2xl gap-0 overflow-hidden p-0">
+          <DialogHeader className="border-b border-(--ui-stroke-tertiary) px-5 py-4">
+            <DialogTitle>选择旁白音色</DialogTitle>
+            <DialogDescription>这里的选择会成为后续视频旁白的默认音色。</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 overflow-y-auto p-4">
+            <VoiceLibrary
+              catalog={audioCatalog}
+              embedded
+              onSelect={onSelectVoice}
+              selectingVoiceId={selectingVoiceId}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
     </aside>
   )
 }
