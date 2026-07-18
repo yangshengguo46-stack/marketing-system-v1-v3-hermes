@@ -1245,9 +1245,11 @@ export function VideoProductionWorkbench({
               >
                 {finalMedia?.playback_path ? (
                   <video
-                    className="size-full object-contain"
+                    className="block h-full w-full max-h-full max-w-full object-contain object-center"
                     controls
                     key={finalMedia.playback_path}
+                    playsInline
+                    preload="metadata"
                     src={playbackUrl(finalMedia.playback_path)}
                   />
                 ) : selectedVisual?.playback_path && selectedVisual.media_type === 'image' ? (
@@ -1268,9 +1270,11 @@ export function VideoProductionWorkbench({
                     </small>
                   </div>
                 ) : null}
-                <span className="absolute right-2.5 bottom-2.5 z-20 rounded bg-black/45 px-1.5 py-1 font-mono text-[0.58rem]">
-                  {formatDuration(selectedScene?.duration || totalDuration)}
-                </span>
+                {!finalMedia?.playback_path ? (
+                  <span className="absolute right-2.5 bottom-2.5 z-20 rounded bg-black/45 px-1.5 py-1 font-mono text-[0.58rem]">
+                    {formatDuration(selectedScene?.duration || totalDuration)}
+                  </span>
+                ) : null}
               </div>
             </div>
             <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 bg-[#f8f4eb] px-3 py-1.5 text-[#6e665c]">
