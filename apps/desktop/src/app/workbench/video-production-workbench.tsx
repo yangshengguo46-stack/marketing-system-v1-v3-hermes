@@ -1235,13 +1235,14 @@ export function VideoProductionWorkbench({
         <main
           className={`min-w-0 bg-(--ui-chat-surface-background) p-2.5 sm:p-3 ${directorLayout === 'wide' ? 'border-r border-(--ui-stroke-tertiary)' : directorLayout === 'stacked' ? 'border-b border-(--ui-stroke-tertiary)' : ''}`}
         >
-          <div className="overflow-hidden rounded-[14px] border border-[#d4ccbf] bg-[#1b1b1b] shadow-[0_18px_42px_-32px_rgba(54,42,31,.65)]">
-            <div
-              className={`grid place-items-center ${directorLayout === 'wide' ? 'min-h-[28rem]' : directorLayout === 'compact' ? 'min-h-[23rem]' : 'min-h-[19rem]'}`}
-            >
+          <div
+            className="mx-auto overflow-hidden rounded-[14px] border border-[#d4ccbf] bg-[#1b1b1b] shadow-[0_18px_42px_-32px_rgba(54,42,31,.65)]"
+            style={{ width: previewFrameStyle(canvas).width }}
+          >
+            <div className="grid place-items-center">
               <div
-                className="relative grid max-h-[36rem] place-items-center overflow-hidden bg-[radial-gradient(circle_at_70%_20%,rgba(236,123,90,0.55),transparent_30%),linear-gradient(145deg,#17283a,#4d2930_58%,#a55743)] text-white"
-                style={previewFrameStyle(canvas)}
+                className="relative grid w-full place-items-center overflow-hidden bg-[radial-gradient(circle_at_70%_20%,rgba(236,123,90,0.55),transparent_30%),linear-gradient(145deg,#17283a,#4d2930_58%,#a55743)] text-white"
+                style={{ aspectRatio: `${canvas.width} / ${canvas.height}` }}
               >
                 {finalMedia?.playback_path ? (
                   <video
