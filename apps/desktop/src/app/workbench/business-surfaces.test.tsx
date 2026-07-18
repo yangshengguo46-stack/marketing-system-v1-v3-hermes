@@ -9,6 +9,7 @@ import { directorLayoutForWidth } from './video-production-workbench'
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
   $marketingOperationTasks.set([])
   window.localStorage.clear()
   Reflect.deleteProperty(window, 'hermesDesktop')
@@ -279,6 +280,7 @@ describe('Marketing OS business surfaces', () => {
   }, 15_000)
 
   it('renders a real ratio-aware video workbench and records the final review', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1500)
     selectMarketingAccount('acct-1')
     const calls = vi.fn()
     const startOperation = vi.fn(() => 'video-operation-task')
@@ -433,7 +435,7 @@ describe('Marketing OS business surfaces', () => {
 
     expect(await screen.findByRole('combobox', { name: '视频项目' })).toBeTruthy()
     await waitFor(() =>
-      expect(document.querySelector('[data-director-layout]')?.getAttribute('data-director-layout')).toBe('stacked')
+      expect(document.querySelector('[data-director-layout]')?.getAttribute('data-director-layout')).toBe('wide')
     )
     expect(screen.getByLabelText('视频制作阶段')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '分镜' }))
@@ -442,30 +444,44 @@ describe('Marketing OS business surfaces', () => {
     expect(screen.queryByRole('button', { name: /交给 AI 生成/ })).toBeNull()
     expect(screen.getByText('镜头列表')).toBeTruthy()
     expect(screen.queryByText('项目参考素材')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '展开项目素材栏' }))
+    let inspectorRail = screen.getByRole('navigation', { name: '项目参考素材' })
+    expect(within(inspectorRail).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([
+      '人物',
+      '声音',
+      '场景',
+      '道具'
+    ])
+    fireEvent.click(within(inspectorRail).getByRole('button', { name: '人物' }))
     expect(screen.getByText('项目参考素材')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '折叠项目素材栏' }))
+    expect(screen.getByRole('navigation', { name: '项目参考素材' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭项目参考素材' }))
     expect(screen.queryByText('项目参考素材')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '折叠项目素材栏' }))
+    expect(screen.queryByRole('navigation', { name: '项目参考素材' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '展开项目素材栏' }))
+    inspectorRail = screen.getByRole('navigation', { name: '项目参考素材' })
     fireEvent.click(screen.getByRole('button', { name: '折叠镜头列表' }))
     expect(screen.queryByText('镜头列表')).toBeNull()
     expect(screen.getByRole('button', { name: '展开镜头列表' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '展开镜头列表' }))
     expect(screen.getByText('版本')).toBeTruthy()
     expect(screen.getByRole('button', { name: '生成新版本' })).toBeTruthy()
-    expect(screen.getByText('项目参考素材')).toBeTruthy()
     expect(screen.getByText('对白')).toBeTruthy()
     expect(screen.getByText('音乐')).toBeTruthy()
     expect((await screen.findAllByText('结果先行')).length).toBe(2)
     expect(screen.getAllByText('16:9').length).toBeGreaterThan(0)
     expect(screen.getByText('1920×1080')).toBeTruthy()
+    expect(screen.getAllByText('品牌主视觉').length).toBe(1)
+    fireEvent.click(within(inspectorRail).getByRole('button', { name: '场景' }))
+    expect(screen.getByText('项目参考素材')).toBeTruthy()
     expect(screen.getAllByText('品牌主视觉').length).toBe(2)
-    fireEvent.click(screen.getByRole('button', { name: '场景' }))
     expect(screen.getByText('Remotion')).toBeTruthy()
     expect(screen.getByText('自动质检通过')).toBeTruthy()
     expect(screen.getByText('无需检查')).toBeTruthy()
     expect(screen.queryByText('火山声音库')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '声音' }))
+    const inspectorPanel = screen.getByText('项目参考素材').closest('aside')
+    expect(inspectorPanel).toBeTruthy()
+    fireEvent.click(within(inspectorPanel as HTMLElement).getByRole('button', { name: '声音' }))
     const soundLibrary = await screen.findByRole('dialog', { name: '选择旁白音色' })
     expect(within(soundLibrary).getByText('火山声音库')).toBeTruthy()
     expect(within(soundLibrary).getByText('常驻已接通')).toBeTruthy()

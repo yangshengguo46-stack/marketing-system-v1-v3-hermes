@@ -33,7 +33,6 @@ import {
   Play,
   Plus,
   RefreshCw,
-  SlidersHorizontal,
   Trash2,
   Users,
   Volume2,
@@ -263,7 +262,7 @@ export interface VideoSetupDraft {
 }
 
 interface VideoWorkspaceViewState {
-  inspectorRailCollapsed: boolean
+  inspectorRailHidden: boolean
   inspectorRailFormatVersion: number
   inspectorTab: InspectorTab
   sceneRailCollapsed: boolean
@@ -349,8 +348,8 @@ function videoWorkspaceViewKey(accountId: string): string {
 
 function readVideoWorkspaceView(accountId: string): VideoWorkspaceViewState {
   const fallback: VideoWorkspaceViewState = {
-    inspectorRailCollapsed: true,
-    inspectorRailFormatVersion: 2,
+    inspectorRailFormatVersion: 3,
+    inspectorRailHidden: false,
     inspectorTab: 'materials',
     sceneRailCollapsed: false,
     selectedId: '',
@@ -364,10 +363,10 @@ function readVideoWorkspaceView(accountId: string): VideoWorkspaceViewState {
     const tabs: InspectorTab[] = ['characters', 'materials', 'props', 'scenes', 'sound']
 
     return {
-      inspectorRailCollapsed:
+      inspectorRailHidden:
         value.inspectorRailFormatVersion === fallback.inspectorRailFormatVersion
-          ? value.inspectorRailCollapsed !== false
-          : fallback.inspectorRailCollapsed,
+          ? value.inspectorRailHidden === true
+          : fallback.inspectorRailHidden,
       inspectorRailFormatVersion: fallback.inspectorRailFormatVersion,
       inspectorTab: tabs.includes(value.inspectorTab as InspectorTab)
         ? (value.inspectorTab as InspectorTab)
@@ -408,7 +407,8 @@ export function VideoProductionWorkbench({
   const [setupCategory, setSetupCategory] = useState<SetupCategory | null>(null)
   const [setupAssets, setSetupAssets] = useState<MediaAssetProjection[]>([])
   const [sceneRailCollapsed, setSceneRailCollapsed] = useState(initialView.sceneRailCollapsed)
-  const [inspectorRailCollapsed, setInspectorRailCollapsed] = useState(initialView.inspectorRailCollapsed)
+  const [inspectorRailHidden, setInspectorRailHidden] = useState(initialView.inspectorRailHidden)
+  const [inspectorPanelOpen, setInspectorPanelOpen] = useState(false)
   const [setupRailCollapsed, setSetupRailCollapsed] = useState(initialView.setupRailCollapsed)
   const [operationTaskId, setOperationTaskId] = useState('')
   const [audioCatalog, setAudioCatalog] = useState<AudioCatalogProjection | null>(null)
@@ -555,8 +555,8 @@ export function VideoProductionWorkbench({
     writeKey(
       videoWorkspaceViewKey(accountId),
       JSON.stringify({
-        inspectorRailCollapsed,
-        inspectorRailFormatVersion: 2,
+        inspectorRailFormatVersion: 3,
+        inspectorRailHidden,
         inspectorTab,
         sceneRailCollapsed,
         selectedId,
@@ -566,7 +566,7 @@ export function VideoProductionWorkbench({
     )
   }, [
     accountId,
-    inspectorRailCollapsed,
+    inspectorRailHidden,
     inspectorTab,
     sceneRailCollapsed,
     selectedId,
@@ -1005,17 +1005,21 @@ export function VideoProductionWorkbench({
 
   const directorColumns =
     directorLayout === 'wide'
-      ? inspectorRailCollapsed
-        ? sceneRailCollapsed
-          ? 'grid-cols-[3.5rem_minmax(0,1fr)_7rem]'
-          : 'grid-cols-[15rem_minmax(0,1fr)_7rem]'
-        : sceneRailCollapsed
-          ? 'grid-cols-[3.5rem_minmax(0,1fr)_20rem]'
-          : 'grid-cols-[15rem_minmax(0,1fr)_20rem]'
-      : directorLayout === 'compact'
+      ? inspectorRailHidden
         ? sceneRailCollapsed
           ? 'grid-cols-[3.5rem_minmax(0,1fr)]'
-          : 'grid-cols-[12rem_minmax(0,1fr)]'
+          : 'grid-cols-[15rem_minmax(0,1fr)]'
+        : sceneRailCollapsed
+          ? 'grid-cols-[3.5rem_minmax(0,1fr)_7rem]'
+          : 'grid-cols-[15rem_minmax(0,1fr)_7rem]'
+      : directorLayout === 'compact'
+        ? inspectorRailHidden
+          ? sceneRailCollapsed
+            ? 'grid-cols-[3.5rem_minmax(0,1fr)]'
+            : 'grid-cols-[12rem_minmax(0,1fr)]'
+          : sceneRailCollapsed
+            ? 'grid-cols-[3.5rem_minmax(0,1fr)_7rem]'
+            : 'grid-cols-[12rem_minmax(0,1fr)_7rem]'
         : 'grid-cols-1'
 
   return (
@@ -1089,8 +1093,16 @@ export function VideoProductionWorkbench({
             <RefreshCw className={`size-3.5 ${loadingList ? 'animate-spin' : ''}`} />
           </button>
           <WorkspaceRailToggle
-            collapsed={inspectorRailCollapsed}
-            onToggle={() => setInspectorRailCollapsed(current => !current)}
+            collapsed={inspectorRailHidden}
+            onToggle={() => {
+              setInspectorRailHidden(current => {
+                if (!current) {
+                  setInspectorPanelOpen(false)
+                }
+
+                return !current
+              })
+            }}
             railName="项目素材栏"
           />
         </div>
@@ -1127,7 +1139,7 @@ export function VideoProductionWorkbench({
       ) : null}
 
       <div
-        className={`grid min-h-0 flex-1 ${directorColumns} ${directorLayout === 'wide' ? '' : 'overflow-y-auto'}`}
+        className={`relative grid min-h-0 flex-1 ${directorColumns} ${directorLayout === 'wide' ? '' : 'overflow-y-auto'}`}
       >
         <aside
           className={`flex min-h-0 flex-col border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) transition-[width] ${directorLayout === 'stacked' ? 'max-h-64 border-b' : 'border-r'}`}
@@ -1338,20 +1350,18 @@ export function VideoProductionWorkbench({
           />
         </main>
 
-        {inspectorRailCollapsed && directorLayout === 'wide' ? (
+        {!inspectorRailHidden && directorLayout !== 'stacked' ? (
           <DirectorInspectorRail
             activeTab={inspectorTab}
             onTab={tab => {
               setInspectorTab(tab)
-              setInspectorRailCollapsed(false)
+              setInspectorPanelOpen(current => (tab === inspectorTab ? !current : true))
             }}
           />
         ) : null}
 
-        {!inspectorRailCollapsed ? (
-          <div
-            className={`flex min-h-0 ${directorLayout === 'compact' ? 'col-span-2 max-h-[34rem] border-t border-(--ui-stroke-tertiary)' : directorLayout === 'stacked' ? 'max-h-[38rem]' : ''}`}
-          >
+        {inspectorPanelOpen && !inspectorRailHidden && directorLayout !== 'stacked' ? (
+          <div className="absolute inset-y-0 right-28 z-50 flex min-h-0 w-80 overflow-hidden border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) shadow-[-18px_0_42px_-28px_rgba(54,42,31,.55)]">
             <DirectorInspector
               accepted={accepted}
               activeStage={activeStage}
@@ -1363,6 +1373,7 @@ export function VideoProductionWorkbench({
               confirming={stageConfirming}
               generatingVoice={generatingVoice}
               onConfirm={() => void confirmStage()}
+              onClose={() => setInspectorPanelOpen(false)}
               onGenerateVoice={() => void generateVoiceover()}
               onSelectVoice={voiceId => void selectDefaultVoice(voiceId)}
               onTab={setInspectorTab}
@@ -1728,6 +1739,7 @@ function DirectorInspector({
   confirming,
   generatingVoice,
   onConfirm,
+  onClose,
   onGenerateVoice,
   onSelectVoice,
   onTab,
@@ -1751,6 +1763,7 @@ function DirectorInspector({
   confirming: boolean
   generatingVoice: boolean
   onConfirm: () => void
+  onClose: () => void
   onGenerateVoice: () => void
   onSelectVoice: (voiceId: string) => void
   onTab: (tab: InspectorTab) => void
@@ -1793,7 +1806,14 @@ function DirectorInspector({
     <aside className="flex min-h-0 flex-1 flex-col bg-(--ui-chat-surface-background)">
       <header className="flex h-12 items-center justify-between border-b border-(--ui-stroke-tertiary) px-3.5">
         <h3 className="text-[0.7rem] font-semibold text-(--ui-text-secondary)">项目参考素材</h3>
-        <SlidersHorizontal className="size-3.5 text-(--ui-text-tertiary)" />
+        <button
+          aria-label="关闭项目参考素材"
+          className="grid size-7 place-items-center rounded-lg text-(--ui-text-tertiary) transition hover:bg-(--ui-row-hover-background) hover:text-foreground"
+          onClick={onClose}
+          type="button"
+        >
+          <X className="size-3.5" />
+        </button>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
