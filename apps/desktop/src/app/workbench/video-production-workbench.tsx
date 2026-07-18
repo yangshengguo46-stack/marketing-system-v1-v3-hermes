@@ -1556,16 +1556,23 @@ function DirectorCommandBox({
 
 function VoiceLibrary({
   catalog,
+  embedded = false,
   onSelect,
   selectingVoiceId
 }: {
   catalog: AudioCatalogProjection | null
+  embedded?: boolean
   onSelect: (voiceId: string) => void
   selectingVoiceId: string
 }) {
   if (!catalog) {
     return (
-      <section className="mt-3 rounded-xl border border-[#ded6c9] bg-[#fffdf8] p-3 text-[0.64rem] text-(--ui-text-tertiary)">
+      <section
+        className={cn(
+          'bg-[#fffdf8] p-3 text-[0.64rem] text-(--ui-text-tertiary)',
+          embedded ? 'border-t border-[#ded6c9]' : 'mt-3 rounded-xl border border-[#ded6c9]'
+        )}
+      >
         声音服务目录暂时不可用，现有成片不会被修改。
       </section>
     )
@@ -1574,7 +1581,12 @@ function VoiceLibrary({
   const metadata = catalog.metadata || {}
 
   return (
-    <section className="mt-3 space-y-3 rounded-xl border border-[#ded6c9] bg-[#fffdf8] p-3">
+    <section
+      className={cn(
+        'space-y-3 bg-[#fffdf8] p-3',
+        embedded ? 'border-t border-[#ded6c9]' : 'mt-3 rounded-xl border border-[#ded6c9]'
+      )}
+    >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h3 className="text-xs font-semibold">火山声音库</h3>
@@ -1700,6 +1712,7 @@ function DirectorInspector({
   ]
 
   const activeIndex = DIRECTOR_STAGES.findIndex(stage => stage.id === activeStage)
+  const configuredVoice = audioCatalog?.voices?.find(voice => voice.id === audioCatalog.configured_voice)
   const currentStage = DIRECTOR_STAGES[Math.max(0, activeIndex)]
   const nextStage = DIRECTOR_STAGES[Math.min(DIRECTOR_STAGES.length - 1, Math.max(0, activeIndex) + 1)]
 
@@ -1722,28 +1735,57 @@ function DirectorInspector({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <div className="grid gap-2.5">
-          {tabs.map(tab => (
-            <button
-              aria-label={tab.label}
-              className={`grid min-h-20 grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border p-1.5 text-left transition ${activeTab === tab.id ? 'border-(--ui-accent) bg-(--ui-row-active-background)' : 'border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) hover:border-(--ui-stroke-primary)'}`}
-              key={tab.id}
-              onClick={() => onTab(tab.id)}
-              type="button"
-            >
-              <ReferenceThumb asset={assets.find(asset => assetMatchesTab(asset, tab.id))} icon={tab.icon} />
-              <span className="min-w-0">
-                <strong className="block text-[0.72rem] font-semibold text-foreground">{tab.label}</strong>
-                <small className="mt-1 block truncate text-[0.58rem] text-(--ui-text-tertiary)">
-                  {assets.find(asset => assetMatchesTab(asset, tab.id))?.name || '等待绑定'}
-                </small>
-              </span>
-              {assets.some(asset => assetMatchesTab(asset, tab.id)) ? (
-                <CheckCircle2 className="size-4 text-(--ui-accent)" />
-              ) : (
-                <Plus className="size-4 text-(--ui-text-tertiary)" />
-              )}
-            </button>
-          ))}
+          {tabs.map(tab => {
+            const asset = assets.find(item => assetMatchesTab(item, tab.id))
+            const soundTab = tab.id === 'sound'
+            const expandedSoundLibrary = soundTab && activeTab === 'sound'
+            const ready = Boolean(asset || (soundTab && audioCatalog?.configured_voice))
+
+            const summaryText = soundTab
+              ? configuredVoice
+                ? `${configuredVoice.display || configuredVoice.id} · ${audioCatalog?.default_model || '语音模型'}`
+                : asset?.name || '选择旁白音色'
+              : asset?.name || '等待绑定'
+
+            return (
+              <div
+                aria-label={soundTab ? '声音素材库' : undefined}
+                className={expandedSoundLibrary ? 'overflow-hidden rounded-xl border border-(--ui-accent)' : ''}
+                key={tab.id}
+                role={soundTab ? 'group' : undefined}
+              >
+                <button
+                  aria-expanded={soundTab ? expandedSoundLibrary : undefined}
+                  aria-label={tab.label}
+                  className={`grid min-h-20 w-full grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-3 p-1.5 text-left transition ${expandedSoundLibrary ? 'bg-(--ui-row-active-background)' : `rounded-xl border ${activeTab === tab.id ? 'border-(--ui-accent) bg-(--ui-row-active-background)' : 'border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) hover:border-(--ui-stroke-primary)'}`}`}
+                  onClick={() => onTab(tab.id)}
+                  type="button"
+                >
+                  <ReferenceThumb asset={asset} icon={tab.icon} />
+                  <span className="min-w-0">
+                    <strong className="block text-[0.72rem] font-semibold text-foreground">{tab.label}</strong>
+                    <small className="mt-1 block truncate text-[0.58rem] text-(--ui-text-tertiary)">
+                      {summaryText}
+                    </small>
+                  </span>
+                  {ready ? (
+                    <CheckCircle2 className="size-4 text-(--ui-accent)" />
+                  ) : (
+                    <Plus className="size-4 text-(--ui-text-tertiary)" />
+                  )}
+                </button>
+
+                {expandedSoundLibrary ? (
+                  <VoiceLibrary
+                    catalog={audioCatalog}
+                    embedded
+                    onSelect={onSelectVoice}
+                    selectingVoiceId={selectingVoiceId}
+                  />
+                ) : null}
+              </div>
+            )
+          })}
         </div>
 
         {activeTab === 'scenes' ? (
@@ -1753,14 +1795,6 @@ function DirectorInspector({
             <InfoRow label="动态意图" value={scene?.motion_intent?.join(' / ') || '直接剪辑'} />
             <InfoRow label="画面填充" value={fitLabel(scene?.visuals?.[0]?.fit)} />
           </dl>
-        ) : null}
-
-        {activeTab === 'sound' ? (
-          <VoiceLibrary
-            catalog={audioCatalog}
-            onSelect={onSelectVoice}
-            selectingVoiceId={selectingVoiceId}
-          />
         ) : null}
 
         <section className="mt-4 border-t border-[#ded6c9] pt-3">
