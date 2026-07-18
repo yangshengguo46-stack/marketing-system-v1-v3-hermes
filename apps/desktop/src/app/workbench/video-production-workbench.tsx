@@ -13,7 +13,6 @@ import {
 } from '@/components/chat/composer-dock'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   AlertCircle,
   AudioLines,
@@ -532,6 +531,7 @@ export function VideoProductionWorkbench({
     const updateLayout = () => setDirectorLayout(directorLayoutForWidth(shell.clientWidth))
 
     updateLayout()
+
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', updateLayout)
 
@@ -814,11 +814,13 @@ export function VideoProductionWorkbench({
 
     setSelectingVoiceId(voiceId)
     setError('')
+
     try {
       const result = await requestGateway<AudioCatalogProjection>('marketing.audio.voice.set', {
         confirmed: true,
         voice_id: voiceId
       })
+
       setAudioCatalog(result)
     } catch (cause) {
       setError(userFacingError(cause, '默认音色保存失败，请检查当前账号是否已开通该音色。'))
@@ -1009,6 +1011,7 @@ export function VideoProductionWorkbench({
   const selectedMaterialSearch = detail?.material_searches?.find(search => search.scene_id === selectedScene?.id)
   const ratio = ratioLabel(canvas)
   const accepted = detail?.output_asset?.human_review_status === 'accepted'
+  const activeReferenceCategory: SetupCategory = inspectorTab === 'materials' ? 'scenes' : inspectorTab
 
   const directorColumns =
     directorLayout === 'wide'
@@ -1371,21 +1374,20 @@ export function VideoProductionWorkbench({
 
         {inspectorPanelOpen && !inspectorRailHidden && directorLayout !== 'stacked' ? (
           <div className="absolute inset-y-0 right-28 z-50 flex min-h-0 w-80 overflow-hidden border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) shadow-[-18px_0_42px_-28px_rgba(54,42,31,.55)]">
-            <DirectorInspector
+            <VideoReferenceLibraryPanel
               accepted={accepted}
               activeStage={activeStage}
-              activeTab={inspectorTab}
               assets={detail?.media_assets || []}
               audioCatalog={audioCatalog}
               canvas={canvas}
+              category={activeReferenceCategory}
               completed={summary?.status === 'completed' && Boolean(detail?.output_asset?.id)}
               confirming={stageConfirming}
               generatingVoice={generatingVoice}
-              onConfirm={() => void confirmStage()}
               onClose={() => setInspectorPanelOpen(false)}
+              onConfirm={() => void confirmStage()}
               onGenerateVoice={() => void generateVoiceover()}
               onSelectVoice={voiceId => void selectDefaultVoice(voiceId)}
-              onTab={setInspectorTab}
               quality={quality}
               readiness={readiness}
               rendered={summary?.status === 'completed'}
@@ -1744,13 +1746,13 @@ function VideoReferenceRail({
   )
 }
 
-function DirectorInspector({
+function VideoReferenceLibraryPanel({
   accepted,
-  activeTab,
   activeStage,
   assets,
   audioCatalog,
   canvas,
+  category,
   completed,
   confirming,
   generatingVoice,
@@ -1758,7 +1760,6 @@ function DirectorInspector({
   onClose,
   onGenerateVoice,
   onSelectVoice,
-  onTab,
   quality,
   readiness,
   rendered,
@@ -1770,11 +1771,11 @@ function DirectorInspector({
   totalDuration
 }: {
   accepted: boolean
-  activeTab: InspectorTab
   activeStage: DirectorStage
   assets: MediaAssetProjection[]
   audioCatalog: AudioCatalogProjection | null
   canvas: CanvasSpec
+  category: SetupCategory
   completed: boolean
   confirming: boolean
   generatingVoice: boolean
@@ -1782,7 +1783,6 @@ function DirectorInspector({
   onClose: () => void
   onGenerateVoice: () => void
   onSelectVoice: (voiceId: string) => void
-  onTab: (tab: InspectorTab) => void
   quality?: VideoQualityReport
   readiness?: VideoRenderReadiness
   rendered: boolean
@@ -1793,15 +1793,14 @@ function DirectorInspector({
   summary?: VideoProductionSummary
   totalDuration: number
 }) {
-  const [voiceLibraryOpen, setVoiceLibraryOpen] = useState(false)
+  const definition = VIDEO_REFERENCE_CATEGORIES.find(item => item.id === category) || VIDEO_REFERENCE_CATEGORIES[0]
+  const sceneAssetId = scene?.visuals?.[0]?.media_asset_id
 
-  const tabs: Array<{ id: InspectorTab; icon: typeof FileImage; label: string }> = [
-    ...VIDEO_REFERENCE_CATEGORIES,
-    { id: 'materials', icon: FileImage, label: '素材' }
-  ]
+  const referenceAssets = assets.filter(
+    asset => setupAssetMatches(asset, category) || (category === 'scenes' && asset.id === sceneAssetId)
+  )
 
   const activeIndex = DIRECTOR_STAGES.findIndex(stage => stage.id === activeStage)
-  const configuredVoice = audioCatalog?.voices?.find(voice => voice.id === audioCatalog.configured_voice)
   const currentStage = DIRECTOR_STAGES[Math.max(0, activeIndex)]
   const nextStage = DIRECTOR_STAGES[Math.min(DIRECTOR_STAGES.length - 1, Math.max(0, activeIndex) + 1)]
 
@@ -1818,9 +1817,9 @@ function DirectorInspector({
   return (
     <aside className="flex min-h-0 flex-1 flex-col bg-(--ui-chat-surface-background)">
       <header className="flex h-12 items-center justify-between border-b border-(--ui-stroke-tertiary) px-3.5">
-        <h3 className="text-[0.7rem] font-semibold text-(--ui-text-secondary)">项目参考素材</h3>
+        <h3 className="text-[0.7rem] font-semibold text-(--ui-text-secondary)">{definition.label}库</h3>
         <button
-          aria-label="关闭项目参考素材"
+          aria-label={`关闭${definition.label}库`}
           className="grid size-7 place-items-center rounded-lg text-(--ui-text-tertiary) transition hover:bg-(--ui-row-hover-background) hover:text-foreground"
           onClick={onClose}
           type="button"
@@ -1830,57 +1829,36 @@ function DirectorInspector({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <div className="grid gap-2.5">
-          {tabs.map(tab => {
-            const asset = assets.find(item => assetMatchesTab(item, tab.id))
-            const soundTab = tab.id === 'sound'
-            const ready = Boolean(asset || (soundTab && audioCatalog?.configured_voice))
-
-            const summaryText = soundTab
-              ? configuredVoice
-                ? `${configuredVoice.display || configuredVoice.id} · ${audioCatalog?.default_model || '语音模型'}`
-                : asset?.name || '选择旁白音色'
-              : asset?.name || '等待绑定'
-
-            return (
-              <div
-                aria-label={soundTab ? '声音素材库' : undefined}
-                key={tab.id}
-                role={soundTab ? 'group' : undefined}
+        {category === 'sound' ? (
+          <VoiceLibrary
+            catalog={audioCatalog}
+            onSelect={onSelectVoice}
+            selectingVoiceId={selectingVoiceId}
+          />
+        ) : referenceAssets.length ? (
+          <section aria-label={`${definition.label}素材`} className="grid gap-2.5">
+            {referenceAssets.map(asset => (
+              <article
+                className="grid min-h-20 grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-3 rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) p-1.5"
+                key={asset.id}
               >
-                <button
-                  aria-haspopup={soundTab ? 'dialog' : undefined}
-                  aria-label={tab.label}
-                  className={`grid min-h-20 w-full grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border p-1.5 text-left transition ${activeTab === tab.id ? 'border-(--ui-accent) bg-(--ui-row-active-background)' : 'border-(--ui-stroke-tertiary) bg-(--ui-bg-primary) hover:border-(--ui-stroke-primary)'}`}
-                  onClick={() => {
-                    onTab(tab.id)
+                <ReferenceThumb asset={asset} icon={definition.icon} />
+                <span className="min-w-0 pr-2">
+                  <strong className="block truncate text-[0.72rem] font-semibold text-foreground">{asset.name}</strong>
+                  <small className="mt-1 block truncate text-[0.58rem] text-(--ui-text-tertiary)">
+                    {[asset.provider || asset.source_type, asset.rights_status].filter(Boolean).join(' · ')}
+                  </small>
+                </span>
+              </article>
+            ))}
+          </section>
+        ) : (
+          <div className="rounded-xl border border-dashed border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) px-4 py-8 text-center text-[0.64rem] text-(--ui-text-tertiary)">
+            当前项目还没有可用的{definition.label}素材
+          </div>
+        )}
 
-                    if (soundTab) {
-                      setVoiceLibraryOpen(true)
-                    }
-                  }}
-                  type="button"
-                >
-                  <ReferenceThumb asset={asset} icon={tab.icon} />
-                  <span className="min-w-0">
-                    <strong className="block text-[0.72rem] font-semibold text-foreground">{tab.label}</strong>
-                    <small className="mt-1 block truncate text-[0.58rem] text-(--ui-text-tertiary)">
-                      {summaryText}
-                    </small>
-                  </span>
-                  {ready ? (
-                    <CheckCircle2 className="size-4 text-(--ui-accent)" />
-                  ) : (
-                    <Plus className="size-4 text-(--ui-text-tertiary)" />
-                  )}
-                </button>
-
-              </div>
-            )
-          })}
-        </div>
-
-        {activeTab === 'scenes' ? (
+        {category === 'scenes' ? (
           <dl className="mt-3 space-y-2 rounded-xl border border-[#ded6c9] bg-[#fffdf8] p-3 text-[0.64rem]">
             <InfoRow label="当前镜头" value={scene?.purpose || '未选择'} />
             <InfoRow label="生成方式" value={rendererLabel(scenePlan?.renderer)} />
@@ -1950,23 +1928,6 @@ function DirectorInspector({
           {confirmLabel}
         </Button>
       </div>
-
-      <Dialog onOpenChange={setVoiceLibraryOpen} open={voiceLibraryOpen}>
-        <DialogContent className="max-h-[82vh] max-w-2xl gap-0 overflow-hidden p-0">
-          <DialogHeader className="border-b border-(--ui-stroke-tertiary) px-5 py-4">
-            <DialogTitle>选择旁白音色</DialogTitle>
-            <DialogDescription>这里的选择会成为后续视频旁白的默认音色。</DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 overflow-y-auto p-4">
-            <VoiceLibrary
-              catalog={audioCatalog}
-              embedded
-              onSelect={onSelectVoice}
-              selectingVoiceId={selectingVoiceId}
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
     </aside>
   )
 }
@@ -2656,9 +2617,11 @@ export function directorLayoutForWidth(width: number): DirectorLayout {
   if (width < 760) {
     return 'stacked'
   }
+
   if (width < 1320) {
     return 'compact'
   }
+
   return 'wide'
 }
 
