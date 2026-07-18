@@ -5,6 +5,7 @@ import { I18nProvider } from '@/i18n/context'
 import { $marketingOperationTasks, selectMarketingAccount } from '@/store/marketing'
 
 import { AccountCenterView, ContentFactoryView, ManagedView, VideoCreationView } from './business-surfaces'
+import { directorLayoutForWidth } from './video-production-workbench'
 
 afterEach(() => {
   cleanup()
@@ -37,6 +38,12 @@ describe('Marketing OS business surfaces', () => {
 
     return result as T
   }
+
+  it('adapts the director layout to the actual workbench width', () => {
+    expect(directorLayoutForWidth(1500)).toBe('wide')
+    expect(directorLayoutForWidth(1000)).toBe('compact')
+    expect(directorLayoutForWidth(640)).toBe('stacked')
+  })
 
   it('renders the product-owned business destinations without an internal high-end video lane', () => {
     selectMarketingAccount('prospect_default')
@@ -382,6 +389,39 @@ describe('Marketing OS business surfaces', () => {
         return projection as T
       }
 
+      if (method === 'marketing.audio.catalog') {
+        return {
+          available: true,
+          configured_voice: 'zh_female_vv_uranus_bigtts',
+          default_model: 'seed-tts-2.0',
+          display_name: 'Volcengine Doubao Speech 2.0',
+          metadata: {
+            official_voice_count: 325,
+            service_families: [{ active: true, id: 'seed-tts-2.0', name: '语音合成 2.0' }]
+          },
+          provider: 'volcengine-speech',
+          voices: [
+            { display: 'Vivi 2.0', gender: 'female', id: 'zh_female_vv_uranus_bigtts', language: 'zh-CN' },
+            { display: '小何 2.0', gender: 'female', id: 'zh_female_xiaohe_uranus_bigtts', language: 'zh-CN' }
+          ]
+        } as T
+      }
+
+      if (method === 'marketing.audio.voice.set') {
+        return {
+          available: true,
+          configured_voice: params?.voice_id,
+          default_model: 'seed-tts-2.0',
+          display_name: 'Volcengine Doubao Speech 2.0',
+          metadata: { official_voice_count: 325 },
+          provider: 'volcengine-speech',
+          voices: [
+            { display: 'Vivi 2.0', id: 'zh_female_vv_uranus_bigtts' },
+            { display: '小何 2.0', id: 'zh_female_xiaohe_uranus_bigtts' }
+          ]
+        } as T
+      }
+
       if (method === 'marketing.content.asset.review') {
         return { asset: { ...projection.output_asset, human_review_status: params?.decision } } as T
       }
@@ -392,6 +432,9 @@ describe('Marketing OS business surfaces', () => {
     render(<VideoCreationView onStartOperation={startOperation} requestGateway={requestGateway} />)
 
     expect(await screen.findByRole('combobox', { name: '视频项目' })).toBeTruthy()
+    await waitFor(() =>
+      expect(document.querySelector('[data-director-layout]')?.getAttribute('data-director-layout')).toBe('stacked')
+    )
     expect(screen.getByLabelText('视频制作阶段')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '分镜' }))
     expect(screen.queryByLabelText('人物库')).toBeNull()
@@ -419,6 +462,16 @@ describe('Marketing OS business surfaces', () => {
     expect(screen.getByText('Remotion')).toBeTruthy()
     expect(screen.getByText('自动质检通过')).toBeTruthy()
     expect(screen.getByText('无需检查')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '声音' }))
+    expect(await screen.findByText('火山声音库')).toBeTruthy()
+    expect(screen.getByText('常驻已接通')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /小何 2.0/ }))
+    await waitFor(() =>
+      expect(calls).toHaveBeenCalledWith('marketing.audio.voice.set', {
+        confirmed: true,
+        voice_id: 'zh_female_xiaohe_uranus_bigtts'
+      })
+    )
 
     fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
     expect(startOperation).toHaveBeenCalledWith({

@@ -24,6 +24,58 @@ DEFAULT_MODEL = "seed-tts-2.0"
 DEFAULT_VOICE = "zh_female_vv_uranus_bigtts"
 DEFAULT_SAMPLE_RATE = 24000
 
+_SEED_TTS_2_VOICES = (
+    {
+        "id": "zh_female_vv_uranus_bigtts",
+        "display": "Vivi 2.0",
+        "language": "zh-CN",
+        "gender": "female",
+        "scenario": "general",
+    },
+    {
+        "id": "zh_female_xiaohe_uranus_bigtts",
+        "display": "小何 2.0",
+        "language": "zh-CN",
+        "gender": "female",
+        "scenario": "general",
+    },
+    {
+        "id": "zh_male_taocheng_uranus_bigtts",
+        "display": "小天 2.0",
+        "language": "zh-CN",
+        "gender": "male",
+        "scenario": "general",
+    },
+    {
+        "id": "zh_male_m191_uranus_bigtts",
+        "display": "云舟 2.0",
+        "language": "zh-CN",
+        "gender": "male",
+        "scenario": "general",
+    },
+    {
+        "id": "en_male_tim_uranus_bigtts",
+        "display": "Tim 2.0",
+        "language": "en-US",
+        "gender": "male",
+        "scenario": "general",
+    },
+    {
+        "id": "en_female_dacey_uranus_bigtts",
+        "display": "Dacey 2.0",
+        "language": "en-US",
+        "gender": "female",
+        "scenario": "general",
+    },
+    {
+        "id": "en_female_stokie_uranus_bigtts",
+        "display": "Stokie 2.0",
+        "language": "en-US",
+        "gender": "female",
+        "scenario": "general",
+    },
+)
+
 _FORMAT_MAP = {
     "mp3": ("mp3", ".mp3"),
     "ogg": ("ogg_opus", ".ogg"),
@@ -92,14 +144,56 @@ class VolcengineSpeechProvider(TTSProvider):
         }]
 
     def list_voices(self) -> list[dict[str, Any]]:
-        # Keep this catalog evidence-based. More voices can be added after a
-        # console/API calibration rather than copying a stale public list.
-        return [{
-            "id": DEFAULT_VOICE,
-            "display": "Vivi - Chinese female",
-            "language": "zh-CN",
-            "gender": "female",
-        }]
+        # This is a conservative Seed TTS 2.0 starter catalog, not a claim that
+        # every public voice is entitled for every tenant. The full account
+        # catalog comes from ListSpeakers and uses Volcengine OpenAPI AK/SK,
+        # which is deliberately separate from the synthesis X-Api-Key.
+        return [
+            {
+                **voice,
+                "resource_id": DEFAULT_RESOURCE_ID,
+                "entitlement": "tenant_dependent",
+                "verified": voice["id"] == self._default_voice,
+            }
+            for voice in _SEED_TTS_2_VOICES
+        ]
+
+    def catalog_metadata(self) -> dict[str, Any]:
+        openapi_credentials_configured = bool(
+            os.getenv("VOLCENGINE_ACCESS_KEY_ID")
+            and os.getenv("VOLCENGINE_SECRET_ACCESS_KEY")
+        )
+        return {
+            "official_voice_count": 325,
+            "catalog_scope": "seed-tts-2.0-starter",
+            "full_catalog_sync": {
+                "available": False,
+                "implemented": False,
+                "credentials_configured": openapi_credentials_configured,
+                "requires": [
+                    "VOLCENGINE_ACCESS_KEY_ID",
+                    "VOLCENGINE_SECRET_ACCESS_KEY",
+                ],
+                "reason": (
+                    "ListSpeakers uses Volcengine OpenAPI AK/SK; the configured "
+                    "Speech X-Api-Key is valid for synthesis but cannot enumerate "
+                    "the account voice catalog."
+                ),
+            },
+            "service_families": [
+                {"id": "seed-tts-2.0", "name": "语音合成 2.0", "active": True},
+                {"id": "seed-tts-1.0", "name": "语音合成 1.0", "active": False},
+                {"id": "seed-icl-2.0", "name": "声音复刻 2.0", "active": False},
+                {"id": "seed-icl-1.0", "name": "声音复刻 1.0", "active": False},
+                {"id": "speech-design", "name": "声音设计", "active": False},
+            ],
+            "features": [
+                "多语种与方言",
+                "上下文情绪控制",
+                "语速控制",
+                "MP3 / OGG Opus",
+            ],
+        }
 
     def default_model(self) -> str:
         return DEFAULT_MODEL

@@ -1081,7 +1081,29 @@ class VideoProductionRepository(MarketingDomainRepository):
             account_id=account_id,
         )
         if job is None:
-            raise ValueError("video production has no prepared voiceover job")
+            content = (
+                source.get("content")
+                if isinstance(source.get("content"), dict)
+                else {}
+            )
+            direction = (
+                content.get("video_direction")
+                if isinstance(content.get("video_direction"), dict)
+                else {}
+            )
+            script_text = str(
+                content.get("voiceover_script")
+                or direction.get("voiceover_script")
+                or ""
+            ).strip()
+            if not script_text:
+                raise ValueError("video production has no prepared voiceover job")
+            job = self.audio.prepare_voice(
+                user_id=user_id,
+                account_id=account_id,
+                name=f"{direction.get('title') or source.get('title') or '视频'} 旁白",
+                script_text=script_text[:4000],
+            )
         if job["status"] != "completed":
             self.audio.approve(
                 job_id=job["id"],

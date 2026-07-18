@@ -1325,8 +1325,8 @@ def _validated_sound_plan(
     }
     voice_required = value.get("voice_required") is True
     voice_job_id = str(value.get("voice_job_id") or "").strip()
-    if voice_required:
-        result["voice_required"] = True
+    if voice_required or voice_job_id:
+        result["voice_required"] = voice_required
         result["voice_status"] = str(value.get("voice_status") or "pending").strip()[:40]
         if voice_job_id:
             result["voice_job_id"] = voice_job_id[:160]

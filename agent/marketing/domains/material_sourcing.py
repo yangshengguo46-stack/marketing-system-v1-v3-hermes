@@ -21,6 +21,7 @@ from agent.marketing.providers.materials import (
 
 _ROLES = {"scene", "broll", "prop", "storyboard", "other"}
 _ORIENTATIONS = {"", "landscape", "portrait", "square"}
+_MEDIA_TYPES = {"either", "image", "video"}
 
 
 def _now() -> str:
@@ -55,6 +56,7 @@ class MaterialSourcingRepository(MarketingDomainRepository):
         query: str,
         role: str = "broll",
         orientation: str = "",
+        media_type: str = "either",
         target_duration: float = 0,
         limit: int = 12,
         locale: str = "zh-CN",
@@ -69,6 +71,9 @@ class MaterialSourcingRepository(MarketingDomainRepository):
         orientation = str(orientation or "").strip().lower()
         if orientation not in _ORIENTATIONS:
             raise ValueError("unsupported material orientation")
+        media_type = str(media_type or "either").strip().lower()
+        if media_type not in _MEDIA_TYPES:
+            raise ValueError("unsupported material media type")
         safe_limit = max(1, min(int(limit), 40))
         duration = max(0.0, min(float(target_duration or 0), 600.0))
         request_ref = str(request_ref or "").strip()
@@ -79,6 +84,7 @@ class MaterialSourcingRepository(MarketingDomainRepository):
             "query": query,
             "role": role,
             "orientation": orientation,
+            "media_type": media_type,
             "target_duration": round(duration, 3),
             "limit": safe_limit,
             "locale": str(locale or "zh-CN")[:20],
@@ -128,6 +134,8 @@ class MaterialSourcingRepository(MarketingDomainRepository):
                     )
                 except ValueError as exc:
                     provider_errors[provider.name] = f"invalid candidate: {exc}"[:500]
+                    continue
+                if media_type != "either" and normalized["media_type"] != media_type:
                     continue
                 normalized["score_breakdown"] = self._score(normalized, request)
                 normalized["score"] = round(
@@ -314,6 +322,10 @@ class MaterialSourcingRepository(MarketingDomainRepository):
         for asset in self.media.list(user_id=user_id, account_id=account_id)["assets"]:
             if (
                 asset["media_type"] not in {"image", "video"}
+                or (
+                    request.get("media_type") != "either"
+                    and asset["media_type"] != request.get("media_type")
+                )
                 or asset["role"] not in _ROLES
                 or not asset.get("local_path")
             ):

@@ -44,6 +44,9 @@ def test_topic_workflow_fans_article_and_video_out_as_siblings(tmp_path, monkeyp
         "get_candidate",
         lambda self, **kwargs: _candidate(),
     )
+    monkeypatch.setattr(
+        topic_production, "_automatic_voiceover_authorized", lambda: True
+    )
     workflow = topic_production.create_topic_production_workflow(
         candidate_id="topic_candidate_ai_bubble",
         user_id="default",
@@ -52,6 +55,8 @@ def test_topic_workflow_fans_article_and_video_out_as_siblings(tmp_path, monkeyp
     )
     steps = {step["key"]: step for step in workflow["steps"]}
 
+    assert workflow["policy"]["automatic_voiceover_authorized"] is True
+    assert workflow["policy"]["paid_generation_allowed"] is False
     assert steps["article.direct"]["depends_on"] == ["topic_brief.freeze"]
     assert steps["video.direct"]["depends_on"] == ["topic_brief.freeze"]
     assert not any(key.startswith("article.") for key in steps["video.direct"]["depends_on"])

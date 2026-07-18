@@ -317,8 +317,10 @@ class TopicProductionWorkers:
                 "Plan a faceless video independently from the article branch. Do not request or "
                 "reuse an article script. Return JSON only with: title, hook, thesis, "
                 "voiceover_script, target_duration, sound_strategy, and shot_list. shot_list must "
-                "contain 2-10 objects with id, duration, purpose, visual_query, on_screen_text, "
-                "visual_query as a concise English stock-footage search phrase, and "
+                "contain 2-10 objects with id, duration, purpose, visual_query, media_type, "
+                "on_screen_text, visual_query as a concise English stock-media search phrase, "
+                "media_type chosen from image, video, either according to what best communicates "
+                "that shot, and "
                 "motion_intent (array chosen from straight_cut, kinetic_typography, "
                 "data_visualization, brand_layout, html_css_motion, svg_motion, "
                 "designed_transition), and preferred_renderer (auto/remotion/hyperframes)."
@@ -362,19 +364,20 @@ class TopicProductionWorkers:
         searches: list[dict[str, Any]] = []
         selected: dict[str, str] = {}
         reusable_assets: list[str] = []
+        asset_use_counts: dict[str, int] = {}
+        used_provider_assets: set[tuple[str, str]] = set()
         skill_resolutions: list[dict[str, Any]] = []
         resolver_errors: list[str] = []
-        distinct_target = min(2, len(direction["shot_list"]))
-        for shot_index, shot in enumerate(direction["shot_list"]):
+        unresolved: list[str] = []
+        distinct_target = max(1, (len(direction["shot_list"]) + 1) // 2)
+        for shot in direction["shot_list"]:
             search_attempts: list[dict[str, Any]] = []
-            candidates: list[dict[str, Any]] = []
+            candidates_by_source: dict[tuple[str, str], dict[str, Any]] = {}
             # Commons and other documentary sources respond much better to
             # compact concepts than to stock-site prompt prose. Keep the
-            # original query as evidence, then broaden only until the cut has
-            # enough distinct source clips to edit without needless downloads.
+            # original query as evidence, then broaden every shot independently.
             queries = [str(shot["visual_query"])]
-            if len(reusable_assets) < distinct_target:
-                queries.extend(_broad_material_queries(str(shot["visual_query"])))
+            queries.extend(_broad_material_queries(str(shot["visual_query"])))
             for query_index, query in enumerate(dict.fromkeys(queries)):
                 search = self.materials.search(
                     user_id=user_id,
@@ -382,17 +385,31 @@ class TopicProductionWorkers:
                     query=query,
                     role="broll",
                     orientation="portrait",
+                    media_type=str(shot.get("media_type") or "either"),
                     target_duration=float(shot["duration"]),
                     limit=8,
                     request_ref=(
-                        f"{context.workflow['id']}:video-v2:{shot['id']}:{query_index}"
+                        f"{context.workflow['id']}:video-v3:{shot['id']}:{query_index}"
                     ),
                 )
                 search_attempts.append(search)
-                candidates = list(search.get("candidates") or [])
-                if candidates:
-                    break
-            owned = next((item for item in candidates if item.get("provider") == "user_library"), None)
+                for candidate in search.get("candidates") or []:
+                    source_key = (
+                        str(candidate.get("provider") or ""),
+                        str(candidate.get("provider_asset_id") or candidate.get("id") or ""),
+                    )
+                    if all(source_key):
+                        candidates_by_source.setdefault(source_key, candidate)
+            candidates = list(candidates_by_source.values())
+            owned = next(
+                (
+                    item
+                    for source_key, item in candidates_by_source.items()
+                    if item.get("provider") == "user_library"
+                    and source_key not in used_provider_assets
+                ),
+                None,
+            )
             if owned:
                 materialized = self.materials.materialize(
                     candidate_id=str(owned["id"]),
@@ -403,37 +420,58 @@ class TopicProductionWorkers:
                 selected[str(shot["id"])] = str(materialized["asset"]["id"])
                 if selected[str(shot["id"])] not in reusable_assets:
                     reusable_assets.append(selected[str(shot["id"])])
+                    asset_use_counts[selected[str(shot["id"])]] = 1
+                used_provider_assets.add(
+                    (str(owned.get("provider") or ""), str(owned.get("provider_asset_id") or owned["id"]))
+                )
             # Official/search providers are the second tier. Their candidate
             # records already carry a durable source URL, creator and licence
             # URL. For a reversible local preview the workflow may freeze the
             # top result automatically; publication still has its own rights
             # gate for people/property/trademark context.
-            licensed = next(
-                (
-                    item
-                    for item in candidates
-                    if item.get("provider") != "user_library"
-                    and item.get("license_name")
-                    and item.get("license_url")
-                    and item.get("source_url")
-                ),
-                None,
-            )
-            if str(shot["id"]) not in selected and licensed:
-                materialized = self.materials.materialize(
-                    candidate_id=str(licensed["id"]),
-                    user_id=user_id,
-                    account_id=account_id,
-                    rights_reviewed=True,
-                )
+            licensed_candidates = [
+                item
+                for source_key, item in candidates_by_source.items()
+                if item.get("provider") != "user_library"
+                and source_key not in used_provider_assets
+                and item.get("license_name")
+                and item.get("license_url")
+                and item.get("source_url")
+            ]
+            for licensed in licensed_candidates:
+                if str(shot["id"]) in selected:
+                    break
+                try:
+                    materialized = self.materials.materialize(
+                        candidate_id=str(licensed["id"]),
+                        user_id=user_id,
+                        account_id=account_id,
+                        rights_reviewed=True,
+                    )
+                except Exception as exc:
+                    resolver_errors.append(
+                        f"{shot['id']}/{licensed.get('provider')}: {exc}"
+                    )
+                    continue
                 selected[str(shot["id"])] = str(materialized["asset"]["id"])
                 if selected[str(shot["id"])] not in reusable_assets:
                     reusable_assets.append(selected[str(shot["id"])])
-            if str(shot["id"]) not in selected and len(reusable_assets) < distinct_target:
+                    asset_use_counts[selected[str(shot["id"])]] = 1
+                used_provider_assets.add(
+                    (
+                        str(licensed.get("provider") or ""),
+                        str(licensed.get("provider_asset_id") or licensed["id"]),
+                    )
+                )
+            if str(shot["id"]) not in selected:
                 try:
                     resolved = self.resolve_media(
                         intent=str(shot["visual_query"]),
-                        media_type="video",
+                        media_type=(
+                            "image"
+                            if str(shot.get("media_type") or "either") == "image"
+                            else "video"
+                        ),
                         task_id=context.attempt_id,
                     )
                     source = str(resolved.get("_source") or "")
@@ -450,14 +488,19 @@ class TopicProductionWorkers:
                     resolved_path = resolved.get("absolute_path")
                     if not resolved_path:
                         raise RuntimeError("media skill returned no frozen local file")
+                    resolved_mime = str(resolved.get("mime_type") or "")
+                    resolved_media_type = (
+                        "image" if resolved_mime.startswith("image/") else "video"
+                    )
                     asset = self.media.import_generated_file(
                         user_id=user_id,
                         account_id=account_id,
                         name=str(resolved.get("description") or shot["visual_query"]),
-                        media_type="video",
+                        media_type=resolved_media_type,
                         role="broll",
                         path=Path(str(resolved_path)),
-                        mime_type=str(resolved.get("mime_type") or "video/mp4"),
+                        mime_type=resolved_mime
+                        or ("image/jpeg" if resolved_media_type == "image" else "video/mp4"),
                         provider=f"skill:{provider}",
                         provider_asset_id=str(
                             resolved.get("sha256")
@@ -488,35 +531,53 @@ class TopicProductionWorkers:
                             "workflow_id": context.workflow["id"],
                         },
                     )
-                    selected[str(shot["id"])] = str(asset["id"])
-                    if selected[str(shot["id"])] not in reusable_assets:
-                        reusable_assets.append(selected[str(shot["id"])])
-                    skill_resolutions.append({
-                        "shot_id": shot["id"],
-                        "asset_id": asset["id"],
-                        "resolver_id": resolved.get("id"),
-                        "source": source,
-                    })
+                    asset_id = str(asset["id"])
+                    if asset_id in reusable_assets:
+                        resolver_errors.append(
+                            f"{shot['id']}: media skill returned a duplicate frozen asset"
+                        )
+                    else:
+                        selected[str(shot["id"])] = asset_id
+                        reusable_assets.append(asset_id)
+                        asset_use_counts[asset_id] = 1
+                        skill_resolutions.append({
+                            "shot_id": shot["id"],
+                            "asset_id": asset_id,
+                            "resolver_id": resolved.get("id"),
+                            "source": source,
+                        })
                 except Exception as exc:
                     resolver_errors.append(f"{shot['id']}: {exc}")
-            if str(shot["id"]) not in selected and reusable_assets:
-                # Editing may legitimately reuse one licensed source clip with
-                # a different crop/time range/overlay across adjacent shots.
-                # The compositor owns that transformation; material sourcing
-                # should not download ten near-duplicates for a ten-shot cut.
-                selected[str(shot["id"])] = reusable_assets[
-                    shot_index % len(reusable_assets)
-                ]
+            if str(shot["id"]) not in selected:
+                unresolved.append(str(shot["id"]))
             searches.append({
                 "shot_id": shot["id"],
                 "search_id": search_attempts[-1]["id"],
                 "search_ids": [item["id"] for item in search_attempts],
                 "candidate_count": len(candidates),
+                "requested_media_type": str(shot.get("media_type") or "either"),
                 "selected_asset_id": selected.get(str(shot["id"])),
                 "external_candidates_require_rights_review": sum(
                     1 for item in candidates if item.get("provider") != "user_library"
                 ),
             })
+        if len(reusable_assets) >= distinct_target:
+            for shot_id in unresolved:
+                available = [
+                    asset_id
+                    for asset_id in reusable_assets
+                    if asset_use_counts.get(asset_id, 0) < 2
+                ]
+                if not available:
+                    break
+                asset_id = min(available, key=lambda item: asset_use_counts.get(item, 0))
+                selected[shot_id] = asset_id
+                asset_use_counts[asset_id] = asset_use_counts.get(asset_id, 0) + 1
+                next(
+                    item.update({"selected_asset_id": asset_id, "reused": True})
+                    for item in searches
+                    if item["shot_id"] == shot_id
+                )
         missing = [
             str(shot["id"])
             for shot in direction["shot_list"]
@@ -524,13 +585,19 @@ class TopicProductionWorkers:
         ]
         if missing:
             raise PermanentStepError(
-                "material skills/providers could not resolve every shot; "
+                "material diversity gate blocked rendering; "
+                f"required_unique={distinct_target}; resolved_unique={len(reusable_assets)}; "
                 f"missing={missing}; errors={resolver_errors}"
             )
         return StepResult(
             output={
                 "searches": searches,
                 "selected_assets": selected,
+                "diversity": {
+                    "minimum_unique_assets": distinct_target,
+                    "unique_assets": len(reusable_assets),
+                    "maximum_uses_per_asset": 2,
+                },
                 "skill_resolutions": skill_resolutions,
             },
             artifacts=[
@@ -559,16 +626,37 @@ class TopicProductionWorkers:
             name=f"{direction['title']} 旁白",
             script_text=str(direction["voiceover_script"])[:4000],
         )
-        # Paid/provider TTS remains approval-gated.  The first local cut uses
-        # captions and may render immediately; the prepared job is resumable.
+        automatic = (
+            (context.workflow.get("policy") or {}).get(
+                "automatic_voiceover_authorized"
+            )
+            is True
+        )
+        if automatic and job.get("status") != "completed":
+            job = self.audio.approve(
+                job_id=str(job["id"]),
+                user_id=user_id,
+                account_id=account_id,
+                approval_ref="user-config:marketing.video.auto_voiceover",
+                confirmed_by_user=True,
+            )
+            job = self.audio.execute(
+                job_id=str(job["id"]),
+                user_id=user_id,
+                account_id=account_id,
+            )
+        voice_asset_id = str(job.get("output_asset_id") or "").strip() or None
+        artifacts = [_artifact("audio_job", "marketing_audio_job", job["id"])]
+        if voice_asset_id:
+            artifacts.append(_artifact("voiceover", "media_asset", voice_asset_id))
         return StepResult(
             output={
                 "voice_job_id": job["id"],
                 "voice_status": job["status"],
-                "draft_mix": "captions_only",
-                "render_voice_asset_id": None,
+                "draft_mix": "voiceover" if voice_asset_id else "captions_only",
+                "render_voice_asset_id": voice_asset_id,
             },
-            artifacts=[_artifact("audio_job", "marketing_audio_job", job["id"])],
+            artifacts=artifacts,
         )
 
     def previsualize_video(self, context: StepExecutionContext) -> StepResult:
@@ -608,11 +696,11 @@ class TopicProductionWorkers:
                 "material_manifest": {"searches": materials["searches"], "asset_ids": list(visuals.values())},
                 "sound_plan": {
                     "mode": "original_voice_only",
-                    "mix_role": "captions_first_preview",
+                    "mix_role": "voice_first" if audio["render_voice_asset_id"] else "captions_first_preview",
                     "opening_cue_ms": 0,
-                    "voice_required": False,
+                    "voice_required": bool(audio["render_voice_asset_id"]),
                     "voice_job_id": audio["voice_job_id"],
-                    "voice_status": "awaiting_optional_approval",
+                    "voice_status": audio["voice_status"],
                 },
                 "voiceover_script": direction["voiceover_script"],
             },
@@ -625,6 +713,7 @@ class TopicProductionWorkers:
             direction=direction,
             platform_plan=platform_plan,
             visual_asset_ids=visuals,
+            voice_asset_id=audio["render_voice_asset_id"],
         )
         production = self.video.prepare(
             user_id=user_id,
@@ -965,6 +1054,12 @@ def _normalize_shot(value: Any, index: int) -> dict[str, Any]:
         "duration": round(duration, 3),
         "purpose": _required_text(value.get("purpose"), "shot purpose")[:1000],
         "visual_query": _required_text(value.get("visual_query"), "visual_query")[:300],
+        "media_type": (
+            str(value.get("media_type") or "either").strip().lower()
+            if str(value.get("media_type") or "either").strip().lower()
+            in {"image", "video", "either"}
+            else "either"
+        ),
         "on_screen_text": _required_text(value.get("on_screen_text"), "on_screen_text")[:300],
         "motion_intent": normalized_motion or ["kinetic_typography"],
         "preferred_renderer": str(value.get("preferred_renderer") or "auto").strip().lower(),
@@ -976,6 +1071,7 @@ def _video_ir(
     direction: dict[str, Any],
     platform_plan: dict[str, Any],
     visual_asset_ids: dict[str, str],
+    voice_asset_id: str | None = None,
 ) -> dict[str, Any]:
     aspect = str(platform_plan.get("aspect_ratio") or "9:16")
     width, height = (1920, 1080) if aspect == "16:9" else (1080, 1920)
@@ -1017,7 +1113,7 @@ def _video_ir(
         "canvas": {"width": width, "height": height, "fps": 30},
         "scenes": scenes,
         "captions": captions,
-        "audio": {},
+        "audio": ({"voice_asset_id": voice_asset_id} if voice_asset_id else {}),
         "review_rules": [
             "playable MP4 is required before the production may enter the draft box",
             "every source visual must carry a durable rights state",

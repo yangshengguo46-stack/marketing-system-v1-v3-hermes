@@ -368,6 +368,7 @@ def test_wikimedia_adapter_finds_open_licensed_video_without_credentials(monkeyp
     result = WikimediaCommonsMaterialProvider().search({
         "query": "data center",
         "limit": 3,
+        "media_type": "video",
     })
 
     assert "commons.wikimedia.org/w/api.php?" in captured["url"]
@@ -377,3 +378,53 @@ def test_wikimedia_adapter_finds_open_licensed_video_without_credentials(monkeyp
     assert result[0]["creator"] == "Open Creator"
     assert result[0]["license_name"] == "CC BY-SA 4.0"
     assert result[0]["download_url"].startswith("https://upload.wikimedia.org/")
+
+
+def test_wikimedia_adapter_can_request_open_licensed_images(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return json.dumps({
+                "query": {
+                    "pages": [{
+                        "pageid": 84,
+                        "title": "File:Data center.jpg",
+                        "imageinfo": [{
+                            "url": "https://upload.wikimedia.org/data-center.jpg",
+                            "descriptionurl": "https://commons.wikimedia.org/wiki/File:Data_center.jpg",
+                            "mime": "image/jpeg",
+                            "width": 2400,
+                            "height": 1600,
+                            "size": 2048,
+                            "sha1": "image123",
+                            "extmetadata": {
+                                "LicenseShortName": {"value": "CC BY 4.0"},
+                                "LicenseUrl": {"value": "https://creativecommons.org/licenses/by/4.0/"},
+                                "Artist": {"value": "Open Photographer"},
+                            },
+                        }],
+                    }]
+                }
+            }).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    result = WikimediaCommonsMaterialProvider().search({
+        "query": "data center",
+        "limit": 3,
+        "media_type": "image",
+    })
+
+    assert "filetype%3Abitmap" in captured["url"]
+    assert result[0]["media_type"] == "image"
+    assert result[0]["license_name"] == "CC BY 4.0"

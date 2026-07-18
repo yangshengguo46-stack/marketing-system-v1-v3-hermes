@@ -20,6 +20,22 @@ _VIDEO_FORMATS = frozenset(
 )
 
 
+def _automatic_voiceover_authorized() -> bool:
+    """Read the user's durable paid-TTS preference from Hermes config."""
+
+    try:
+        from hermes_cli.config import load_config
+
+        config = load_config()
+    except Exception:
+        return False
+    marketing = config.get("marketing")
+    if not isinstance(marketing, dict):
+        return False
+    video = marketing.get("video")
+    return isinstance(video, dict) and video.get("auto_voiceover") is True
+
+
 def create_topic_production_workflow(
     *,
     candidate_id: str,
@@ -45,6 +61,7 @@ def create_topic_production_workflow(
     )
     if existing is not None:
         return existing
+    automatic_voiceover = _automatic_voiceover_authorized()
     return harness.create_workflow(
         namespace="marketing",
         owner_user_id=user_id,
@@ -70,6 +87,11 @@ def create_topic_production_workflow(
             # publishing remain separate effects with their own approval gates.
             "local_draft_render_authorized": True,
             "paid_generation_allowed": False,
+            # This is intentionally narrower than paid_generation_allowed:
+            # material/image/video generation remains zero-cost-only.  The
+            # user may separately make their configured TTS provider the
+            # durable default for finished video drafts.
+            "automatic_voiceover_authorized": automatic_voiceover,
             "material_cost_policy": "zero_cost_only",
             "publish_requires_effect_approval": True,
             "unknown_platform_requires_research": True,

@@ -26,7 +26,6 @@ import {
   FileText,
   Layers3,
   Loader2,
-  Maximize,
   Mic,
   MonitorPlay,
   Package,
@@ -36,6 +35,7 @@ import {
   SlidersHorizontal,
   Trash2,
   Users,
+  Volume2,
   X,
   Zap
 } from '@/lib/icons'
@@ -52,6 +52,8 @@ interface CanvasSpec {
   height: number
   width: number
 }
+
+type DirectorLayout = 'compact' | 'stacked' | 'wide'
 
 export interface VideoProductionSummary {
   canvas: CanvasSpec
@@ -192,6 +194,33 @@ interface VideoRenderReadiness {
 interface VoiceJobProjection {
   id: string
   status: string
+}
+
+interface AudioCatalogVoice {
+  display?: string
+  entitlement?: string
+  gender?: string
+  id: string
+  language?: string
+  scenario?: string
+  verified?: boolean
+}
+
+interface AudioCatalogProjection {
+  available: boolean
+  configured_voice?: string
+  default_model?: string
+  display_name?: string
+  metadata?: {
+    catalog_scope?: string
+    features?: string[]
+    full_catalog_sync?: { available?: boolean; reason?: string; requires?: string[] }
+    official_voice_count?: number
+    service_families?: Array<{ active?: boolean; id: string; name: string }>
+  }
+  models?: Array<{ display?: string; id: string; languages?: string[] }>
+  provider?: string
+  voices?: AudioCatalogVoice[]
 }
 
 interface ContentAssetProjection {
@@ -375,6 +404,8 @@ export function VideoProductionWorkbench({
   const [inspectorRailCollapsed, setInspectorRailCollapsed] = useState(initialView.inspectorRailCollapsed)
   const [setupRailCollapsed, setSetupRailCollapsed] = useState(initialView.setupRailCollapsed)
   const [operationTaskId, setOperationTaskId] = useState('')
+  const [audioCatalog, setAudioCatalog] = useState<AudioCatalogProjection | null>(null)
+  const [selectingVoiceId, setSelectingVoiceId] = useState('')
 
   const operationProgress =
     operationTasks.find(task => task.id === operationTaskId) ||
@@ -382,6 +413,8 @@ export function VideoProductionWorkbench({
     null
 
   const settledSetupTaskId = useRef('')
+  const directorShellRef = useRef<HTMLElement | null>(null)
+  const [directorLayout, setDirectorLayout] = useState<DirectorLayout>('wide')
 
   const [setupSelections, setSetupSelections] = useState<Record<SetupCategory, string>>(
     () => readVideoSetupDraft(accountId).selections
@@ -454,6 +487,48 @@ export function VideoProductionWorkbench({
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void requestGateway<AudioCatalogProjection>('marketing.audio.catalog')
+      .then(result => {
+        if (!cancelled) {
+          setAudioCatalog(result)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAudioCatalog(null)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [requestGateway])
+
+  useEffect(() => {
+    const shell = directorShellRef.current
+
+    if (!shell) {
+      return
+    }
+
+    const updateLayout = () => setDirectorLayout(directorLayoutForWidth(shell.clientWidth))
+
+    updateLayout()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateLayout)
+
+      return () => window.removeEventListener('resize', updateLayout)
+    }
+
+    const observer = new ResizeObserver(updateLayout)
+    observer.observe(shell)
+
+    return () => observer.disconnect()
+  }, [productions.length])
 
   useEffect(() => {
     if (initialProductionId && productions.some(item => item.id === initialProductionId)) {
@@ -717,6 +792,26 @@ export function VideoProductionWorkbench({
     }
   }
 
+  const selectDefaultVoice = async (voiceId: string) => {
+    if (!voiceId || selectingVoiceId) {
+      return
+    }
+
+    setSelectingVoiceId(voiceId)
+    setError('')
+    try {
+      const result = await requestGateway<AudioCatalogProjection>('marketing.audio.voice.set', {
+        confirmed: true,
+        voice_id: voiceId
+      })
+      setAudioCatalog(result)
+    } catch (cause) {
+      setError(userFacingError(cause, '默认音色保存失败，请检查当前账号是否已开通该音色。'))
+    } finally {
+      setSelectingVoiceId('')
+    }
+  }
+
   const confirmStage = async () => {
     if (!summary || stageConfirming) {
       return
@@ -900,17 +995,30 @@ export function VideoProductionWorkbench({
   const ratio = ratioLabel(canvas)
   const accepted = detail?.output_asset?.human_review_status === 'accepted'
 
-  const directorColumns = inspectorRailCollapsed
-    ? sceneRailCollapsed
-      ? 'xl:grid-cols-[3.5rem_minmax(0,1fr)]'
-      : 'xl:grid-cols-[15rem_minmax(0,1fr)]'
-    : sceneRailCollapsed
-      ? 'xl:grid-cols-[3.5rem_minmax(0,1fr)_20rem]'
-      : 'xl:grid-cols-[15rem_minmax(0,1fr)_20rem]'
+  const directorColumns =
+    directorLayout === 'wide'
+      ? inspectorRailCollapsed
+        ? sceneRailCollapsed
+          ? 'grid-cols-[3.5rem_minmax(0,1fr)]'
+          : 'grid-cols-[15rem_minmax(0,1fr)]'
+        : sceneRailCollapsed
+          ? 'grid-cols-[3.5rem_minmax(0,1fr)_20rem]'
+          : 'grid-cols-[15rem_minmax(0,1fr)_20rem]'
+      : directorLayout === 'compact'
+        ? sceneRailCollapsed
+          ? 'grid-cols-[3.5rem_minmax(0,1fr)]'
+          : 'grid-cols-[12rem_minmax(0,1fr)]'
+        : 'grid-cols-1'
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-(--ui-chat-surface-background)">
-      <header className="grid min-h-[calc(var(--titlebar-height)+2.5rem)] items-center gap-3 border-b border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) px-4 pt-(--titlebar-height) pb-2.5 lg:grid-cols-[15rem_minmax(0,1fr)_auto] lg:px-5">
+    <section
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-(--ui-chat-surface-background)"
+      data-director-layout={directorLayout}
+      ref={directorShellRef}
+    >
+      <header
+        className={`grid min-h-[calc(var(--titlebar-height)+2.5rem)] items-center gap-3 border-b border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) px-4 pt-(--titlebar-height) pb-2.5 ${directorLayout === 'wide' ? 'grid-cols-[15rem_minmax(0,1fr)_auto] px-5' : 'grid-cols-[minmax(0,1fr)_auto]'}`}
+      >
         <div className="flex min-w-0 items-center gap-2">
           <BackButton onBack={onBack} />
           <span className="h-5 w-px shrink-0 bg-(--ui-stroke-tertiary)" />
@@ -931,7 +1039,9 @@ export function VideoProductionWorkbench({
           </label>
         </div>
 
-        <StageRail activeStage={activeStage} onSelect={setActiveStage} />
+        <div className={directorLayout === 'wide' ? '' : 'order-3 col-span-full min-w-0 overflow-x-auto'}>
+          <StageRail activeStage={activeStage} onSelect={setActiveStage} />
+        </div>
 
         <div className="flex items-center justify-end gap-1.5">
           <button
@@ -1008,8 +1118,12 @@ export function VideoProductionWorkbench({
         </div>
       ) : null}
 
-      <div className={`grid min-h-0 flex-1 ${directorColumns}`}>
-        <aside className="flex min-h-0 flex-col border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) transition-[width] xl:border-r xl:border-b-0">
+      <div
+        className={`grid min-h-0 flex-1 ${directorColumns} ${directorLayout === 'wide' ? '' : 'overflow-y-auto'}`}
+      >
+        <aside
+          className={`flex min-h-0 flex-col border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) transition-[width] ${directorLayout === 'stacked' ? 'max-h-64 border-b' : 'border-r'}`}
+        >
           <div
             className={`flex h-12 items-center border-b border-(--ui-stroke-tertiary) ${sceneRailCollapsed ? 'justify-center px-1' : 'justify-between px-3'}`}
           >
@@ -1117,9 +1231,13 @@ export function VideoProductionWorkbench({
           ) : null}
         </aside>
 
-        <main className="min-w-0 border-b border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) p-2.5 sm:p-3 xl:border-r xl:border-b-0">
+        <main
+          className={`min-w-0 bg-(--ui-chat-surface-background) p-2.5 sm:p-3 ${directorLayout === 'wide' ? 'border-r border-(--ui-stroke-tertiary)' : directorLayout === 'stacked' ? 'border-b border-(--ui-stroke-tertiary)' : ''}`}
+        >
           <div className="overflow-hidden rounded-[14px] border border-[#d4ccbf] bg-[#1b1b1b] shadow-[0_18px_42px_-32px_rgba(54,42,31,.65)]">
-            <div className="grid min-h-[22rem] place-items-center sm:min-h-[28rem]">
+            <div
+              className={`grid place-items-center ${directorLayout === 'wide' ? 'min-h-[28rem]' : directorLayout === 'compact' ? 'min-h-[23rem]' : 'min-h-[19rem]'}`}
+            >
               <div
                 className="relative grid max-h-[36rem] place-items-center overflow-hidden bg-[radial-gradient(circle_at_70%_20%,rgba(236,123,90,0.55),transparent_30%),linear-gradient(145deg,#17283a,#4d2930_58%,#a55743)] text-white"
                 style={previewFrameStyle(canvas)}
@@ -1154,17 +1272,17 @@ export function VideoProductionWorkbench({
                 </span>
               </div>
             </div>
-            <div className="flex h-10 items-center justify-between bg-[#f8f4eb] px-3 text-[#6e665c]">
+            <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 bg-[#f8f4eb] px-3 py-1.5 text-[#6e665c]">
               <span className="flex items-center gap-3 text-[0.65rem]">
-                <Play className="size-3.5 fill-current" />
-                {formatDuration(Math.min(selectedScene?.duration || 0, 5))} /{' '}
-                {formatDuration(selectedScene?.duration || totalDuration)}
+                {finalMedia?.playback_path ? <Volume2 className="size-3.5" /> : <Play className="size-3.5" />}
+                {finalMedia?.playback_path
+                  ? `${production?.video_ir?.audio?.voice_asset_id ? '旁白已绑定' : '当前成片无旁白'} · ${formatDuration(totalDuration)}`
+                  : `${formatDuration(selectedScene?.duration || 0)} / ${formatDuration(totalDuration)}`}
               </span>
-              <span className="flex items-center gap-2 text-[0.62rem]">
+              <span className="flex flex-wrap items-center justify-end gap-2 text-[0.62rem]">
                 <MetaChip label={ratio} />
                 <MetaChip label={`${canvas.width}×${canvas.height}`} />
                 <MetaChip label={`${canvas.fps} FPS`} />
-                <Maximize className="size-3.5" />
               </span>
             </div>
           </div>
@@ -1208,27 +1326,34 @@ export function VideoProductionWorkbench({
         </main>
 
         {!inspectorRailCollapsed ? (
-          <DirectorInspector
-            accepted={accepted}
-            activeStage={activeStage}
-            activeTab={inspectorTab}
-            assets={detail?.media_assets || []}
-            canvas={canvas}
-            completed={summary?.status === 'completed' && Boolean(detail?.output_asset?.id)}
-            confirming={stageConfirming}
-            generatingVoice={generatingVoice}
-            onConfirm={() => void confirmStage()}
-            onGenerateVoice={() => void generateVoiceover()}
-            onTab={setInspectorTab}
-            quality={quality}
-            readiness={readiness}
-            rendered={summary?.status === 'completed'}
-            scene={selectedScene}
-            scenePlan={scenePlan}
-            scenes={scenes}
-            summary={summary}
-            totalDuration={totalDuration}
-          />
+          <div
+            className={`flex min-h-0 ${directorLayout === 'compact' ? 'col-span-2 max-h-[34rem] border-t border-(--ui-stroke-tertiary)' : directorLayout === 'stacked' ? 'max-h-[38rem]' : ''}`}
+          >
+            <DirectorInspector
+              accepted={accepted}
+              activeStage={activeStage}
+              activeTab={inspectorTab}
+              assets={detail?.media_assets || []}
+              audioCatalog={audioCatalog}
+              canvas={canvas}
+              completed={summary?.status === 'completed' && Boolean(detail?.output_asset?.id)}
+              confirming={stageConfirming}
+              generatingVoice={generatingVoice}
+              onConfirm={() => void confirmStage()}
+              onGenerateVoice={() => void generateVoiceover()}
+              onSelectVoice={voiceId => void selectDefaultVoice(voiceId)}
+              onTab={setInspectorTab}
+              quality={quality}
+              readiness={readiness}
+              rendered={summary?.status === 'completed'}
+              scene={selectedScene}
+              scenePlan={scenePlan}
+              scenes={scenes}
+              selectingVoiceId={selectingVoiceId}
+              summary={summary}
+              totalDuration={totalDuration}
+            />
+          </div>
         ) : null}
       </div>
     </section>
@@ -1429,17 +1554,109 @@ function DirectorCommandBox({
   )
 }
 
+function VoiceLibrary({
+  catalog,
+  onSelect,
+  selectingVoiceId
+}: {
+  catalog: AudioCatalogProjection | null
+  onSelect: (voiceId: string) => void
+  selectingVoiceId: string
+}) {
+  if (!catalog) {
+    return (
+      <section className="mt-3 rounded-xl border border-[#ded6c9] bg-[#fffdf8] p-3 text-[0.64rem] text-(--ui-text-tertiary)">
+        声音服务目录暂时不可用，现有成片不会被修改。
+      </section>
+    )
+  }
+
+  const metadata = catalog.metadata || {}
+
+  return (
+    <section className="mt-3 space-y-3 rounded-xl border border-[#ded6c9] bg-[#fffdf8] p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-semibold">火山声音库</h3>
+          <p className="mt-1 text-[0.6rem] leading-5 text-(--ui-text-tertiary)">
+            {catalog.display_name || catalog.provider || '未配置语音服务'} ·{' '}
+            {catalog.available ? '密钥在线' : '密钥不可用'} · {catalog.default_model || '模型未识别'}
+          </p>
+        </div>
+        <span
+          className={`rounded-full px-2 py-1 text-[0.56rem] ${catalog.available ? 'bg-emerald-500/10 text-emerald-700' : 'bg-amber-500/10 text-amber-800'}`}
+        >
+          {catalog.available ? '常驻已接通' : '需要配置'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {(catalog.voices || []).map(voice => {
+          const selected = catalog.configured_voice === voice.id
+          const selecting = selectingVoiceId === voice.id
+
+          return (
+            <button
+              className={`rounded-lg border p-2.5 text-left transition ${selected ? 'border-(--ui-accent) bg-(--ui-row-active-background)' : 'border-[#ded6c9] bg-white hover:border-[#b8ac9c]'}`}
+              disabled={Boolean(selectingVoiceId)}
+              key={voice.id}
+              onClick={() => onSelect(voice.id)}
+              type="button"
+            >
+              <span className="flex items-center justify-between gap-2">
+                <strong className="text-[0.68rem]">{voice.display || voice.id}</strong>
+                {selecting ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : selected ? (
+                  <CheckCircle2 className="size-3.5 text-(--ui-accent)" />
+                ) : null}
+              </span>
+              <small className="mt-1 block text-[0.55rem] text-(--ui-text-tertiary)">
+                {[voice.language, voice.gender === 'female' ? '女声' : voice.gender === 'male' ? '男声' : '', voice.scenario]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </small>
+              <small className="mt-1 block truncate font-mono text-[0.48rem] text-(--ui-text-tertiary)">
+                {voice.id}
+              </small>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="rounded-lg bg-[#f5f0e7] px-2.5 py-2 text-[0.57rem] leading-5 text-[#756b5f]">
+        官方大模型音色目录共 {metadata.official_voice_count || '多'} 款；当前先显示与 Seed TTS 2.0
+        资源族匹配的常用音色。账户全量目录同步需要火山 OpenAPI 的 AK/SK，语音合成用的 X-Api-Key
+        本身不能枚举 ListSpeakers，因此这里不会伪造“已开通”状态。
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {(metadata.service_families || []).map(family => (
+          <span
+            className={`rounded-full border px-2 py-1 text-[0.52rem] ${family.active ? 'border-emerald-500/30 bg-emerald-500/8 text-emerald-700' : 'border-[#ded6c9] text-[#756b5f]'}`}
+            key={family.id}
+          >
+            {family.name}{family.active ? ' · 当前' : ''}
+          </span>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function DirectorInspector({
   accepted,
   activeTab,
   activeStage,
   assets,
+  audioCatalog,
   canvas,
   completed,
   confirming,
   generatingVoice,
   onConfirm,
   onGenerateVoice,
+  onSelectVoice,
   onTab,
   quality,
   readiness,
@@ -1447,6 +1664,7 @@ function DirectorInspector({
   scene,
   scenePlan,
   scenes,
+  selectingVoiceId,
   summary,
   totalDuration
 }: {
@@ -1454,12 +1672,14 @@ function DirectorInspector({
   activeTab: InspectorTab
   activeStage: DirectorStage
   assets: MediaAssetProjection[]
+  audioCatalog: AudioCatalogProjection | null
   canvas: CanvasSpec
   completed: boolean
   confirming: boolean
   generatingVoice: boolean
   onConfirm: () => void
   onGenerateVoice: () => void
+  onSelectVoice: (voiceId: string) => void
   onTab: (tab: InspectorTab) => void
   quality?: VideoQualityReport
   readiness?: VideoRenderReadiness
@@ -1467,6 +1687,7 @@ function DirectorInspector({
   scene?: VideoScene
   scenePlan?: { fallback_used?: boolean; renderer?: string }
   scenes: VideoScene[]
+  selectingVoiceId: string
   summary?: VideoProductionSummary
   totalDuration: number
 }) {
@@ -1493,7 +1714,7 @@ function DirectorInspector({
     : `确认${currentStage.label}并进入${nextStage.label}`
 
   return (
-    <aside className="flex min-h-0 flex-col bg-(--ui-chat-surface-background)">
+    <aside className="flex min-h-0 flex-1 flex-col bg-(--ui-chat-surface-background)">
       <header className="flex h-12 items-center justify-between border-b border-(--ui-stroke-tertiary) px-3.5">
         <h3 className="text-[0.7rem] font-semibold text-(--ui-text-secondary)">项目参考素材</h3>
         <SlidersHorizontal className="size-3.5 text-(--ui-text-tertiary)" />
@@ -1532,6 +1753,14 @@ function DirectorInspector({
             <InfoRow label="动态意图" value={scene?.motion_intent?.join(' / ') || '直接剪辑'} />
             <InfoRow label="画面填充" value={fitLabel(scene?.visuals?.[0]?.fit)} />
           </dl>
+        ) : null}
+
+        {activeTab === 'sound' ? (
+          <VoiceLibrary
+            catalog={audioCatalog}
+            onSelect={onSelectVoice}
+            selectingVoiceId={selectingVoiceId}
+          />
         ) : null}
 
         <section className="mt-4 border-t border-[#ded6c9] pt-3">
@@ -2301,6 +2530,16 @@ export function previewFrameStyle(canvas: CanvasSpec) {
     aspectRatio: `${canvas.width} / ${canvas.height}`,
     width: ratio >= 1.35 ? 'min(100%, 52rem)' : ratio >= 0.9 ? 'min(78%, 32rem)' : 'min(58%, 21rem)'
   }
+}
+
+export function directorLayoutForWidth(width: number): DirectorLayout {
+  if (width < 760) {
+    return 'stacked'
+  }
+  if (width < 1320) {
+    return 'compact'
+  }
+  return 'wide'
 }
 
 function playbackUrl(path: string): string {

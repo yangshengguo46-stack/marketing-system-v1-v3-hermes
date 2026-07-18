@@ -93,6 +93,8 @@ class PexelsMaterialProvider:
         self._timeout = timeout
 
     def search(self, request: dict[str, Any]) -> list[dict[str, Any]]:
+        if str(request.get("media_type") or "either") == "image":
+            return []
         query = str(request.get("query") or "").strip()
         if not query:
             raise ValueError("material search query is required")
@@ -204,11 +206,13 @@ class PexelsMaterialProvider:
 
 
 class WikimediaCommonsMaterialProvider:
-    """No-key licensed video search through the official Commons API."""
+    """No-key licensed image/video search through the official Commons API."""
 
     name = "wikimedia_commons"
     _download_hosts = {"upload.wikimedia.org"}
-    _media_mimes = {"video/mp4", "video/webm", "video/ogg"}
+    _video_mimes = {"video/mp4", "video/webm", "video/ogg"}
+    _image_mimes = {"image/jpeg", "image/png", "image/webp"}
+    _media_mimes = _video_mimes | _image_mimes
 
     def __init__(self, *, timeout: float = 30.0) -> None:
         self._timeout = timeout
@@ -218,12 +222,27 @@ class WikimediaCommonsMaterialProvider:
         if not query:
             raise ValueError("material search query is required")
         limit = max(1, min(int(request.get("limit") or 12), 20))
+        requested_type = str(request.get("media_type") or "either").strip().lower()
+        if requested_type not in {"either", "image", "video"}:
+            raise ValueError("unsupported Wikimedia Commons media type")
+        if requested_type == "either":
+            video_limit = max(1, limit // 2)
+            image_limit = max(1, limit - video_limit)
+            results = self._search_type(query, "video", video_limit)
+            results.extend(self._search_type(query, "image", image_limit))
+            return results[:limit]
+        return self._search_type(query, requested_type, limit)
+
+    def _search_type(
+        self, query: str, media_type: str, limit: int
+    ) -> list[dict[str, Any]]:
+        filetype = "video" if media_type == "video" else "bitmap"
         params = {
             "action": "query",
             "format": "json",
             "formatversion": "2",
             "generator": "search",
-            "gsrsearch": f"{query} filetype:video",
+            "gsrsearch": f"{query} filetype:{filetype}",
             "gsrnamespace": "6",
             "gsrlimit": str(limit),
             "prop": "imageinfo",
@@ -255,13 +274,13 @@ class WikimediaCommonsMaterialProvider:
             url,
             headers={
                 "User-Agent": "MarketingOS/1.0 (licensed-media-resolver)",
-                "Accept": "video/mp4,video/webm,video/ogg",
+                "Accept": "video/mp4,video/webm,video/ogg,image/jpeg,image/png,image/webp",
             },
         )
         with urllib.request.urlopen(request, timeout=self._timeout) as response:
             content_type = str(response.headers.get_content_type() or "").lower()
             if content_type not in self._media_mimes:
-                raise ValueError("Wikimedia Commons material is not a supported video")
+                raise ValueError("Wikimedia Commons material is not a supported image or video")
             content_length = int(response.headers.get("Content-Length") or 0)
             if content_length > MAX_PROVIDER_DOWNLOAD_BYTES:
                 raise ValueError("Wikimedia Commons material exceeds the 200 MB product limit")
@@ -272,6 +291,9 @@ class WikimediaCommonsMaterialProvider:
             "video/mp4": "mp4",
             "video/webm": "webm",
             "video/ogg": "ogv",
+            "image/jpeg": "jpg",
+            "image/png": "png",
+            "image/webp": "webp",
         }[content_type]
         provider_id = re.sub(
             r"[^a-zA-Z0-9._-]+", "-", str(candidate["provider_asset_id"])
@@ -321,10 +343,11 @@ class WikimediaCommonsMaterialProvider:
         if not provider_id:
             return None
         creator = _metadata_text(metadata, "Artist") or "Wikimedia Commons contributor"
+        media_type = "video" if mime_type in self._video_mimes else "image"
         return {
             "provider": self.name,
             "provider_asset_id": provider_id,
-            "media_type": "video",
+            "media_type": media_type,
             "source_url": source_url,
             "preview_url": "",
             "download_url": download_url,

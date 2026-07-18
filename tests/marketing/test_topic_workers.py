@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from agent.harness import PermanentStepError
+from agent.marketing.domains.content_assets import _validated_sound_plan
 from agent.marketing.workflows.topic_workers import TopicProductionWorkers
 
 
@@ -107,6 +110,48 @@ def test_material_worker_uses_media_skill_only_after_search_miss(tmp_path):
     assert imported[0]["metadata"]["publication_rights_review_required"] is True
 
 
+def test_material_worker_tries_next_licensed_candidate_after_download_failure():
+    class Materials:
+        def search(self, **_kwargs):
+            return {
+                "id": "search-1",
+                "candidates": [
+                    {
+                        "id": "candidate-broken",
+                        "provider": "wikimedia_commons",
+                        "provider_asset_id": "broken",
+                        "license_name": "CC0",
+                        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+                        "source_url": "https://commons.wikimedia.org/wiki/File:broken.webm",
+                    },
+                    {
+                        "id": "candidate-working",
+                        "provider": "wikimedia_commons",
+                        "provider_asset_id": "working",
+                        "license_name": "CC0",
+                        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+                        "source_url": "https://commons.wikimedia.org/wiki/File:working.jpg",
+                    },
+                ],
+            }
+
+        def materialize(self, **kwargs):
+            if kwargs["candidate_id"] == "candidate-broken":
+                raise RuntimeError("remote file disappeared")
+            return {"asset": {"id": "media-working"}}
+
+    worker = object.__new__(TopicProductionWorkers)
+    worker.materials = Materials()
+    worker.media = SimpleNamespace()
+    worker.resolve_media = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("second licensed candidate should be used")
+    )
+
+    result = worker.search_video_materials(_context())
+
+    assert result.output["selected_assets"] == {"scene-1": "media-working"}
+
+
 def test_material_worker_surfaces_missing_capability_instead_of_fake_asset():
     class Materials:
         def search(self, **_kwargs):
@@ -127,27 +172,27 @@ def test_material_worker_surfaces_missing_capability_instead_of_fake_asset():
         raise AssertionError("unresolved shots must fail visibly")
 
 
-def test_material_worker_reuses_licensed_clip_after_distinct_source_target():
+def test_material_worker_requires_semantically_distinct_sources_for_half_the_cut():
     context = _context()
     context.workflow["steps"][0]["output"]["video_direction"]["shot_list"] = [
         {"id": f"scene-{index}", "duration": 3, "visual_query": f"query {index}"}
         for index in range(1, 5)
     ]
-    calls = 0
-
     class Materials:
-        def search(self, **_kwargs):
-            nonlocal calls
-            calls += 1
+        def search(self, **kwargs):
+            ref = str(kwargs["request_ref"])
+            scene = ref.split(":")[-2]
+            query_index = ref.split(":")[-1]
             return {
-                "id": f"search-{calls}",
+                "id": f"search-{scene}-{query_index}",
                 "candidates": [{
-                    "id": f"candidate-{calls}",
+                    "id": f"candidate-{scene}-{query_index}",
                     "provider": "wikimedia_commons",
+                    "provider_asset_id": f"provider-{scene}",
                     "license_name": "CC0",
                     "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
-                    "source_url": "https://commons.wikimedia.org/wiki/File:clip.webm",
-                }] if calls <= 2 else [],
+                    "source_url": f"https://commons.wikimedia.org/wiki/File:{scene}.webm",
+                }],
             }
 
         def materialize(self, **kwargs):
@@ -157,14 +202,144 @@ def test_material_worker_reuses_licensed_clip_after_distinct_source_target():
     worker.materials = Materials()
     worker.media = SimpleNamespace()
     worker.resolve_media = lambda **_kwargs: (_ for _ in ()).throw(
-        AssertionError("two licensed clips are sufficient for this four-shot cut")
+        AssertionError("licensed search should resolve each shot")
     )
 
     result = worker.search_video_materials(context)
 
     assert result.output["selected_assets"] == {
-        "scene-1": "media-1",
-        "scene-2": "media-2",
-        "scene-3": "media-1",
-        "scene-4": "media-2",
+        "scene-1": "media-scene-1-0",
+        "scene-2": "media-scene-2-0",
+        "scene-3": "media-scene-3-0",
+        "scene-4": "media-scene-4-0",
     }
+    assert result.output["diversity"] == {
+        "minimum_unique_assets": 2,
+        "unique_assets": 4,
+        "maximum_uses_per_asset": 2,
+    }
+
+
+def test_material_worker_blocks_one_clip_repeated_across_a_four_shot_cut():
+    context = _context()
+    context.workflow["steps"][0]["output"]["video_direction"]["shot_list"] = [
+        {"id": f"scene-{index}", "duration": 3, "visual_query": f"query {index}"}
+        for index in range(1, 5)
+    ]
+
+    class Materials:
+        def search(self, **kwargs):
+            return {
+                "id": str(kwargs["request_ref"]),
+                "candidates": [{
+                    "id": "candidate-shared",
+                    "provider": "wikimedia_commons",
+                    "provider_asset_id": "shared-clip",
+                    "license_name": "CC0",
+                    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+                    "source_url": "https://commons.wikimedia.org/wiki/File:shared.webm",
+                }],
+            }
+
+        def materialize(self, **_kwargs):
+            return {"asset": {"id": "media-shared"}}
+
+    worker = object.__new__(TopicProductionWorkers)
+    worker.materials = Materials()
+    worker.media = SimpleNamespace()
+    worker.resolve_media = lambda **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("no second licensed source")
+    )
+
+    with pytest.raises(PermanentStepError, match="required_unique=2; resolved_unique=1"):
+        worker.search_video_materials(context)
+
+
+def test_audio_worker_executes_durable_default_voiceover_when_authorized():
+    calls: list[tuple[str, dict]] = []
+
+    class Audio:
+        def prepare_voice(self, **kwargs):
+            calls.append(("prepare", kwargs))
+            return {"id": "audio-job-1", "status": "prepared"}
+
+        def approve(self, **kwargs):
+            calls.append(("approve", kwargs))
+            return {"id": "audio-job-1", "status": "approved"}
+
+        def execute(self, **kwargs):
+            calls.append(("execute", kwargs))
+            return {
+                "id": "audio-job-1",
+                "status": "completed",
+                "output_asset_id": "voice-media-1",
+            }
+
+    context = _context()
+    context.workflow["policy"] = {"automatic_voiceover_authorized": True}
+    context.workflow["steps"][0]["output"]["video_direction"].update({
+        "title": "AI 泡沫",
+        "voiceover_script": "这是一段真实旁白。",
+    })
+    worker = object.__new__(TopicProductionWorkers)
+    worker.audio = Audio()
+
+    result = worker.plan_video_audio(context)
+
+    assert [name for name, _ in calls] == ["prepare", "approve", "execute"]
+    assert result.output == {
+        "voice_job_id": "audio-job-1",
+        "voice_status": "completed",
+        "draft_mix": "voiceover",
+        "render_voice_asset_id": "voice-media-1",
+    }
+    assert [artifact["object_type"] for artifact in result.artifacts] == [
+        "marketing_audio_job",
+        "media_asset",
+    ]
+
+
+def test_audio_worker_keeps_paid_tts_prepared_without_durable_authorization():
+    class Audio:
+        def prepare_voice(self, **_kwargs):
+            return {"id": "audio-job-1", "status": "prepared"}
+
+        def approve(self, **_kwargs):
+            raise AssertionError("approval must remain explicit when auto voiceover is off")
+
+        def execute(self, **_kwargs):
+            raise AssertionError("paid TTS must not execute without durable authorization")
+
+    context = _context()
+    context.workflow["policy"] = {"automatic_voiceover_authorized": False}
+    context.workflow["steps"][0]["output"]["video_direction"].update({
+        "title": "AI 泡沫",
+        "voiceover_script": "这是一段待批准旁白。",
+    })
+    worker = object.__new__(TopicProductionWorkers)
+    worker.audio = Audio()
+
+    result = worker.plan_video_audio(context)
+
+    assert result.output["draft_mix"] == "captions_only"
+    assert result.output["render_voice_asset_id"] is None
+
+
+def test_optional_voice_job_survives_content_asset_sound_plan_validation():
+    result = _validated_sound_plan(
+        {
+            "mode": "original_voice_only",
+            "mix_role": "captions_first_preview",
+            "voice_job_id": "audio-job-1",
+            "voice_required": False,
+            "voice_status": "prepared",
+        },
+        repository=SimpleNamespace(),
+        user_id="default",
+        account_id="acct-1",
+        platform="douyin",
+    )
+
+    assert result["voice_job_id"] == "audio-job-1"
+    assert result["voice_required"] is False
+    assert result["voice_status"] == "prepared"

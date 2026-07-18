@@ -14682,6 +14682,72 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, result)
 
 
+def _marketing_audio_catalog() -> dict:
+    """Return a secret-free catalog for the configured native TTS provider."""
+    from agent.tts_registry import get_provider
+    from hermes_cli.config import load_config_readonly
+    from hermes_cli.plugins import _ensure_plugins_discovered
+
+    _ensure_plugins_discovered()
+    config = load_config_readonly()
+    tts = config.get("tts") if isinstance(config.get("tts"), dict) else {}
+    provider_name = str(tts.get("provider") or "").strip()
+    provider = get_provider(provider_name)
+    if provider is None:
+        return {
+            "provider": provider_name,
+            "available": False,
+            "models": [],
+            "voices": [],
+            "configured_voice": str(tts.get("voice") or ""),
+        }
+    metadata = getattr(provider, "catalog_metadata", lambda: {})()
+    return {
+        "provider": provider.name,
+        "display_name": provider.display_name,
+        "available": bool(provider.is_available()),
+        "default_model": provider.default_model(),
+        "default_voice": provider.default_voice(),
+        "configured_voice": str(tts.get("voice") or provider.default_voice() or ""),
+        "models": provider.list_models(),
+        "voices": provider.list_voices(),
+        "metadata": metadata if isinstance(metadata, dict) else {},
+    }
+
+
+@method("marketing.audio.catalog")
+def _(rid, params: dict) -> dict:
+    """Expose the active TTS model/voice catalog without returning credentials."""
+    try:
+        return _ok(rid, _marketing_audio_catalog())
+    except Exception as exc:
+        return _err(rid, 5036, str(exc))
+
+
+@method("marketing.audio.voice.set")
+def _(rid, params: dict) -> dict:
+    """Persist one catalog voice as the default video voice."""
+    from hermes_cli.config import set_config_value
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit voice selection confirmation is required")
+    voice_id = str(params.get("voice_id") or "").strip()
+    if not voice_id:
+        return _err(rid, -32602, "voice_id is required")
+    try:
+        catalog = _marketing_audio_catalog()
+        allowed = {str(item.get("id") or "") for item in catalog.get("voices") or []}
+        if voice_id not in allowed:
+            raise ValueError("voice is not present in the configured provider catalog")
+        set_config_value("tts.voice", voice_id)
+        return _ok(rid, _marketing_audio_catalog())
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    except Exception as exc:
+        return _err(rid, 5036, str(exc))
+
+
 def _(rid, params: dict) -> dict:
     """Deterministically prepare a video when the script already belongs to content.
 

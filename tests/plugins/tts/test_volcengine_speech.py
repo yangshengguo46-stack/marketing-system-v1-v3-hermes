@@ -89,3 +89,25 @@ def test_plugin_registers_native_tts_provider():
         assert isinstance(get_provider("volcengine-speech"), VolcengineSpeechProvider)
     finally:
         _reset_for_tests()
+
+
+def test_provider_exposes_seed_two_voice_and_service_catalog_without_secrets():
+    provider = VolcengineSpeechProvider("speech-key")
+
+    voices = provider.list_voices()
+    metadata = provider.catalog_metadata()
+
+    assert {voice["display"] for voice in voices} >= {
+        "Vivi 2.0",
+        "小何 2.0",
+        "小天 2.0",
+        "云舟 2.0",
+    }
+    assert all(voice["resource_id"] == "seed-tts-2.0" for voice in voices)
+    assert metadata["official_voice_count"] == 325
+    assert metadata["service_families"][0] == {
+        "id": "seed-tts-2.0",
+        "name": "语音合成 2.0",
+        "active": True,
+    }
+    assert "speech-key" not in json.dumps({"voices": voices, "metadata": metadata})
