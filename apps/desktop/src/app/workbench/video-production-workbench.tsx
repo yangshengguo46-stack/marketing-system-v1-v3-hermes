@@ -1237,7 +1237,7 @@ export function VideoProductionWorkbench({
         >
           <div className="overflow-hidden rounded-[14px] border border-[#d4ccbf] bg-[#1b1b1b] shadow-[0_18px_42px_-32px_rgba(54,42,31,.65)]">
             <div
-              className={`grid place-items-center ${canvas.width / canvas.height >= 1.35 ? 'min-h-[24rem]' : directorLayout === 'wide' ? 'min-h-[28rem]' : directorLayout === 'compact' ? 'min-h-[23rem]' : 'min-h-[19rem]'}`}
+              className={`grid place-items-center ${directorLayout === 'wide' ? 'min-h-[28rem]' : directorLayout === 'compact' ? 'min-h-[23rem]' : 'min-h-[19rem]'}`}
             >
               <div
                 className="relative grid max-h-[36rem] place-items-center overflow-hidden bg-[radial-gradient(circle_at_70%_20%,rgba(236,123,90,0.55),transparent_30%),linear-gradient(145deg,#17283a,#4d2930_58%,#a55743)] text-white"
@@ -2582,7 +2582,7 @@ export function previewFrameStyle(canvas: CanvasSpec) {
 
   return {
     aspectRatio: `${canvas.width} / ${canvas.height}`,
-    width: ratio >= 1.35 ? 'min(100%, 44rem)' : ratio >= 0.9 ? 'min(78%, 32rem)' : 'min(58%, 21rem)'
+    width: ratio >= 1.35 ? 'min(100%, 52rem)' : ratio >= 0.9 ? 'min(78%, 32rem)' : 'min(58%, 21rem)'
   }
 }
 

@@ -24,7 +24,7 @@ describe('video production canvas presets', () => {
   it('sizes horizontal, square and vertical previews without changing the canvas ratio', () => {
     expect(previewFrameStyle({ fps: 30, height: 1080, width: 1920 })).toEqual({
       aspectRatio: '1920 / 1080',
-      width: 'min(100%, 44rem)'
+      width: 'min(100%, 52rem)'
     })
     expect(previewFrameStyle({ fps: 30, height: 1080, width: 1080 })).toEqual({
       aspectRatio: '1080 / 1080',
