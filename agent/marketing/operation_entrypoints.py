@@ -280,7 +280,9 @@ def _operation_copy(operation: dict[str, Any]) -> tuple[str, str, str]:
         return (
             f"继续推进{target}",
             f"继续推进 {title or '内容资产'}",
-            "按 target_id 读取原生内容资产、当前版本、证据包和质量门。沿已有生命周期推进下一步，不重建对象、不覆盖已确认版本。",
+            "按 target_id 读取原生内容资产、当前版本、证据包和质量门。若当前版本已经人工确认，必须为资产覆盖的每个目标平台"
+            "逐一调用 marketing_prepare_publish，只建立持久化发布审批点并立即停下；不得调用真实发布 effect，也不要再询问已经由"
+            " target_platforms 明确的平台。若最新预演不允许发布准备，原样报告阻断原因，不重建对象、不覆盖已确认版本。",
         )
     if kind == "learning.review":
         return (
@@ -366,7 +368,10 @@ def _operation_copy(operation: dict[str, Any]) -> tuple[str, str, str]:
         return (
             "开始拆分视频设定",
             "视频创作设定",
-            "读取 document_refs 和 note，把 selections 中已选择的素材绑定到人物、声音、场景和道具。未指定项可以生成或从已授权素材推荐；每个生成结果必须先进入 Hermes 原生素材库，再成为对应分类的当前选中素材。创建真实 source content asset、production plan 和 prepared Video IR，让任务回到视频导演工作台继续分镜、动态、剪辑和成片流程；不得只回复文字方案。在线下载、付费生成、TTS、真实渲染或发布前必须展示成本与影响并等待确认。",
+            "读取 document_refs、note 和 selections，独立建立 faceless_video 计划并完成预演。视频 Director 自己产出"
+            "口播、镜头和节奏方案，不读取或等待图文稿。素材按用户库、已配置的许可素材搜索/下载能力、media-use 补缺的"
+            "顺序冻结到原生素材库；只有前述来源均未命中时，才把生成作为显式兜底。任何付费生成、TTS、版权例外、"
+            "真实发布都必须展示成本与影响并等待确认。",
         )
     if kind == "video.export":
         return (

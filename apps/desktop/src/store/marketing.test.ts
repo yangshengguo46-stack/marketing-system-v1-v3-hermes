@@ -5,8 +5,10 @@ import {
   $marketingOperationTasks,
   $selectedMarketingAccountId,
   createMarketingOperationTask,
+  restoreMarketingWorkflowTasks,
   selectMarketingAccount,
-  setMarketingAccounts
+  setMarketingAccounts,
+  workflowTaskState
 } from './marketing'
 
 describe('Marketing OS account selection', () => {
@@ -45,5 +47,27 @@ describe('Marketing OS account selection', () => {
 
     expect($marketingOperationTasks.get()).toHaveLength(1)
     expect(window.localStorage.getItem('marketing-os.desktop.operation-tasks.v1')).toBeNull()
+  })
+
+  it('restores active workflow projections from the Python owner without local persistence', () => {
+    restoreMarketingWorkflowTasks([
+      {
+        id: 'workflow-1',
+        input: { operation: { account_id: 'acct-1' } },
+        kind: 'content.article.start',
+        state: 'waiting_approval',
+        title: '图文创作',
+        updated_at: 1_752_700_000
+      }
+    ])
+
+    expect($marketingOperationTasks.get()[0]).toMatchObject({
+      accountId: 'acct-1',
+      state: 'waiting',
+      workflowId: 'workflow-1'
+    })
+    expect(window.localStorage.getItem('marketing-os.desktop.operation-tasks.v1')).toBeNull()
+    expect(workflowTaskState('completed')).toBe('complete')
+    expect(workflowTaskState('failed')).toBe('error')
   })
 })

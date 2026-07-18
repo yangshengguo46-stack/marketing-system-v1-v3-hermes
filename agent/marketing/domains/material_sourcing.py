@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -57,6 +58,7 @@ class MaterialSourcingRepository(MarketingDomainRepository):
         target_duration: float = 0,
         limit: int = 12,
         locale: str = "zh-CN",
+        request_ref: str = "",
     ) -> dict[str, Any]:
         user_id = self._required(user_id, "user_id")
         account_id = self._required(account_id, "account_id")
@@ -69,6 +71,9 @@ class MaterialSourcingRepository(MarketingDomainRepository):
             raise ValueError("unsupported material orientation")
         safe_limit = max(1, min(int(limit), 40))
         duration = max(0.0, min(float(target_duration or 0), 600.0))
+        request_ref = str(request_ref or "").strip()
+        if len(request_ref) > 240:
+            raise ValueError("request_ref must not exceed 240 characters")
         search_id = f"material_search_{uuid.uuid4().hex}"
         request = {
             "query": query,
@@ -77,7 +82,23 @@ class MaterialSourcingRepository(MarketingDomainRepository):
             "target_duration": round(duration, 3),
             "limit": safe_limit,
             "locale": str(locale or "zh-CN")[:20],
+            "request_ref": request_ref or None,
         }
+        if request_ref:
+            with self._connection() as db:
+                existing = db.execute(
+                    """SELECT id FROM material_searches
+                    WHERE user_id=? AND account_id=?
+                      AND json_extract(query_json,'$.request_ref')=?
+                    ORDER BY created_at ASC LIMIT 1""",
+                    (user_id, account_id, request_ref),
+                ).fetchone()
+            if existing is not None:
+                return self.get_search(
+                    search_id=existing["id"],
+                    user_id=user_id,
+                    account_id=account_id,
+                )
         now = _now()
         with self._transaction() as db:
             db.execute(
@@ -288,9 +309,7 @@ class MaterialSourcingRepository(MarketingDomainRepository):
     def _local_candidates(
         self, *, user_id: str, account_id: str, request: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        query_terms = {
-            part.lower() for part in request["query"].replace("，", " ").split() if part
-        }
+        query_terms = _semantic_query_terms(str(request["query"]))
         results = []
         for asset in self.media.list(user_id=user_id, account_id=account_id)["assets"]:
             if (
@@ -300,7 +319,9 @@ class MaterialSourcingRepository(MarketingDomainRepository):
             ):
                 continue
             haystack = f"{asset['name']} {_json(asset.get('metadata') or {})}".lower()
-            semantic = 1.0 if any(term in haystack for term in query_terms) else 0.55
+            if not any(term in haystack for term in query_terms):
+                continue
+            semantic = 1.0
             breakdown = {
                 "source_priority": 0.32,
                 "semantic_fit": round(0.28 * semantic, 4),
@@ -395,3 +416,15 @@ class MaterialSourcingRepository(MarketingDomainRepository):
         if len(text) > limit:
             raise ValueError(f"{field} must be at most {limit} characters")
         return text
+
+
+def _semantic_query_terms(query: str) -> set[str]:
+    """Tokenize Latin words and CJK bigrams for conservative library matching."""
+
+    terms = {term.lower() for term in re.findall(r"[a-zA-Z0-9]+", query)}
+    for run in re.findall(r"[\u3400-\u9fff]+", query):
+        if len(run) == 1:
+            terms.add(run)
+        else:
+            terms.update(run[index : index + 2] for index in range(len(run) - 1))
+    return terms

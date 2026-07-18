@@ -17,6 +17,7 @@ describe('article creation product flow', () => {
     selectMarketingAccount('prospect_default')
     const calls = vi.fn()
     const onStartOperation = vi.fn(() => 'article-task-1')
+
     const requestGateway = async <T,>(method: string, params?: Record<string, unknown>): Promise<T> => {
       calls(method, params)
 

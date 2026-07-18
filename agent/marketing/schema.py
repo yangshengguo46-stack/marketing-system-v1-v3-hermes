@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS marketing_operations (
     operation_json TEXT NOT NULL DEFAULT '{}',
     baseline_json TEXT NOT NULL DEFAULT '{}',
     results_json TEXT NOT NULL DEFAULT '[]',
+    workflow_id TEXT NOT NULL DEFAULT '',
+    workflow_step_id TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,

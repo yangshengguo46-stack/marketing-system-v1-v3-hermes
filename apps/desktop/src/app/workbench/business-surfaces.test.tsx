@@ -441,6 +441,7 @@ describe('Marketing OS business surfaces', () => {
         note: ''
       })
     )
-    expect(await screen.findByText(/发布后的数据会回到总工作台/)).toBeTruthy()
+    expect(await screen.findByText(/当前成片已经确认并归入草稿箱/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '前往草稿箱' })).toBeTruthy()
   }, 15_000)
 })

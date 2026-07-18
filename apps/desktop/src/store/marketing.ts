@@ -31,6 +31,7 @@ export interface MarketingOperationTask {
   kind: string
   label: string
   operationId?: string
+  workflowId?: string
   results?: MarketingOperationTaskResult[]
   state: MarketingOperationTaskState
   title: string
@@ -120,6 +121,61 @@ export function updateMarketingOperationTask(id: string, patch: Partial<Marketin
       .get()
       .map(task => (task.id === id ? { ...task, ...patch, id: task.id, updatedAt: Date.now() } : task))
   )
+}
+
+export interface MarketingWorkflowProjection {
+  error?: { code?: string; message?: string }
+  id: string
+  input?: {
+    account_id?: string
+    operation?: { account_id?: string }
+  }
+  kind: string
+  result?: { results?: MarketingOperationTaskResult[] }
+  state: string
+  title: string
+  updated_at: number
+}
+
+export function restoreMarketingWorkflowTasks(workflows: MarketingWorkflowProjection[]) {
+  const existing = $marketingOperationTasks.get()
+  const known = new Set(existing.flatMap(task => (task.workflowId ? [task.workflowId] : [])))
+
+  const restored = workflows
+    .filter(workflow => !known.has(workflow.id))
+    .map(workflow => ({
+      accountId: workflow.input?.account_id || workflow.input?.operation?.account_id || 'prospect_default',
+      createdAt: workflow.updated_at * 1000,
+      error: workflow.error?.message,
+      id: `marketing-workflow-${workflow.id}`,
+      kind: workflow.kind,
+      label: '已从 Hermes 恢复持久任务。',
+      results: workflow.result?.results || [],
+      state: workflowTaskState(workflow.state),
+      title: workflow.title,
+      updatedAt: workflow.updated_at * 1000,
+      workflowId: workflow.id
+    }))
+
+  if (restored.length) {
+    $marketingOperationTasks.set([...restored, ...existing].slice(0, 12))
+  }
+}
+
+export function workflowTaskState(state: string): MarketingOperationTaskState {
+  if (state === 'completed') {
+    return 'complete'
+  }
+
+  if (state === 'failed' || state === 'cancelled') {
+    return 'error'
+  }
+
+  if (state === 'waiting_approval' || state === 'paused') {
+    return 'waiting'
+  }
+
+  return 'working'
 }
 
 export function dismissMarketingOperationTask(id: string) {

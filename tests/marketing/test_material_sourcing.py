@@ -9,7 +9,10 @@ from agent.marketing.providers import (
     clear_material_providers,
     register_material_provider,
 )
-from agent.marketing.providers.materials import PexelsMaterialProvider
+from agent.marketing.providers.materials import (
+    PexelsMaterialProvider,
+    WikimediaCommonsMaterialProvider,
+)
 from hermes_state import SessionDB
 
 
@@ -91,6 +94,58 @@ def test_search_ranks_user_assets_before_provider_and_hides_download_url(tmp_pat
     assert result["candidates"][0]["provider_asset_id"] == local["id"]
     assert "download_url" not in json.dumps(result, ensure_ascii=False)
     assert result["candidates"][1]["license_url"] == "https://stock.test/license"
+
+
+def test_search_does_not_treat_unrelated_library_media_as_a_match(tmp_path):
+    paths = _paths(tmp_path)
+    MediaAssetRepository(paths).import_bytes(
+        user_id="u1",
+        account_id="acct-1",
+        name="股票市场行情",
+        media_type="video",
+        role="broll",
+        source_type="user_upload",
+        rights_status="user_confirmed",
+        payload=b"local-video",
+        filename="market.mp4",
+        mime_type="video/mp4",
+    )
+
+    result = MaterialSourcingRepository(paths).search(
+        user_id="u1",
+        account_id="acct-1",
+        query="data center server",
+        role="broll",
+    )
+
+    assert result["status"] == "unavailable"
+    assert result["candidates"] == []
+
+
+def test_material_search_request_ref_is_idempotent(tmp_path):
+    paths = _paths(tmp_path)
+    provider = FakeMaterialProvider()
+    register_material_provider(provider)
+    repository = MaterialSourcingRepository(paths)
+
+    first = repository.search(
+        user_id="u1",
+        account_id="acct-1",
+        query="city office",
+        role="broll",
+        request_ref="video-setup:fingerprint:scene-001",
+    )
+    repeated = repository.search(
+        user_id="u1",
+        account_id="acct-1",
+        query="a changed query is ignored for the same owner ref",
+        role="scene",
+        request_ref="video-setup:fingerprint:scene-001",
+    )
+
+    assert repeated["id"] == first["id"]
+    assert repeated["query"]["query"] == "city office"
+    assert len(repeated["candidates"]) == len(first["candidates"])
 
 
 def test_materialize_requires_review_and_persists_provenance(tmp_path):
@@ -261,3 +316,64 @@ def test_pexels_adapter_uses_official_endpoint_and_never_exposes_api_key(monkeyp
     assert captured["authorization"] == "private-key"
     assert "private-key" not in json.dumps(result)
     assert result[0]["license_name"] == "Pexels License"
+
+
+def test_wikimedia_adapter_finds_open_licensed_video_without_credentials(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return json.dumps({
+                "query": {
+                    "pages": [
+                        {
+                            "pageid": 42,
+                            "title": "File:Open data center.webm",
+                            "imageinfo": [
+                                {
+                                    "url": "https://upload.wikimedia.org/open-data-center.webm",
+                                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Open_data_center.webm",
+                                    "mime": "video/webm",
+                                    "width": 1920,
+                                    "height": 1080,
+                                    "size": 1024,
+                                    "sha1": "abc123",
+                                    "extmetadata": {
+                                        "LicenseShortName": {"value": "CC BY-SA 4.0"},
+                                        "LicenseUrl": {"value": "https://creativecommons.org/licenses/by-sa/4.0/"},
+                                        "Artist": {"value": "<b>Open Creator</b>"},
+                                        "Credit": {"value": "Credit the creator"},
+                                        "UsageTerms": {"value": "Creative Commons Attribution-Share Alike 4.0"},
+                                    },
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["authorization"] = request.headers.get("Authorization")
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    result = WikimediaCommonsMaterialProvider().search({
+        "query": "data center",
+        "limit": 3,
+    })
+
+    assert "commons.wikimedia.org/w/api.php?" in captured["url"]
+    assert "filetype%3Avideo" in captured["url"]
+    assert captured["authorization"] is None
+    assert result[0]["provider"] == "wikimedia_commons"
+    assert result[0]["creator"] == "Open Creator"
+    assert result[0]["license_name"] == "CC BY-SA 4.0"
+    assert result[0]["download_url"].startswith("https://upload.wikimedia.org/")

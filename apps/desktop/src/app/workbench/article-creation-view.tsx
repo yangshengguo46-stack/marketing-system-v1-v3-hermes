@@ -20,6 +20,7 @@ import { userFacingError } from './user-facing-copy'
 
 interface ArticleCreationViewProps {
   onBack: () => void
+  onOpenDrafts?: () => void
   onStartOperation: StartMarketingOperation
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
@@ -31,7 +32,12 @@ interface AccountContext {
   }
 }
 
-export function ArticleCreationView({ onBack, onStartOperation, requestGateway }: ArticleCreationViewProps) {
+export function ArticleCreationView({
+  onBack,
+  onOpenDrafts,
+  onStartOperation,
+  requestGateway
+}: ArticleCreationViewProps) {
   const accountId = useStore($selectedMarketingAccountId) || 'prospect_default'
   const accounts = useStore($marketingAccounts)
   const drafts = useStore($marketingArticleDrafts)
@@ -269,6 +275,7 @@ export function ArticleCreationView({ onBack, onStartOperation, requestGateway }
             setSearchParams({}, { replace: true })
           }
         }}
+        onOpenDrafts={onOpenDrafts}
         onReviewed={reviewed =>
           setAssets(current => current.map(asset => (asset.id === reviewed.id ? reviewed : asset)))
         }

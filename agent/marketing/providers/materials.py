@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -12,7 +14,10 @@ from typing import Any, Protocol
 
 PEXELS_API_BASE = "https://api.pexels.com/v1"
 PEXELS_LICENSE_URL = "https://www.pexels.com/license/"
+WIKIMEDIA_COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+WIKIMEDIA_COMMONS_HOME = "https://commons.wikimedia.org/"
 MAX_PROVIDER_DOWNLOAD_BYTES = 200 * 1024 * 1024
+_HTML_TAG = re.compile(r"<[^>]+>")
 
 
 class MaterialProvider(Protocol):
@@ -61,11 +66,17 @@ def ensure_default_material_providers() -> None:
     """Register configured first-party integrations without exposing secrets."""
 
     api_key = str(os.environ.get("PEXELS_API_KEY") or "").strip()
-    if not api_key:
-        return
-    with _LOCK:
-        if "pexels" not in _PROVIDERS:
-            _PROVIDERS["pexels"] = PexelsMaterialProvider(api_key=api_key)
+    if api_key:
+        with _LOCK:
+            if "pexels" not in _PROVIDERS:
+                _PROVIDERS["pexels"] = PexelsMaterialProvider(api_key=api_key)
+    commons_enabled = str(
+        os.environ.get("MARKETING_WIKIMEDIA_MATERIALS", "1")
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    if commons_enabled:
+        with _LOCK:
+            if "wikimedia_commons" not in _PROVIDERS:
+                _PROVIDERS["wikimedia_commons"] = WikimediaCommonsMaterialProvider()
 
 
 class PexelsMaterialProvider:
@@ -190,3 +201,153 @@ class PexelsMaterialProvider:
                 "selected_quality": str(selected.get("quality") or ""),
             },
         }
+
+
+class WikimediaCommonsMaterialProvider:
+    """No-key licensed video search through the official Commons API."""
+
+    name = "wikimedia_commons"
+    _download_hosts = {"upload.wikimedia.org"}
+    _media_mimes = {"video/mp4", "video/webm", "video/ogg"}
+
+    def __init__(self, *, timeout: float = 30.0) -> None:
+        self._timeout = timeout
+
+    def search(self, request: dict[str, Any]) -> list[dict[str, Any]]:
+        query = str(request.get("query") or "").strip()
+        if not query:
+            raise ValueError("material search query is required")
+        limit = max(1, min(int(request.get("limit") or 12), 20))
+        params = {
+            "action": "query",
+            "format": "json",
+            "formatversion": "2",
+            "generator": "search",
+            "gsrsearch": f"{query} filetype:video",
+            "gsrnamespace": "6",
+            "gsrlimit": str(limit),
+            "prop": "imageinfo",
+            "iiprop": "url|mime|size|sha1|extmetadata",
+            "iiextmetadatafilter": (
+                "LicenseShortName|LicenseUrl|Artist|Credit|UsageTerms"
+            ),
+            "iiextmetadatalanguage": "en",
+        }
+        payload = self._json_request(
+            f"{WIKIMEDIA_COMMONS_API}?{urllib.parse.urlencode(params)}"
+        )
+        pages = (payload.get("query") or {}).get("pages") or []
+        if isinstance(pages, dict):
+            pages = list(pages.values())
+        results = []
+        for page in pages:
+            candidate = self._candidate(page)
+            if candidate is not None:
+                results.append(candidate)
+        return results
+
+    def download(self, candidate: dict[str, Any]) -> tuple[bytes, str, str]:
+        url = str(candidate.get("download_url") or "").strip()
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "https" or parsed.hostname not in self._download_hosts:
+            raise ValueError("Wikimedia Commons download URL is not trusted")
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "MarketingOS/1.0 (licensed-media-resolver)",
+                "Accept": "video/mp4,video/webm,video/ogg",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            content_type = str(response.headers.get_content_type() or "").lower()
+            if content_type not in self._media_mimes:
+                raise ValueError("Wikimedia Commons material is not a supported video")
+            content_length = int(response.headers.get("Content-Length") or 0)
+            if content_length > MAX_PROVIDER_DOWNLOAD_BYTES:
+                raise ValueError("Wikimedia Commons material exceeds the 200 MB product limit")
+            payload = response.read(MAX_PROVIDER_DOWNLOAD_BYTES + 1)
+        if not payload or len(payload) > MAX_PROVIDER_DOWNLOAD_BYTES:
+            raise ValueError("Wikimedia Commons material is empty or exceeds the product limit")
+        extension = {
+            "video/mp4": "mp4",
+            "video/webm": "webm",
+            "video/ogg": "ogv",
+        }[content_type]
+        provider_id = re.sub(
+            r"[^a-zA-Z0-9._-]+", "-", str(candidate["provider_asset_id"])
+        )[:120]
+        return payload, f"commons-{provider_id}.{extension}", content_type
+
+    def _json_request(self, url: str) -> dict[str, Any]:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "MarketingOS/1.0 (licensed-media-resolver)",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            payload = response.read(8 * 1024 * 1024 + 1)
+        if len(payload) > 8 * 1024 * 1024:
+            raise ValueError("Wikimedia Commons response exceeds the product limit")
+        value = json.loads(payload.decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("Wikimedia Commons returned an invalid response")
+        return value
+
+    def _candidate(self, page: dict[str, Any]) -> dict[str, Any] | None:
+        info = ((page.get("imageinfo") or [{}])[0])
+        mime_type = str(info.get("mime") or "").lower()
+        if mime_type not in self._media_mimes:
+            return None
+        size_bytes = int(info.get("size") or 0)
+        if size_bytes <= 0 or size_bytes > MAX_PROVIDER_DOWNLOAD_BYTES:
+            return None
+        download_url = str(info.get("url") or "").strip()
+        parsed_download = urllib.parse.urlparse(download_url)
+        source_url = str(info.get("descriptionurl") or "").strip()
+        if (
+            parsed_download.scheme != "https"
+            or parsed_download.hostname not in self._download_hosts
+            or not source_url.startswith(WIKIMEDIA_COMMONS_HOME)
+        ):
+            return None
+        metadata = info.get("extmetadata") or {}
+        license_name = _metadata_text(metadata, "LicenseShortName")
+        license_url = _metadata_text(metadata, "LicenseUrl")
+        if not license_name or not license_url.startswith("http"):
+            return None
+        provider_id = str(page.get("pageid") or info.get("sha1") or page.get("title") or "")
+        if not provider_id:
+            return None
+        creator = _metadata_text(metadata, "Artist") or "Wikimedia Commons contributor"
+        return {
+            "provider": self.name,
+            "provider_asset_id": provider_id,
+            "media_type": "video",
+            "source_url": source_url,
+            "preview_url": "",
+            "download_url": download_url,
+            "creator": creator[:500],
+            "creator_url": source_url,
+            "license_name": license_name[:200],
+            "license_url": license_url[:2048],
+            "provider_home_url": WIKIMEDIA_COMMONS_HOME,
+            "width": int(info.get("width") or 0),
+            "height": int(info.get("height") or 0),
+            "duration": 0,
+            "metadata": {
+                "title": str(page.get("title") or ""),
+                "mime_type": mime_type,
+                "sha1": str(info.get("sha1") or ""),
+                "size_bytes": size_bytes,
+                "credit": _metadata_text(metadata, "Credit")[:1000],
+                "usage_terms": _metadata_text(metadata, "UsageTerms")[:500],
+            },
+        }
+
+
+def _metadata_text(metadata: dict[str, Any], key: str) -> str:
+    item = metadata.get(key) if isinstance(metadata, dict) else None
+    raw = item.get("value") if isinstance(item, dict) else item
+    return " ".join(html.unescape(_HTML_TAG.sub(" ", str(raw or ""))).split())

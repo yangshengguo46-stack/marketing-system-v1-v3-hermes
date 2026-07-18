@@ -818,7 +818,8 @@ export function DesktopController() {
             label: operation.visible_text,
             operationId: operation.operation_id,
             state: operation.state,
-            title: operation.title
+            title: operation.title,
+            workflowId: operation.workflow_id
           })
         })
         .catch(cause => {
@@ -1491,6 +1492,7 @@ export function DesktopController() {
               <Suspense fallback={null}>
                 <ArticleCreationView
                   onBack={() => navigate(CONTENT_FACTORY_ROUTE)}
+                  onOpenDrafts={() => navigate(DRAFT_BOX_ROUTE)}
                   onStartOperation={startMarketingOperation}
                   requestGateway={requestGateway}
                 />
@@ -1504,6 +1506,7 @@ export function DesktopController() {
                 <VideoCreationView
                   initialProductionId={new URLSearchParams(location.search).get('production') || undefined}
                   onBack={() => navigate(CONTENT_FACTORY_ROUTE)}
+                  onOpenDrafts={() => navigate(DRAFT_BOX_ROUTE)}
                   onStartOperation={startMarketingOperation}
                   requestGateway={requestGateway}
                 />

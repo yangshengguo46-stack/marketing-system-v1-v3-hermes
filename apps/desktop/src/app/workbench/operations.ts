@@ -58,6 +58,7 @@ export interface StartedMarketingOperation {
   state: 'working'
   title: string
   visible_text: string
+  workflow_id?: string
 }
 
 export interface MarketingOperationStatus extends Omit<StartedMarketingOperation, 'state'> {
@@ -103,4 +104,26 @@ export function readMarketingOperationStatus(
   operationId: string
 ): Promise<MarketingOperationStatus> {
   return requestGateway<MarketingOperationStatus>('marketing.operation.status', { operation_id: operationId })
+}
+
+export interface MarketingWorkflowStatus {
+  error?: { code?: string; message?: string }
+  id: string
+  input?: {
+    account_id?: string
+    operation?: { account_id?: string }
+  }
+  kind: string
+  result?: { results?: MarketingOperationResultRef[] }
+  state: string
+  steps: Array<{ id: string; key: string; state: string }>
+  title: string
+  updated_at: number
+}
+
+export function readMarketingWorkflow(
+  requestGateway: RequestGateway,
+  workflowId: string
+): Promise<MarketingWorkflowStatus> {
+  return requestGateway<MarketingWorkflowStatus>('marketing.workflow.get', { workflow_id: workflowId })
 }

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -16,7 +18,9 @@ from typing import Any, Callable, Iterable
 
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.content_assets import ContentAssetRepository
+from agent.marketing.domains.material_sourcing import MaterialSourcingRepository
 from agent.marketing.domains.media_assets import MediaAssetRepository
+from agent.marketing.domains.production_audio import ProductionAudioRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
 from agent.marketing.intelligence.store import OperatingLoopRepository
 from agent.marketing.domains.video_ir import (
@@ -77,6 +81,229 @@ def _integer(value: Any, field: str, *, minimum: int, maximum: int) -> int:
     return result
 
 
+def _script_scene_specs(script: str, *, title: str) -> list[dict[str, Any]]:
+    """Extract bounded scene timing and on-screen copy from common shot scripts."""
+
+    shot_pattern = re.compile(
+        r"(?ms)^###\s*Shot\s+([^\n]+)\n(.*?)(?=^###\s*Shot\s+|\Z)",
+        re.IGNORECASE,
+    )
+    timing_pattern = re.compile(
+        r"\((\d+(?:\.\d+)?)\s*[-–—]\s*(\d+(?:\.\d+)?)\s*s\)",
+        re.IGNORECASE,
+    )
+    screen_pattern = re.compile(
+        r"(?m)^\*\*(?:On-screen text|屏幕文字|字幕)\*\*\s*[:：]\s*(.+)$",
+        re.IGNORECASE,
+    )
+    voice_pattern = re.compile(
+        r"(?m)^\*\*(?:VO|Voiceover|旁白|口播)\*\*\s*[:：]\s*[「\"]?(.+?)[」\"]?$",
+        re.IGNORECASE,
+    )
+    visual_pattern = re.compile(
+        r"(?m)^\*\*(?:Visual|画面|镜头画面)\*\*\s*[:：]\s*(.+)$",
+        re.IGNORECASE,
+    )
+    scenes: list[dict[str, Any]] = []
+    for heading, body in shot_pattern.findall(script):
+        timing = timing_pattern.search(heading)
+        if timing:
+            start, end = float(timing.group(1)), float(timing.group(2))
+            duration = max(0.1, min(120.0, end - start))
+        else:
+            duration = 6.0
+        purpose = timing_pattern.sub("", heading).strip(" -–—·") or "视频镜头"
+        screen = screen_pattern.search(body)
+        voice = voice_pattern.search(body)
+        visual = visual_pattern.search(body)
+        on_screen_text = _clean_storyboard_text(
+            screen.group(1) if screen else "",
+            fallback="",
+        )
+        voiceover = _clean_script_text(
+            voice.group(1) if voice else "",
+            fallback="",
+        )
+        visual_query = _clean_storyboard_text(
+            visual.group(1) if visual else purpose,
+            fallback=purpose,
+        )
+        headline = (
+            on_screen_text
+            or voiceover
+            or purpose
+        )
+        scenes.append({
+            "duration": round(duration, 3),
+            "headline": _clean_storyboard_text(headline, fallback=title),
+            "on_screen_text": on_screen_text,
+            "purpose": _clean_storyboard_text(purpose, fallback="视频镜头"),
+            "visual_query": visual_query,
+            "voiceover": voiceover,
+        })
+        if len(scenes) >= 30:
+            break
+    if scenes:
+        return scenes
+
+    paragraphs = [
+        _clean_storyboard_text(item, fallback=title)
+        for item in re.split(r"\n\s*\n", script)
+        if item.strip()
+    ][:12]
+    if not paragraphs:
+        paragraphs = [title]
+    return [
+        {
+            "duration": round(max(4.0, min(12.0, len(text) / 9)), 3),
+            "headline": text,
+            "on_screen_text": text,
+            "purpose": "脚本段落分镜",
+            "visual_query": text,
+            "voiceover": text,
+        }
+        for text in paragraphs
+    ]
+
+
+def _scene_motion_intent(scene: dict[str, Any]) -> list[str]:
+    text = " ".join(
+        str(scene.get(field) or "")
+        for field in ("purpose", "visual_query", "on_screen_text")
+    ).lower()
+    if any(marker in text for marker in ("信息图", "数据", "%", "统计", "图表", "chart")):
+        return ["data_visualization"]
+    if any(marker in text for marker in ("快切", "闪过", "转场", "切换", "transition", "wipe")):
+        return ["designed_transition"]
+    if scene.get("on_screen_text"):
+        return ["kinetic_typography"]
+    return ["straight_cut"]
+
+
+def _clean_storyboard_text(value: Any, *, fallback: str) -> str:
+    text = re.sub(r"[*_`#]", "", str(value or "")).strip().strip("「」\"")
+    text = " ".join(text.split())
+    return (text or fallback)[:180]
+
+
+def _clean_script_text(value: Any, *, fallback: str) -> str:
+    text = re.sub(r"[*_`#]", "", str(value or "")).strip().strip("「」\"")
+    text = " ".join(text.split())
+    return (text or fallback)[:1000]
+
+
+def _storyboard_png(*, headline: str, purpose: str, index: int, total: int) -> bytes:
+    """Render a rights-safe local title card without calling a generation provider."""
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    width, height = 360, 640
+    palettes = [
+        ("#152333", "#F06B4F", "#F9F4E9"),
+        ("#2D2238", "#DCAA55", "#FFF8EC"),
+        ("#18352F", "#79B69C", "#F4F7EF"),
+    ]
+    background, accent, foreground = palettes[(index - 1) % len(palettes)]
+    image = Image.new("RGB", (width, height), background)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((24, 24, 336, 616), radius=28, outline=accent, width=3)
+    draw.rectangle((24, 24, 36, 616), fill=accent)
+    draw.ellipse((260, 34, 322, 96), fill=accent)
+
+    font_candidates = (
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    )
+
+    def font(size: int):
+        for path in font_candidates:
+            try:
+                return ImageFont.truetype(path, size=size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    label_font = font(14)
+    headline_font = font(31)
+    purpose_font = font(17)
+    draw.text((54, 58), f"SCENE {index:02d} / {total:02d}", font=label_font, fill=foreground)
+    wrapped = _wrap_storyboard_text(headline, width=10, maximum_lines=7)
+    draw.multiline_text(
+        (54, 160),
+        wrapped,
+        font=headline_font,
+        fill=foreground,
+        spacing=13,
+    )
+    draw.text((54, 560), purpose[:28], font=purpose_font, fill=accent)
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _caption_overlay_png(*, text: str, width: int, height: int) -> bytes:
+    """Render one transparent caption card for FFmpeg builds without libass."""
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    font_size = max(26, int(min(width, height) * 0.038))
+    font = None
+    for path in (
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    ):
+        try:
+            font = ImageFont.truetype(path, size=font_size)
+            break
+        except OSError:
+            continue
+    font = font or ImageFont.load_default()
+    maximum_chars = max(12, int(width / max(font_size, 1) * 1.65))
+    lines = _wrap_storyboard_text(
+        str(text).replace("\n", " "), width=maximum_chars, maximum_lines=2
+    )
+    box = draw.multiline_textbbox((0, 0), lines, font=font, spacing=8, align="center")
+    text_width = box[2] - box[0]
+    text_height = box[3] - box[1]
+    padding_x = max(24, int(width * 0.025))
+    padding_y = max(14, int(height * 0.012))
+    left = max(18, (width - text_width) // 2 - padding_x)
+    right = min(width - 18, (width + text_width) // 2 + padding_x)
+    bottom = height - max(54, int(height * 0.055))
+    top = bottom - text_height - padding_y * 2
+    draw.rounded_rectangle(
+        (left, top, right, bottom),
+        radius=max(12, padding_y),
+        fill=(0, 0, 0, 184),
+    )
+    draw.multiline_text(
+        ((width - text_width) / 2, top + padding_y - box[1]),
+        lines,
+        font=font,
+        fill=(255, 255, 255, 255),
+        spacing=8,
+        align="center",
+        stroke_width=1,
+        stroke_fill=(0, 0, 0, 220),
+    )
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _wrap_storyboard_text(value: str, *, width: int, maximum_lines: int) -> str:
+    compact = " ".join(str(value or "").split())
+    lines = [compact[index : index + width] for index in range(0, len(compact), width)]
+    lines = lines[:maximum_lines]
+    if len(compact) > width * maximum_lines and lines:
+        lines[-1] = lines[-1][:-1] + "…"
+    return "\n".join(lines)
+
+
 def _default_runner(command: list[str], log_path: Path) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log:
@@ -105,6 +332,8 @@ class VideoProductionRepository(MarketingDomainRepository):
         super().__init__(paths)
         self.media = MediaAssetRepository(self.paths)
         self.content = ContentAssetRepository(self.paths)
+        self.materials = MaterialSourcingRepository(self.paths)
+        self.audio = ProductionAudioRepository(self.paths)
         self.ffmpeg_path = ffmpeg_path or shutil.which("ffmpeg") or ""
         self.ffprobe_path = ffprobe_path or shutil.which("ffprobe") or ""
         self.runner = runner or _default_runner
@@ -121,6 +350,415 @@ class VideoProductionRepository(MarketingDomainRepository):
         self.work_root = self.paths.config_dir.parent / "marketing-video-renders"
         self.work_root.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
+
+    def prepare_from_campaign(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        campaign_asset_id: str,
+        platform: str,
+    ) -> dict[str, Any]:
+        """Handoff one platform-native campaign variant without copy/paste."""
+
+        resolved = self.content.resolve_faceless_video_plan_for_campaign(
+            asset_id=campaign_asset_id,
+            platform=str(platform or "").strip(),
+            user_id=user_id,
+            account_id=account_id,
+        )
+        campaign = resolved["campaign"]
+        campaign_content = campaign.get("content") or {}
+        evidence_refs = list(campaign_content.get("_provenance_evidence_refs") or [])
+        if not evidence_refs:
+            raise ValueError("campaign has no verified evidence for video production")
+        return self.prepare_from_script(
+            user_id=user_id,
+            account_id=account_id,
+            plan_id=str(resolved["plan"]["plan_id"]),
+            title=str(campaign.get("title") or campaign.get("topic") or "视频作品"),
+            script=str(resolved["script"]),
+            platform=str(platform or "").strip(),
+            evidence_refs=evidence_refs,
+            source_campaign_asset_id=campaign_asset_id,
+        )
+
+    def prepare_from_script(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        plan_id: str,
+        title: str,
+        script: str,
+        platform: str,
+        evidence_refs: list[str],
+        source_campaign_asset_id: str = "",
+    ) -> dict[str, Any]:
+        """Create a bounded local storyboard and prepared Video IR from a script.
+
+        The model supplies the editorial script; Hermes owns the verbose and
+        failure-prone Video IR construction.  Storyboard cards are deterministic
+        local derivatives, so this path has no paid or external side effect.
+        """
+
+        title_value = str(title or "").strip()
+        script_value = str(script or "").strip()
+        platform_value = str(platform or "").strip()
+        if not title_value or len(title_value) > 300:
+            raise ValueError("video setup title must be between 1 and 300 characters")
+        if not script_value or len(script_value) > 20_000:
+            raise ValueError("video setup script must be between 1 and 20000 characters")
+        if not plan_id or len(plan_id) > 120:
+            raise ValueError("video setup plan_id is required")
+        if not platform_value or len(platform_value) > 80:
+            raise ValueError("video setup platform is required")
+
+        plan = self.content.get_production_plan(
+            plan_id=plan_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        if plan.get("kind") != "faceless_video":
+            raise ValueError("compact video setup requires a faceless_video plan")
+        if platform_value not in (plan.get("target_platforms") or []):
+            raise ValueError("video setup platform is outside its production plan")
+
+        campaign = None
+        campaign_content: dict[str, Any] = {}
+        if source_campaign_asset_id:
+            campaign = self.content.get(
+                asset_id=source_campaign_asset_id,
+                user_id=user_id,
+                account_id=account_id,
+            )
+            campaign_content = (
+                campaign.get("content")
+                if isinstance(campaign.get("content"), dict)
+                else {}
+            )
+            if campaign_content.get("_production_kind") != "cross_platform_campaign":
+                raise ValueError("video setup source is not a cross-platform campaign")
+            campaign_evidence = campaign_content.get("_provenance_evidence_refs") or []
+            if campaign_evidence:
+                evidence_refs = list(campaign_evidence)
+
+        fingerprint = hashlib.sha256(
+            _json({
+                "account_id": account_id,
+                "pipeline_version": "marketing.video.setup.v2",
+                "plan_id": plan_id,
+                "platform": platform_value,
+                "script": script_value,
+                "source_campaign_asset_id": source_campaign_asset_id,
+            }).encode("utf-8")
+        ).hexdigest()
+        scene_specs = _script_scene_specs(script_value, title=title_value)
+        source = self._find_script_source(
+            user_id=user_id,
+            account_id=account_id,
+            setup_fingerprint=fingerprint,
+        )
+        if source is None:
+            material_searches = []
+            for index, scene in enumerate(scene_specs, start=1):
+                search = self.materials.search(
+                    user_id=user_id,
+                    account_id=account_id,
+                    query=scene["visual_query"],
+                    role="broll",
+                    orientation="portrait",
+                    target_duration=scene["duration"],
+                    limit=8,
+                    request_ref=f"video-setup:{fingerprint}:scene-{index:03d}",
+                )
+                material_searches.append({
+                    "scene_id": f"scene_{index:03d}",
+                    "search_id": search["id"],
+                    "query": scene["visual_query"],
+                    "status": search["status"],
+                    "candidate_count": len(search.get("candidates") or []),
+                })
+            voiceover = "\n\n".join(
+                scene["voiceover"] for scene in scene_specs if scene.get("voiceover")
+            ).strip()
+            voice_job = (
+                self.audio.prepare_voice(
+                    user_id=user_id,
+                    account_id=account_id,
+                    name=f"{title_value} · 旁白",
+                    script_text=voiceover,
+                )
+                if voiceover
+                else None
+            )
+            reaction = (campaign_content.get("prediction") or {}).get(
+                "social_reaction_simulation"
+            )
+            reaction_scenarios = (
+                list(reaction.get("scenarios") or [])
+                if isinstance(reaction, dict)
+                else []
+            )
+            source = self.content.create_draft(
+                user_id=user_id,
+                account_id=account_id,
+                title=title_value,
+                plan_id=plan_id,
+                asset_type="script",
+                platform=platform_value,
+                production_kind="faceless_video",
+                content={
+                    "schema": "marketing.faceless_video.v1",
+                    "script": script_value,
+                    "setup_fingerprint": fingerprint,
+                    "source_campaign_asset_id": source_campaign_asset_id or None,
+                    "validation": {
+                        "ready": False,
+                        "issues": [
+                            "replace_storyboard_placeholders",
+                            *(["generate_or_bind_voiceover"] if voice_job else []),
+                        ],
+                    },
+                    "material_manifest": {
+                        "status": "awaiting_material_selection",
+                        "external_generation": False,
+                        "placeholder_count": len(scene_specs),
+                        "requires_real_materials": True,
+                        "searches": material_searches,
+                    },
+                    "sound_plan": {
+                        "mode": "original_voice_only",
+                        "mix_role": "voice_first",
+                        "opening_cue_ms": 0,
+                        "voice_required": bool(voice_job),
+                        "voice_job_id": voice_job["id"] if voice_job else None,
+                        "voice_status": "pending" if voice_job else "not_required",
+                    },
+                },
+                topic=str((campaign or {}).get("topic") or title_value),
+                hook=str((campaign or {}).get("hook") or ""),
+                evidence_refs=evidence_refs,
+                reaction_scenarios=reaction_scenarios,
+            )
+
+        storyboard_assets = [
+            self._local_storyboard_asset(
+                user_id=user_id,
+                account_id=account_id,
+                fingerprint=fingerprint,
+                index=index,
+                total=len(scene_specs),
+                headline=scene["headline"],
+                purpose=scene["purpose"],
+            )
+            for index, scene in enumerate(scene_specs, start=1)
+        ]
+        scenes = []
+        captions = []
+        timeline_cursor = 0.0
+        for index, (scene, asset) in enumerate(
+            zip(scene_specs, storyboard_assets, strict=True), start=1
+        ):
+            on_screen_text = str(scene.get("on_screen_text") or "").strip()
+            voiceover = str(scene.get("voiceover") or "").strip()
+            if voiceover:
+                captions.append({
+                    "start": round(timeline_cursor, 3),
+                    "end": round(timeline_cursor + float(scene["duration"]), 3),
+                    "text": voiceover[:200],
+                })
+            scenes.append({
+                "id": f"scene_{index:03d}",
+                "duration": scene["duration"],
+                "purpose": scene["purpose"],
+                "visuals": [{
+                    "media_asset_id": asset["id"],
+                    "source_in": 0,
+                    "fit": "cover",
+                }],
+                "text": (
+                    [{
+                        "text": on_screen_text,
+                        "role": "headline",
+                        "style_token": "short_video_emphasis",
+                    }]
+                    if on_screen_text
+                    else []
+                ),
+                "motion_intent": _scene_motion_intent(scene),
+                "constraints": {
+                    "safe_area": "short_vertical",
+                    "rights_required": True,
+                },
+                "renderer_policy": {
+                    "preference": "auto",
+                    "fallback": FFMPEG_RENDERER,
+                },
+                "review_rules": [
+                    "headline remains legible in the short-video safe area",
+                    "replace the local storyboard card when stronger rights-cleared footage exists",
+                ],
+            })
+            timeline_cursor += float(scene["duration"])
+        production = self.prepare(
+            user_id=user_id,
+            account_id=account_id,
+            source_asset_id=source["id"],
+            video_ir={
+                "version": "marketing.video.ir.v1",
+                "canvas": {"width": 360, "height": 640, "fps": 24},
+                "scenes": scenes,
+                "captions": captions,
+                "audio": {},
+                "review_rules": [
+                    "review every storyboard card before render",
+                    "confirm pacing, claims, rights, and account fit",
+                ],
+            },
+        )
+        return {
+            "source_asset": source,
+            "production": production,
+            "storyboard_assets": storyboard_assets,
+            "material_searches": self._source_material_searches(
+                source=source,
+                user_id=user_id,
+                account_id=account_id,
+            ),
+            "voice_job": self._source_voice_job(
+                source=source,
+                user_id=user_id,
+                account_id=account_id,
+            ),
+            "external_effect_executed": False,
+        }
+
+    def _find_script_source(
+        self, *, user_id: str, account_id: str, setup_fingerprint: str
+    ) -> dict[str, Any] | None:
+        with self._connection() as db:
+            row = db.execute(
+                """SELECT * FROM content_assets
+                WHERE user_id=? AND account_id=? AND status NOT IN ('archived','superseded')
+                  AND json_extract(content_json,'$.setup_fingerprint')=?
+                ORDER BY created_at ASC LIMIT 1""",
+                (user_id, account_id, setup_fingerprint),
+            ).fetchone()
+        if row is None:
+            return None
+        return self.content.get(
+            asset_id=row["id"], user_id=user_id, account_id=account_id
+        )
+
+    def _source_material_searches(
+        self,
+        *,
+        source: dict[str, Any],
+        user_id: str,
+        account_id: str,
+    ) -> list[dict[str, Any]]:
+        content = source.get("content") if isinstance(source.get("content"), dict) else {}
+        manifest = (
+            content.get("material_manifest")
+            if isinstance(content.get("material_manifest"), dict)
+            else {}
+        )
+        result = []
+        for binding in manifest.get("searches") or []:
+            if not isinstance(binding, dict) or not binding.get("search_id"):
+                continue
+            try:
+                search = self.materials.get_search(
+                    search_id=str(binding["search_id"]),
+                    user_id=user_id,
+                    account_id=account_id,
+                )
+            except KeyError:
+                continue
+            result.append({
+                **search,
+                "scene_id": str(binding.get("scene_id") or ""),
+                "visual_query": str(binding.get("query") or ""),
+            })
+        return result
+
+    def _source_voice_job(
+        self,
+        *,
+        source: dict[str, Any],
+        user_id: str,
+        account_id: str,
+    ) -> dict[str, Any] | None:
+        content = source.get("content") if isinstance(source.get("content"), dict) else {}
+        sound_plan = (
+            content.get("sound_plan")
+            if isinstance(content.get("sound_plan"), dict)
+            else {}
+        )
+        job_id = str(sound_plan.get("voice_job_id") or "").strip()
+        if not job_id:
+            return None
+        try:
+            return self.audio.get(
+                job_id=job_id,
+                user_id=user_id,
+                account_id=account_id,
+            )
+        except KeyError:
+            return None
+
+    def _local_storyboard_asset(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        fingerprint: str,
+        index: int,
+        total: int,
+        headline: str,
+        purpose: str,
+    ) -> dict[str, Any]:
+        provider = "marketing_os_local_storyboard"
+        provider_asset_id = f"storyboard://{fingerprint}/{index}"
+        existing = self.media.find_provider_asset(
+            user_id=user_id,
+            account_id=account_id,
+            provider=provider,
+            provider_asset_id=provider_asset_id,
+        )
+        if existing is not None:
+            return existing
+        payload = _storyboard_png(
+            headline=headline,
+            purpose=purpose,
+            index=index,
+            total=total,
+        )
+        return self.media.import_bytes(
+            user_id=user_id,
+            account_id=account_id,
+            name=f"本地分镜 {index:02d} · {headline[:36]}",
+            media_type="image",
+            role="storyboard",
+            source_type="derived",
+            rights_status="inherited",
+            payload=payload,
+            filename=f"storyboard-{fingerprint[:12]}-{index:02d}.png",
+            mime_type="image/png",
+            provider=provider,
+            provider_asset_id=provider_asset_id,
+            metadata={
+                "contract": "marketing.local_storyboard.v1",
+                "deterministic": True,
+                "external_generation": False,
+                "source_fingerprint": fingerprint,
+            },
+            receipt={
+                "provider": provider,
+                "effect": "local_deterministic_storyboard",
+            },
+        )
 
     def prepare(
         self,
@@ -158,16 +796,6 @@ class VideoProductionRepository(MarketingDomainRepository):
                 normalized_ir,
                 enabled_renderers=self.enabled_renderers,
             )
-            if render_plan["executable"] is not True:
-                blocked = [
-                    scene["scene_id"]
-                    for scene in render_plan["scenes"]
-                    if scene["status"] != "ready"
-                ]
-                raise ValueError(
-                    "video_ir requires unavailable renderer capabilities for scenes: "
-                    + ", ".join(blocked)
-                )
             normalized = self._normalize_edl(
                 self._compatibility_edl(normalized_ir),
                 user_id=user_id,
@@ -263,6 +891,241 @@ class VideoProductionRepository(MarketingDomainRepository):
             account_id=account_id,
         )
 
+    def render_readiness(
+        self,
+        *,
+        production_id: str,
+        user_id: str,
+        account_id: str,
+    ) -> dict[str, Any]:
+        production = self.get(
+            production_id=production_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        source = self.content.get(
+            asset_id=production["source_asset_id"],
+            user_id=user_id,
+            account_id=account_id,
+        )
+        return self._render_readiness(
+            production=production,
+            source=source,
+            user_id=user_id,
+        )
+
+    def _render_readiness(
+        self,
+        *,
+        production: dict[str, Any],
+        source: dict[str, Any],
+        user_id: str,
+    ) -> dict[str, Any]:
+        blockers: list[dict[str, Any]] = []
+        render_plan = production.get("render_plan") or {}
+        if render_plan.get("executable") is not True:
+            scene_ids = [
+                str(scene.get("scene_id") or "")
+                for scene in render_plan.get("scenes") or []
+                if scene.get("status") != "ready"
+            ]
+            blockers.append({
+                "code": "renderer_unavailable",
+                "count": len(scene_ids),
+                "scene_ids": scene_ids,
+                "message": "部分镜头需要的 Remotion/HyperFrames 运行环境尚未就绪",
+            })
+
+        placeholder_scenes = []
+        for scene in (production.get("video_ir") or {}).get("scenes") or []:
+            for visual in scene.get("visuals") or []:
+                try:
+                    asset = self.media.get(
+                        asset_id=str(visual.get("media_asset_id") or ""),
+                        user_id=user_id,
+                    )
+                except KeyError:
+                    continue
+                if asset.get("provider") == "marketing_os_local_storyboard":
+                    placeholder_scenes.append(str(scene.get("id") or ""))
+                    break
+        if placeholder_scenes:
+            blockers.append({
+                "code": "storyboard_placeholders",
+                "count": len(placeholder_scenes),
+                "scene_ids": placeholder_scenes,
+                "message": f"{len(placeholder_scenes)} 个镜头仍是本地分镜卡，尚未绑定真实素材",
+            })
+
+        source_content = source.get("content") if isinstance(source.get("content"), dict) else {}
+        sound_plan = (
+            source_content.get("sound_plan")
+            if isinstance(source_content.get("sound_plan"), dict)
+            else {}
+        )
+        voice_asset_id = str(
+            ((production.get("video_ir") or {}).get("audio") or {}).get(
+                "voice_asset_id"
+            )
+            or ""
+        ).strip()
+        if sound_plan.get("voice_required") is True and not voice_asset_id:
+            blockers.append({
+                "code": "voiceover_missing",
+                "count": 1,
+                "scene_ids": [],
+                "message": "旁白尚未生成或绑定",
+            })
+        return {
+            "ready": not blockers,
+            "status": "ready_for_render" if not blockers else "blocked",
+            "blockers": blockers,
+            "placeholder_scene_count": len(placeholder_scenes),
+            "voice_required": sound_plan.get("voice_required") is True,
+            "voice_asset_id": voice_asset_id or None,
+        }
+
+    @staticmethod
+    def _require_render_ready(readiness: dict[str, Any]) -> None:
+        if readiness.get("ready") is True:
+            return
+        messages = [
+            str(item.get("message") or "")
+            for item in readiness.get("blockers") or []
+            if item.get("message")
+        ]
+        raise ValueError("video production is not render-ready: " + "；".join(messages))
+
+    def select_material_candidate(
+        self,
+        *,
+        production_id: str,
+        scene_id: str,
+        candidate_id: str,
+        user_id: str,
+        account_id: str,
+        rights_reviewed: bool,
+    ) -> dict[str, Any]:
+        """Materialize one reviewed candidate and create an immutable IR revision."""
+
+        selected = self.materials.materialize(
+            candidate_id=candidate_id,
+            user_id=user_id,
+            account_id=account_id,
+            rights_reviewed=rights_reviewed,
+        )
+        production = self.get(
+            production_id=production_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        next_ir = json.loads(json.dumps(production["video_ir"]))
+        next_ir.pop("ir_sha256", None)
+        matched = False
+        for scene in next_ir.get("scenes") or []:
+            scene.pop("scene_sha256", None)
+            if scene.get("id") != scene_id:
+                continue
+            scene["visuals"] = [{
+                "media_asset_id": selected["asset"]["id"],
+                "source_in": 0,
+                "fit": (scene.get("visuals") or [{}])[0].get("fit") or "cover",
+            }]
+            matched = True
+        if not matched:
+            raise KeyError("video scene not found in production")
+        revised = self.prepare(
+            user_id=user_id,
+            account_id=account_id,
+            source_asset_id=self._revision_source_asset_id(production),
+            video_ir=next_ir,
+        )
+        return {
+            "asset": selected["asset"],
+            "candidate": selected["candidate"],
+            "previous_production_id": production_id,
+            "production": revised,
+            "readiness": self.render_readiness(
+                production_id=revised["id"],
+                user_id=user_id,
+                account_id=account_id,
+            ),
+        }
+
+    def generate_and_bind_voiceover(
+        self,
+        *,
+        production_id: str,
+        user_id: str,
+        account_id: str,
+        approval_ref: str,
+        confirmed_by_user: bool,
+    ) -> dict[str, Any]:
+        """Execute the prepared TTS job and create a voice-bound IR revision."""
+
+        if not confirmed_by_user:
+            raise ValueError("explicit voice-generation approval is required")
+        production = self.get(
+            production_id=production_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        source = self.content.get(
+            asset_id=self._revision_source_asset_id(production),
+            user_id=user_id,
+            account_id=account_id,
+        )
+        job = self._source_voice_job(
+            source=source,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        if job is None:
+            raise ValueError("video production has no prepared voiceover job")
+        if job["status"] != "completed":
+            self.audio.approve(
+                job_id=job["id"],
+                user_id=user_id,
+                account_id=account_id,
+                approval_ref=approval_ref,
+                confirmed_by_user=True,
+            )
+            job = self.audio.execute(
+                job_id=job["id"],
+                user_id=user_id,
+                account_id=account_id,
+            )
+        voice_asset_id = str(job.get("output_asset_id") or "").strip()
+        if not voice_asset_id:
+            raise RuntimeError("voiceover job completed without an audio asset")
+        next_ir = json.loads(json.dumps(production["video_ir"]))
+        next_ir.pop("ir_sha256", None)
+        for scene in next_ir.get("scenes") or []:
+            scene.pop("scene_sha256", None)
+        next_ir.setdefault("audio", {})["voice_asset_id"] = voice_asset_id
+        revised = self.prepare(
+            user_id=user_id,
+            account_id=account_id,
+            source_asset_id=self._revision_source_asset_id(production),
+            video_ir=next_ir,
+        )
+        return {
+            "voice_job": job,
+            "previous_production_id": production_id,
+            "production": revised,
+            "readiness": self.render_readiness(
+                production_id=revised["id"],
+                user_id=user_id,
+                account_id=account_id,
+            ),
+        }
+
+    @staticmethod
+    def _revision_source_asset_id(production: dict[str, Any]) -> str:
+        return str(
+            production.get("output_asset_id") or production.get("source_asset_id") or ""
+        )
+
     def approve(
         self,
         *,
@@ -277,6 +1140,13 @@ class VideoProductionRepository(MarketingDomainRepository):
         approval = str(approval_ref or "").strip()
         if not approval or len(approval) > 500:
             raise ValueError("approval_ref is required")
+        self._require_render_ready(
+            self.render_readiness(
+                production_id=production_id,
+                user_id=user_id,
+                account_id=account_id,
+            )
+        )
         now = _now()
         with self._transaction() as db:
             row = db.execute(
@@ -318,6 +1188,13 @@ class VideoProductionRepository(MarketingDomainRepository):
             return production
         if production["status"] != "approved":
             raise ValueError("video production must be approved before rendering")
+        self._require_render_ready(
+            self.render_readiness(
+                production_id=production_id,
+                user_id=user_id,
+                account_id=account_id,
+            )
+        )
         if not self.ffmpeg_path or not self.ffprobe_path:
             raise RuntimeError(
                 "ffmpeg and ffprobe are required for faceless-video rendering"
@@ -663,7 +1540,19 @@ class VideoProductionRepository(MarketingDomainRepository):
                     )
                 except KeyError:
                     output = {}
-            summaries.append(self._review_summary(production, source, output))
+            readiness = self._render_readiness(
+                production=production,
+                source=source,
+                user_id=user_id,
+            )
+            summaries.append(
+                self._review_summary(
+                    production,
+                    source,
+                    output,
+                    readiness=readiness,
+                )
+            )
         return {
             "user_id": user_id,
             "account_id": account_id,
@@ -726,8 +1615,18 @@ class VideoProductionRepository(MarketingDomainRepository):
                     ),
                 }
             )
+        readiness = self._render_readiness(
+            production=production,
+            source=source,
+            user_id=user_id,
+        )
         return {
-            "summary": self._review_summary(production, source, output or {}),
+            "summary": self._review_summary(
+                production,
+                source,
+                output or {},
+                readiness=readiness,
+            ),
             "production": {
                 key: value
                 for key, value in production.items()
@@ -736,6 +1635,17 @@ class VideoProductionRepository(MarketingDomainRepository):
             "source_asset": source,
             "output_asset": output,
             "media_assets": media_assets,
+            "material_searches": self._source_material_searches(
+                source=source,
+                user_id=user_id,
+                account_id=account_id,
+            ),
+            "voice_job": self._source_voice_job(
+                source=source,
+                user_id=user_id,
+                account_id=account_id,
+            ),
+            "readiness": readiness,
         }
 
     @staticmethod
@@ -743,6 +1653,8 @@ class VideoProductionRepository(MarketingDomainRepository):
         production: dict[str, Any],
         source: dict[str, Any],
         output: dict[str, Any],
+        *,
+        readiness: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         video_ir = production.get("video_ir") or {}
         canvas = video_ir.get("canvas") or {}
@@ -775,6 +1687,7 @@ class VideoProductionRepository(MarketingDomainRepository):
             "duration": duration,
             "scene_count": len(scenes),
             "renderers": renderers,
+            "readiness": readiness or {"ready": True, "blockers": []},
             "human_review_status": output.get("human_review_status") or "pending",
             "created_at": production["created_at"],
             "updated_at": production["updated_at"],
@@ -1137,39 +2050,16 @@ class VideoProductionRepository(MarketingDomainRepository):
 
         visual_path = base_path
         if edl.get("captions"):
-            srt_path = work_dir / "captions.srt"
-            srt_path.write_text(_srt(edl["captions"]), encoding="utf-8")
             captioned = work_dir / "captioned.mp4"
-            escaped = (
-                str(srt_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-            )
-            self.runner(
-                [
-                    self.ffmpeg_path,
-                    "-y",
-                    "-hide_banner",
-                    "-loglevel",
-                    "warning",
-                    "-i",
-                    str(base_path),
-                    "-vf",
-                    (
-                        f"subtitles='{escaped}':force_style="
-                        "'FontName=Sans,FontSize=18,Bold=1,Outline=2,"
-                        "Alignment=2,MarginV=90'"
-                    ),
-                    "-an",
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "veryfast",
-                    "-crf",
-                    "20",
-                    "-pix_fmt",
-                    "yuv420p",
-                    str(captioned),
-                ],
-                log_path,
+            self._burn_captions(
+                base_path=base_path,
+                output_path=captioned,
+                cues=edl["captions"],
+                width=width,
+                height=height,
+                duration=float(edl["duration"]),
+                work_dir=work_dir,
+                log_path=log_path,
             )
             visual_path = captioned
 
@@ -1187,6 +2077,102 @@ class VideoProductionRepository(MarketingDomainRepository):
         if technical["width"] != width or technical["height"] != height:
             raise RuntimeError("rendered dimensions do not match the approved EDL")
         return output_path, technical
+
+    def _burn_captions(
+        self,
+        *,
+        base_path: Path,
+        output_path: Path,
+        cues: list[dict[str, Any]],
+        width: int,
+        height: int,
+        duration: float,
+        work_dir: Path,
+        log_path: Path,
+    ) -> None:
+        """Burn captions with libass when available, otherwise PNG overlays."""
+
+        work_dir.mkdir(parents=True, exist_ok=True)
+        if self._ffmpeg_supports_filter("subtitles"):
+            srt_path = work_dir / "captions.srt"
+            srt_path.write_text(_srt(cues), encoding="utf-8")
+            escaped = (
+                str(srt_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+            )
+            command = [
+                self.ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-i",
+                str(base_path),
+                "-vf",
+                (
+                    f"subtitles=filename='{escaped}':force_style="
+                    "'FontName=Sans,FontSize=18,Bold=1,Outline=2,"
+                    "Alignment=2,MarginV=90'"
+                ),
+            ]
+        else:
+            command = [
+                self.ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-i",
+                str(base_path),
+            ]
+            filters: list[str] = []
+            current = "0:v"
+            for index, cue in enumerate(cues):
+                overlay = work_dir / f"caption-{index:03d}.png"
+                overlay.write_bytes(
+                    _caption_overlay_png(
+                        text=str(cue["text"]), width=width, height=height
+                    )
+                )
+                command.extend(["-loop", "1", "-i", str(overlay)])
+                output = f"captioned-{index}"
+                filters.append(
+                    f"[{current}][{index + 1}:v]overlay=0:0:"
+                    f"enable='between(t,{float(cue['start']):.3f},{float(cue['end']):.3f})'"
+                    f"[{output}]"
+                )
+                current = output
+            command.extend(["-filter_complex", ";".join(filters), "-map", f"[{current}]"])
+        command.extend([
+            "-t",
+            f"{duration:.3f}",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ])
+        self.runner(command, log_path)
+
+    def _ffmpeg_supports_filter(self, name: str) -> bool:
+        try:
+            result = subprocess.run(
+                [self.ffmpeg_path, "-hide_banner", "-filters"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return any(
+            len(parts := line.split()) >= 2 and parts[1] == name
+            for line in result.stdout.splitlines()
+        )
 
     def _render_ffmpeg_scene(
         self,

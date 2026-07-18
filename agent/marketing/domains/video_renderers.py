@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -47,6 +48,84 @@ def _repository_renderer_root() -> Path:
     return Path(__file__).resolve().parents[3] / "video-renderers"
 
 
+def _resolve_browser_executable(value: str | Path | None = None) -> Path:
+    """Resolve a real local Chromium binary without making Electron own it."""
+
+    explicit = str(
+        value
+        or os.environ.get("MARKETING_OS_VIDEO_BROWSER_EXECUTABLE")
+        or os.environ.get("HERMES_BROWSER_EXECUTABLE")
+        or os.environ.get("AGENT_BROWSER_EXECUTABLE_PATH")
+        or ""
+    ).strip()
+    if explicit:
+        candidate = Path(explicit).expanduser()
+        if candidate.is_file():
+            return candidate.resolve()
+        on_path = shutil.which(explicit)
+        if on_path:
+            return Path(on_path).resolve()
+
+    for command in ("google-chrome", "chromium", "chromium-browser", "chrome"):
+        on_path = shutil.which(command)
+        if on_path:
+            return Path(on_path).resolve()
+
+    platform_candidates: list[Path] = []
+    if sys.platform == "darwin":
+        platform_candidates.extend([
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            Path.home()
+            / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        ])
+    elif sys.platform == "win32":
+        for root in (
+            os.environ.get("PROGRAMFILES"),
+            os.environ.get("PROGRAMFILES(X86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ):
+            if root:
+                platform_candidates.extend([
+                    Path(root) / "Google/Chrome/Application/chrome.exe",
+                    Path(root) / "Microsoft/Edge/Application/msedge.exe",
+                ])
+    for candidate in platform_candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+
+    cache_roots = []
+    playwright_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if playwright_root and playwright_root != "0":
+        cache_roots.append(Path(playwright_root).expanduser())
+    cache_roots.append(Path.home() / ".cache/ms-playwright")
+    if sys.platform == "darwin":
+        cache_roots.append(Path.home() / "Library/Caches/ms-playwright")
+    elif sys.platform == "win32":
+        cache_roots.append(
+            Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData/Local")
+            / "ms-playwright"
+        )
+    relative_candidates = (
+        "chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
+        "chrome-linux*/chrome",
+        "chrome-win*/chrome.exe",
+        "chrome-headless-shell-mac*/chrome-headless-shell",
+        "chrome-headless-shell-linux*/chrome-headless-shell",
+        "chrome-headless-shell-win*/chrome-headless-shell.exe",
+    )
+    for root in cache_roots:
+        if not root.is_dir():
+            continue
+        for build in sorted(root.glob("chromium*"), reverse=True):
+            for pattern in relative_candidates:
+                match = next(build.glob(pattern), None)
+                if match and match.is_file():
+                    return match.resolve()
+    return Path()
+
+
 class VideoRendererRuntime:
     """Discover and execute the product's exact, local renderer toolchain."""
 
@@ -73,12 +152,7 @@ class VideoRendererRuntime:
             or shutil.which("node")
             or ""
         ).expanduser()
-        self.browser_executable = Path(
-            browser_executable
-            or os.environ.get("MARKETING_OS_VIDEO_BROWSER_EXECUTABLE")
-            or os.environ.get("HERMES_BROWSER_EXECUTABLE")
-            or ""
-        ).expanduser()
+        self.browser_executable = _resolve_browser_executable(browser_executable)
         self.runner = runner or _default_runner
         self._health: dict[str, Any] | None = None
 

@@ -32,6 +32,7 @@ from agent.marketing.schema import (
     MARKETING_DOMAIN_SCHEMA_SQL,
     PROSPECT_SCOPE_COLUMNS,
 )
+from agent.harness.schema import HARNESS_SCHEMA_SQL
 from hermes_constants import get_hermes_home
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
@@ -770,6 +771,7 @@ CREATE INDEX IF NOT EXISTS idx_marketing_accounts_user_platform
 """
 
 SCHEMA_SQL += MARKETING_DOMAIN_SCHEMA_SQL
+SCHEMA_SQL += HARNESS_SCHEMA_SQL
 
 # Indexes that reference columns added in later schema versions must be
 # created AFTER _reconcile_columns() has had a chance to ADD them on

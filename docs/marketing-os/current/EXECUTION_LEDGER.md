@@ -1,6 +1,6 @@
 # Marketing OS 当前执行台账
 
-> 日期：2026-07-17
+> 日期：2026-07-18
 > 分支：`codex/marketing-os-product-source`
 > 本文件是唯一任务入口。研究资料、ADR 和 Git 历史不得直接发任务。
 
@@ -51,7 +51,7 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 | 交付形态 | 当前原生能力 | 主要缺口 | 当前证据 |
 |---|---|---|---|
 | `article_soft` 软文 | 账号/实验绑定、EvidencePack、父稿与平台变体、质量门、版本资产、Preflight 和发布资格约束 | 真实账号调性、主张级多源核验、配图版权与真人审稿 | automated |
-| `faceless_video` 不露脸素材视频 | 账号/实验绑定、内容计划、素材需求、声音计划、特征快照、Preflight、不可变 Video IR/EDL、scene/IR/render-plan hash、能力路由、显式渲染批准、固定版本 Remotion/HyperFrames 镜头执行、真实 FFmpeg 规格化与合成、场景缓存、派生最终素材、不可变成品版本、失败重试与 Render Receipt；黑场/冻结/响度/技术规格自动 QA；用户素材优先的 Provider 中立检索、Pexels 官方视频适配、来源/许可证审查后下载与稳定身份去重；一次性批准后复用 Hermes TTS 并把真实输出导入素材库；授权 BGM 与旁白已通过真实 FFmpeg 混音和音轨 QA；原生视频理解支持 direct/sampled/auto；Desktop 已有真实 production/镜头/素材/时间线/成片/回执工作台和人工审片入口 | 配置真实 Pexels Key 后的在线下载、当前 Volcengine TTS 的一次性费用授权、真人认可整片 | automated（渲染器已达 packaged） |
+| `faceless_video` 不露脸素材视频 | 账号/实验绑定、内容计划、素材需求、声音计划、特征快照、Preflight、不可变 Video IR/EDL、scene/IR/render-plan hash、能力路由、显式渲染批准、固定版本 Remotion/HyperFrames 镜头执行、真实 FFmpeg 规格化与合成、场景缓存、派生最终素材、不可变成品版本、失败重试与 Render Receipt；黑场/冻结/响度/技术规格自动 QA；TopicBrief 直接 fan-out 到独立 Video Director，不再依赖或复制图文脚本；素材按用户库 → Wikimedia Commons/Pexels 等零费用开放来源 → 本地缓存检索，拒绝付费生成；Desktop 已真实加载并播放成片 | 首条端到端证明片只复用了一条开放素材，部分 Remotion 大字存在裁切；后续运行已加素材相关性与多查询/多来源策略，但仍需真实模型多平台人审、发布和跨天数据回收 | dev-runtime（成片与播放已验；未达 publish-grade/human-loop） |
 | `cross_platform_campaign` 全平台 campaign | 一个内容内核绑定任意目标平台集合；内置抖音、公众号、视频号、知乎、小红书、B站、快手、TikTok、YouTube、Instagram、LinkedIn、X 的版本化内容画像，非内置安全平台 ID 以 `generic_unverified_requires_platform_research` 降级；每个平台变体必须内容实质不同并说明受众、开头、结构和 CTA 适配依据 | 真实模型成品、平台画像的证据/有效期治理、账号级效果校准、各平台发布 Provider | automated |
 
 三种内部形态共同消费经营主体上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与受治理学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接人工确认，不拥有生产、素材、浏览器、发布或学习事实。
@@ -66,6 +66,27 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 - 逐项状态、功能重叠和产品边界见 [`../reference/skills/reference-skill-inventory.md`](../reference/skills/reference-skill-inventory.md)。
 
 ## 当前唯一主线
+
+### HARNESS-00 全项目 Durable Multi-Agent Harness 重构（H1～H4 首条端到端 dev-runtime 已验，2026-07-18）
+
+- **本轮裁决。** 当前主线从 `PUBLISH-01` 和 `MATERIAL-VIDEO-AUDIT-01` 上收为 Harness 重构；此前纵切不删除，但冻结新增功能，只允许作为迁移样本或修复阻断性回归。目标基线见 [`HARNESS_ARCHITECTURE.md`](./HARNESS_ARCHITECTURE.md)。
+- **真实根因。** Marketing 产品按钮当前走 `marketing.operation.start → hidden desktop-product Session → prompt.submit → free Agent turn`；operation 只有四态，靠运行前后对象 ID 差猜结果，Gateway 重启后未完成 turn 直接 error。Hermes 虽已有 delegate 并发和 Kanban `task/run/event + CAS/lease/heartbeat/reclaim`，Marketing 产品没有接入。问题不是 Agent 数量少，而是自由 Agent 承担了业务状态机。
+- **视频边界冻结。** 当前未提交的 campaign/script 直达视频代码只作为失败实验保留在脏工作树，不进入新主链。正确目标是预演 TopicBrief 同时 fan-out 图文和视频兄弟分支；Video Director 独立策划平台视频、脚本/旁白、shot plan、素材、声音、渲染与 QA，Remotion/HyperFrames/FFmpeg 只作为执行 hands。
+- **Git 基线。** 当前分支 `codex/marketing-os-product-source`、HEAD `9d9c3c095`，无 upstream tracking，唯一 remote 为 `hermes-upstream`；工作树已有 28 个 tracked 文件未提交、`+2716/-106`，没有 untracked。重构不得覆盖或误提交这些既有改动，`H0` 必须先逐文件判定 keep/migrate/drop。
+- **历史删除核对。** Git 不存在“昨天单次删除一万多行”。可对应总量是三次收敛：`7386e9147` 删除旧文档/台账 `6110` 行，`d098c4ad1` 删除 extracted video engine `3401` 行，`f0aa95d62` 删除内部高阶视频 lane `610` 行，合计 `10121` 行；7 月 17 日两个提交本身只删除 `1752` 行。删除的是旧文档/任务入口、第二套 video engine/adapter/store/poller/renderer/多角色 Skill，以及高阶视频内部 lane，不是 Hermes Agent、Remotion/HyperFrames/FFmpeg 或原生素材视频底座。
+- **台账纠错。** `FACELESS-01 已收口、下一步 PUBLISH` 与本文件后部 `MATERIAL-VIDEO-AUDIT-01 P0-1～7` 冲突，前者从本节起不再是当前完成判断；“33 表 entity ownership 完成”只代表列、回填和 trigger 防错完成，不能冒充所有 Repository 已 entity-first。素材、production、草稿和部分 Desktop 查询仍需在 `H5` 迁移。
+- **实施顺序。** `H0` 冻结与基线已完成意图级 keep/migrate/drop 裁决，逐组代码迁移尚未提交；接下来是 `H1` Harness schema/event/lease 与单 Step 兼容 → `H2` 后端任务 projection/订阅/恢复并删除 Electron 内存任务 owner → `H3` Daily Topic DAG 和图文/视频兄弟分支 → `H4` 视频 Project/Revision/可信素材/播放器/声音/renderer/QA → `H5` entity-first 和 schema 单 owner → `H6` Cron enqueue + Provider/effect Activity/outbox → `H7` 最小 toolset、trace/eval/replay 和旧 prompt 编排删除。H0 逐组裁决见 [`HARNESS_ARCHITECTURE.md`](./HARNESS_ARCHITECTURE.md#81-h0-脏工作树裁决)。
+- **H1 原生内核完成。** 新增 `agent/harness/`，在 Hermes `state.db` 中由 `SessionDB` 统一声明 Workflow、Step DAG、Attempt、Artifact、Approval、Receipt、Event 和 Lease。已经验证原子领取、token hash、heartbeat、过期/进程重启回收、重试预算、跨 Workflow resource scope 排他、DAG 依赖门、持久审批、取消与相同输入幂等 Receipt。旧 `marketing.operation` 已进入单 Step 兼容层，Gateway 重启不再把未完成任务判死。
+- **H2 已完成。** Gateway 已接通 `workflow.list/get/events/cancel/retry/approvals/respond`，所有读取校验 Marketing namespace 与 user owner，取消、追加重试、审批均为显式动作；Desktop task tray 已优先按 `workflow_id` 读取后端，在 reload 后恢复活跃 projection，并用 append-only Event cursor 增量刷新而非反复猜 Session 状态。等待审批会展示请求并提供同意/拒绝，失败 Step 可明确追加一次重试，运行中任务可停止且保留已完成 Artifact。
+- **H3 typed Worker 已接通。** `marketing.topic_production.start` 从预演 candidate 创建幂等 TopicBrief DAG；工作台“制作选题”已直接调用该入口。图文 Director 与视频 Director 只共同依赖冻结的 TopicBrief，不互相读取稿件；未知海外平台先研究，图文按平台适配后 QA 入草稿箱，视频按平台分别完成 plan/previs/render/QA 后入草稿箱。Gateway 注册全部 Step handler，以三路并发、heartbeat、lease/retry 和 Receipt 结算真实领域 owner。
+- **素材 Skill 与费用纠偏。** 素材不是“缺了就生成”，自动管线也不得产生云费用。执行顺序固定为账号素材库 → 零费用开放许可 Provider 搜索/下载（默认 Wikimedia Commons 官方 API；有免费 Key 时叠加 Pexels）→ `media-use` 的项目/全局本地缓存。`media-use` 强制 `--local-only`，不调用 HeyGen、Codex 图像生成或其它云 Provider，并拒绝采用 generated 结果；全部未命中就明确失败并允许重试，不制造占位图。命中结果冻结入 `MediaAssetRepository`，保存 provider、来源、许可证、hash 和 resolver receipt；发布仍复核人物、物权、商标与具体使用场景。
+- **旧从属入口已退出产品面。** `marketing_prepare_video_from_script` 已从 schema、registry、默认 core/marketing toolset 删除；Desktop 图文审核页不再出现“制作视频”，Gateway 不再注册 `marketing.video.setup.from_script/from_asset`。手动视频设定 prompt 也改为独立 Video Director 和素材能力顺序。内部 `prepare_from_campaign/prepare_from_script` 兼容实现仍待死代码清理，但已无产品调用入口。
+- **H4 首条真实端到端回执。** DeepSeek 余额恢复后，今日候选 `Kimi K3冲击美股——中国AI大模型进入「军备竞赛」下半场` 以 Workflow `workflow_97ccbc92ba164e0398914eb6da9f0d9a` 完成 TopicBrief → 图文 Director 与视频 Director 并行兄弟分支。最终得到图文草稿 `asset_d7c4dc49a75048aebca13abb0e42b5b5`、抖音视频草稿 `asset_f7abca8a15a849d5b1ed5c3c3a445592`、知乎视频草稿 `asset_86068cad54ec461d97ed590d0800a2bf`，全部进入草稿箱，没有执行发布。
+- **视频运行证据。** 抖音 production `video_production_bba320ba834c45bfbc9be82d737a7a67` 生成 media `media_f1847c76aa9a43049ec57a6fd0fe360b`（H.264/AAC、1080×1920、30fps、60 秒、11,385,862 字节）；知乎 production `video_production_9935313c208a47ffb7e813e8205d6c8d` 生成 media `media_c7feb3ec9671437dba940c7ab02d4a85`（H.264/AAC、1920×1080、30fps、60 秒、9,658,176 字节）。两条均完整 FFmpeg 解码零错误，技术规格/黑场/冻结 QA 通过；Desktop `hermes-media://stream` 播放元素 `readyState=4`、`duration=60`、`error=null`，实际 `play()` 后播放时间从 0 前进到 2.112417 秒，证明不是静态预览或不可播占位。
+- **渲染与素材事实。** 运行时同时启用 `ffmpeg_timeline_v1`、`hyperframes_scene_v1`、`remotion_scene_v1`；本次 20 个镜头由能力路由判定为 Remotion，重试时全部命中 scene cache，不能据此误判 HyperFrames 未接。Wikimedia Commons 实际检索、下载并固化 `CC BY-SA 4.0` 素材，全程未调用付费素材生成，也未安装/下载本地模型。开发机 FFmpeg 缺少 libass `subtitles` filter 时，管线自动改用 Pillow 生成透明字幕图层再由 FFmpeg overlay 烧录，真实竖/横屏成片均成功。
+- **Durable 恢复修复。** 任务托盘原先把 cancelled Workflow 当成单 Step retry，无法恢复被取消的下游；现新增原生 `restart_cancelled_workflow`，保留已成功 Artifact/Attempt/审计并从未完成 DAG frontier 续跑，Gateway 暴露 `marketing.workflow.restart`。同时修复并行兄弟 Step 成功后错误覆盖 Workflow failed 状态的问题，后到的成功结果不再掩盖失败分支。
+- **质量结论与下一门禁。** 本次已达到可恢复、可成片、可播放、可进草稿箱的 `dev-runtime`，但不是可发布成品：首轮素材检索只选中一条证券市场素材并跨镜头复用，部分 Remotion 标题字号过大产生裁切。相关性过滤、紧凑多查询和限制复用策略已写入后续运行路径；仍须再跑多素材样本并完成人工审片，之后才允许进入发布确认。真实模型五平台人审、平台画像时效/来源、真实发布和跨天指标回收继续保留为未完成项。
+- **本轮验证。** 最终相关 Python 回归为 `50/50`（Harness、Topic Workflow、素材、视频与 Gateway RPC），Ruff 与 `git diff --check` 通过；Desktop 目标回归 `24/24`，TypeScript 与 ESLint 通过。Desktop 全量曾完成 `138` 文件、`1,022/1,022` assertions，但进程退出受既有异步 `window is not defined` timer 干扰；另一次并行全量出现 ElevenLabs 面板时序波动，目标复跑已通过，不能把测试基础设施波动写成业务全量稳定。实现回执和剩余删除门见 [`HARNESS_ARCHITECTURE.md`](./HARNESS_ARCHITECTURE.md#82-当前实施回执)。
 
 ### FACELESS-01 不露脸素材视频成品
 
@@ -323,10 +344,10 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 
 ### DRAFT-01 内容工厂草稿箱与原管线恢复（automated，2026-07-17）
 
-- 本轮新增一级 `/drafts` 草稿箱。它按当前账号统一展示图文 `draft/review_ready` 与视频 `prepared/approved/running/failed`、未验收 `completed`；已验收视频、`superseded` 旧版本和被 production 代表的视频源资产不会混入或重复展示。
+- 一级 `/drafts` 草稿箱按当前账号统一展示图文 `draft/review_ready/approved` 与视频 `prepared/approved/running/failed/completed`。2026-07-18 起，已验收但尚未发布的图文和视频也统一投影为“待发布”，直接在草稿箱核对发布门；`published`、`superseded` 旧版本和被 production 代表的视频源/输出资产不会混入或重复展示。
 - 本机真实库只读核对显示，“AI 教育”最新资产是第 4 版 `review_ready + pending`，第 2/3 版已 `superseded`。它没有丢失，只是原图文列表缺少集中管理入口；新草稿箱会自动把第 4 版投影为“等待审核”，点击“继续”回到 `/content/article?asset=...` 的原审核 Sheet。视频 production 则回到 `/content/video?production=...`；极少数尚未建立 production 的不露脸视频源资产交回原生 `content.resume`，不在 Renderer 续造生产状态。
 - `DraftBoxRepository` 只做账号作用域聚合与动作分派，业务真相仍由 `ContentAssetRepository`、`VideoProductionRepository`、`content_production_plans` 和 Hermes `state.db` 拥有。Electron 没有草稿 Store、LocalStorage 或第二生命周期；Gateway 新增 `marketing.drafts.list`、`marketing.draft.archive`、`marketing.draft.restore` 三个 RPC 后，Renderer 消费 25 个 `marketing.*` RPC，Gateway 暴露 36 个，仍无反向依赖。
-- 归档是显式确认后的软归档：内容资产、视频 production、关联的 source/output asset 和生产计划在同一原生事务边界内进入 `archived`，保存 `archived_from_status/archived_at`；恢复时回到归档前状态。运行中的视频拒绝归档，已验收成品不属于草稿，普通内容/视频列表默认排除 archived；历史版本、审核记录、EDL、素材引用和回执均不删除。
+- 归档是显式确认后的软归档：内容资产、视频 production、关联的 source/output asset 和生产计划在同一原生事务边界内进入 `archived`，保存 `archived_from_status/archived_at`；恢复时回到归档前状态。运行中的视频和已验收待发布作品拒绝归档，后者虽然由草稿箱统一承接，但语义是“待发布”而不是可丢弃的半成品；历史版本、审核记录、EDL、素材引用和回执均不删除。
 - 数据库升级继续由 `SessionDB` 声明式 schema reconciliation 拥有；`content_assets` 与 `marketing_video_productions` 只新增归档字段，没有新数据库、JSON 双写或 Electron 迁移。旧图文 validation 迁移也已加生命周期保护，不能在重启时把 archived/superseded/approved/published 资产改回草稿。
 - 自动化证据：Marketing OS Python 全量 `168 passed, 1 skipped`；草稿专项、相邻内容/Gateway/视频组合 `22 passed, 1 skipped`，新增专项 `3/3`；Desktop 全量 `138` 个文件、`1,019/1,019` 通过，草稿/路由定向 `5/5`。TypeScript typecheck、变更范围 ESLint、Ruff、Python compile、`git diff --check` 和正式 Desktop production build/产物断言通过；构建输出 `4,205` 个模块，单 JS chunk `26,167.82 kB`、gzip `5,398.52 kB`，仍超过 `25,000 kB` 告警线。构建标记为 `DIRTY`，只作为 automated 证据。
 - 当前未做的事：没有替用户自动归档“AI 教育”，没有修改真实业务行，没有运行真人 Electron 视觉/点击验收，也没有提交、推送或生成签名安装包。因此本轮不能升级为 `dev-runtime`、`packaged` 或 `human-loop`；下一步真人验收应覆盖当前账号草稿汇总、继续审核、归档确认、已归档恢复和账号切换隔离。
@@ -355,6 +376,31 @@ LOOP-02/03/04 的本地底层已收口：`cron/product_tasks.py` 只提供 Herme
 - **真实库升级证据。** 升级前通过 SQLite 在线 backup 生成 `state.db.pre-entity-v23.20260718-123637.bak` 回滚副本，并先在副本完成 22→23 试迁移。真实 `agent-runtime/state.db` 随后逐表升级：33 张表行数全部保持一致；11 张有数据的业务表分别为策略 `1`、受众 `1`、内容资产 `4`、生产计划 `11`、证据 `16`、账号 portfolio `2`、知识条目 `10`、自有内容观察 `11`、预演 `10`、推荐批次 `1`、推荐候选 `5`；空主体 `0`、无效主体 `0`、外键违规 `0`，`PRAGMA integrity_check=ok`。迁移识别出默认用户主体（关联抖音、公众号两个真实账号）与飞书用户空间的独立主体，没有跨用户混合。Desktop/Gateway 已在升级后重启，Vite `5174` 与 Electron CDP `9222` 正常。
 - **自动化证据。** 新增迁移专项 `6/6`，覆盖 33 表列/trigger 合同、旧可选表自动加列回填、重复启动幂等、多主体歧义拒绝、未分配真实账号跨主体写入拒绝，以及双平台账号共享同一主体策略；prospect 回归同时逐表证明 adoption 后 `entity_id` 不变、`account_id` 改为已认证账号。Marketing OS 宽回归首次运行只有旧库 import 的 trigger change 计数暴露 1 项并已修复为逻辑行数，失败文件复跑 `3/3`；随后 37 个营销相关文件全域复跑 `213/213`。SessionDB 与 Cron `876/876`、Desktop Vitest `1,020/1,020`、Electron/packaging `265 passed, 1 skipped`（Windows junction 限定）全部通过；TypeScript、Ruff lint、`git diff --check` 和正式 Desktop production build/产物断言通过，ESLint 为 `0 error` 并保留一个未修改测试文件的既有空行 warning。正式 build 输出 `4,205` 个模块，单 JS chunk `26,171.97 kB`、gzip `5,399.42 kB`，继续超过 `25,000 kB` 告警线，未生成签名安装包。
 - **本 scope 不冒充完成的事。** 数据 owner 与运行时约束已完成，但多品牌管理 UI、冲突审查 UI、平台知识时效校准、真实五平台成品人审、真实发布、自然跨天指标回收、签名安装包和产品远端备份仍未完成。当前唯一 remote 仍是 `hermes-upstream`，本轮只做本地 Git checkpoint，不 push。
+
+### E2E-DAILY-01 今日选题到图文发布门、视频失败审计（dev-runtime，2026-07-18，测试视频已清空）
+
+- **真实输入与预演。** 从工作台今日选题 `topic_candidate_f620cefd71994d6c54f1f722` 选择“一人公司生存指南——AI泡沫过后，什么才是真护城河”；原预演 `preflight_5228443102644367a6dee7500d39f317` 覆盖公众号、抖音、知乎，平台适配分分别为 `75/81/75`，综合预演 `73`。本轮复用同一主题、证据和平台蓝图，没有另外编造演示选题。
+- **图文链已到发布门。** Agent 生成跨平台 campaign `asset_102fa001dbda4d8bbce69bda2fd7e25f` 第 2 版，包含公众号、抖音、知乎三个实质不同版本并完成真实 Desktop 审核确认；第 1 版已按不可变版本规则 `superseded`。发布准备走确定性 Gateway，而不是自由模型操作；当前预演因账号定位、内容系统和平台连接未齐而保持 `publish_eligible=false`，界面明确阻断，不生成发布 action，更没有外部 effect。
+- **旧视频结论纠正为“静态预览”，没有到发布门。** `video_production_51023e2372b447c3b7a9711933bb6159` 的 7 个镜头实际全部引用 `marketing_os_local_storyboard` 标题卡，且没有旁白音轨；`media_4bf...` / `asset_b659...` 只证明本地 FFmpeg 能把占位分镜拼成 75 秒 MP4。此前人工写入的 `accepted` 不再被当作发布资格：草稿投影现在把它标成 `workflow_stage=production_blocked`、`can_prepare_publish=false`，发布 owner 也会再次拒绝占位素材、缺失旁白或不可执行 render plan。
+- **内容资产直达视频，不再复制脚本。** `ContentReviewSheet` 在已接受 campaign 的视频平台变体上提供“制作视频”；Gateway 只接收 `asset_id + platform`，由 `ContentAssetRepository` 核验 campaign、人审、平台格式和唯一匹配的已预演 `faceless_video` plan，再交给 `VideoProductionRepository`。普通自由简报仍交给 Agent；旧 `from_script` 只保留兼容入口，产品 UI 不再调用。
+- **素材、声音与渲染器真正接入准备链。** `prepare_from_campaign` 逐镜头解析 Visual/VO/On-screen text，为每个镜头建立幂等素材搜索并准备一条 TTS job；用户确认候选来源后才物化素材，明确确认费用后才执行旁白，二者都会创建不可变 IR 新版本。kinetic typography、信息/数据镜头路由 Remotion，设计转场/快切路由 HyperFrames；运行时由原生 backend 发现系统 Chrome 或打包 Chromium，不把浏览器 ownership 移给 Electron。
+- **真实开发库复跑暴露素材假象。** 同一 campaign 曾建立 7 镜头准备任务，能力路由确实得到 5 个 Remotion + 2 个 HyperFrames，系统 Chrome 健康检查也为 ready；但当前账号真实素材库为 `0`、Pexels 未配置。界面出现的 49 个 `user_library` 候选全部来自两套 `marketing_os_local_storyboard` 派生分镜，被本地检索错误包装为“用户已确认版权素材”，不是真实素材候选，因此这次复跑判定失败，不能作为生产链 dev-runtime 证据。
+- **用户要求后已清空本轮全部视频测试资产。** 删除同 campaign 的 5 条 production、3 个派生内容资产、14 张分镜占位、1 个静态 MP4、7 组素材检索与 49 个候选、3 条未执行旁白任务；原 campaign、选题和预演事实保留。清理前生成 `state.db.pre-video-cleanup.20260718-155521.bak`，清理后目标 production/search/audio 均为 `0`，数据库 `integrity_check=ok`。草稿箱现在只保留图文 `asset_102fa...`，不再展示本轮测试视频。
+- **自动化与安全证据。** 本轮变更域后端 `34/34`、发布/经营回归 `25/25`、草稿箱/图文/视频 UI `11/11` 通过；新增覆盖 campaign 直达、每镜头素材请求幂等、Remotion/HyperFrames 路由、不可变素材修订、缺旁白/占位/渲染器门禁，以及“误标 accepted 的静态卡仍不能准备发布”。TypeScript、Python compile 与 `git diff --check` 通过。开发应用已重启在 Vite `5174` / Electron CDP `9222`，本轮没有平台发布、费用调用或跨天指标写入。
+- **仍未完成。** 视频板块不再以“逐镜头补素材即可完成”描述；必须先完成下面的产品结构重整，才能再次建立真实 production。图文仍需补齐 publish preflight 所需的账号定位、内容系统和目标平台连接；之后才是一次性发布批准、可靠回执、作品身份反查和跨天数据回收。平台画像来源、有效期和账号效果校准也仍未完成。本节只有图文链与失败审计达到 `dev-runtime`，视频产品闭环没有达到。
+
+### MATERIAL-VIDEO-AUDIT-01 素材视频板块重整（盘点完成，待实施，2026-07-18）
+
+- **现有底座可以保留。** `MediaAssetRepository` 的受控导入、来源/授权、临时与本地层级、引用保护；`Video IR` 的规范化、scene/IR hash 与能力路由；固定版本 Remotion/HyperFrames runtime；FFmpeg 规格化/合成、场景缓存、自动 QA、不可变成片与 Render Receipt；TTS 的一次性批准状态机；草稿箱/发布 owner 的 fail-closed 门禁，均属于正确原生 owner。
+- **P0-1 / 素材检索不可信。** 本地搜索按空格拆词，中文视觉描述大多无法匹配；即使完全不匹配也给所有资产固定 `0.55` 语义分，并允许 `storyboard/derived/marketing_os_local_storyboard` 进入 `user_library` 候选。必须先排除占位/派生/已删除素材，改为经营主体范围的真实资产检索，候选必须展示缩略图、来源、作者、授权、时长、画幅和逐镜头匹配理由；无真实候选就明确为空，不能凑数。当前只有 Pexels 一个外部适配器且未配置，不能声称在线素材链可用。
+- **P0-2 / 准备态没有播放器。** Desktop 只有 `final_video_asset_id` 存在时才挂载 `<video>`；分镜阶段显示的三角形只是装饰。目标应是同一时间线播放器在“分镜占位 → 已选图片/视频 → 临时旁白/字幕 → 渲染成片”四种状态都可播放、暂停、拖动和逐镜头跳转，并明确标注“预演”或“成片”；正式发布门禁不因此放宽。
+- **P0-3 / 项目与版本模型不成立。** 每选一个镜头素材就新建一条独立 production，但表里没有 `project_id/revision_of/current_revision_id`，旧版本继续出现在项目下拉框；UI 的“V1/V2”实际只是当前 IR 中的素材列表，不是 production 版本。需要稳定的视频项目 owner、不可变修订链、唯一当前版本、按镜头差异和可删除/归档的项目生命周期。
+- **P0-4 / 阶段与按钮存在假动作。** `设定 → 分镜 → 动态` 主要是 Electron 本地 tab 切换，只有剪辑确认才调用确定性 render；“全自动、导出、新增镜头、生成新版本、选择既有素材、自然语言修改”多数仍只是启动自由 Agent intent，没有对应的 durable owner/回执。未接通前应移除或禁用，接通后每一步都写同一项目状态和不可变修订。
+- **P0-5 / 两个高级渲染器只是通用样板。** Remotion 场景硬编码 `MARKETING OS` 和虚构 `37/68/92%` 数据卡，HyperFrames 硬编码 `DESIGNED MOTION / LIVE`；二者只套统一背景、缩放、标题和转场，不消费平台设计系统、账号视觉身份或证据数据。虚构统计必须立即禁止；下一版应由证据绑定的 graphic spec、平台 safe-area/style tokens 和逐镜头 motion recipe 驱动，渲染器只负责执行。
+- **P0-6 / 声音不是完整制作链。** 当前把全部 VO 拼成一条 TTS，缺少逐镜头时间对齐、声音选择与试听、费用预估、语速/停顿、BGM/SFX、ducking 与字幕校准；准备任务还曾产生多条同主题 `prepared` job。需要一个项目级 sound plan 与唯一 voice job lineage，所有计费动作继续一次性确认。
+- **P0-7 / 经营主体读取未贯通。** 表已具备 `entity_id`，但素材库、检索、production、草稿箱和 Desktop 列表仍主要按 `account_id` 查询，同一品牌另一个平台账号下的真实素材不会自然进入当前视频项目。项目 owner 应是经营主体，`account_id/platform` 只表示目标渠道与执行通道。
+- **目标管线。** 已接受的平台视频变体/独立视频 brief → 平台化视频 brief（目标、时长、画幅、hook、旁白、镜头意图）→ 可审的 shot plan → 每镜头真实素材板与授权确认 → 可播放预演（素材、旁白、字幕同步）→ 证据绑定的 Remotion/HyperFrames/FFmpeg 镜头计划 → 一次性渲染 → 自动 QA + 真人审片 → 草稿箱待发布 → 发布/指标/复盘。图文稿只提供内容内核与平台事实，不再要求用户复制“图文脚本”到视频入口。
+- **实施顺序。** `MV-01` 项目/修订/删除 owner 与 entity scope；`MV-02` 可信素材检索及候选板；`MV-03` 准备态时间线播放器；`MV-04` 声音/字幕时间线；`MV-05` 证据绑定的 renderer spec 与去演示模板；`MV-06` durable 阶段动作和 UI 去假按钮；`MV-07` 重新跑一条真实素材、真实旁白、混合渲染、QA、人审到草稿箱的纵切。完成 `MV-01～06` 前不再制造测试 production。
 
 ## 暂停项
 

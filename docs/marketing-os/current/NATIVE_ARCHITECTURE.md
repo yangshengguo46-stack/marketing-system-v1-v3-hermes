@@ -28,6 +28,8 @@ Memory/Skill     Marketing domain  MCP/Channels
 
 ## 原生 owner
 
+多智能体、持久任务、审批和恢复的目标合同见 `HARNESS_ARCHITECTURE.md`。该 Harness 是 Hermes 原生执行 owner 的重构，不是新 sidecar、外挂框架或第二业务数据库。
+
 | 职责 | 唯一 owner | 营销改造方式 |
 |---|---|---|
 | 对话与自主规划 | Hermes Agent loop | 注入长期经营身份、证据边界和闭环目标 |

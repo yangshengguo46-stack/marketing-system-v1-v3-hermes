@@ -43,6 +43,7 @@ interface AccountCenterViewProps extends OperationSurfaceProps {
 interface VideoCreationViewProps extends GatewaySurfaceProps {
   initialProductionId?: string
   onBack?: () => void
+  onOpenDrafts?: () => void
   onStartOperation: StartMarketingOperation
 }
 
@@ -83,6 +84,7 @@ export function ContentFactoryView({
 export function VideoCreationView({
   initialProductionId,
   onBack,
+  onOpenDrafts,
   onStartOperation,
   requestGateway
 }: VideoCreationViewProps) {
@@ -95,6 +97,7 @@ export function VideoCreationView({
         initialProductionId={initialProductionId}
         key={accountId || 'prospect_default'}
         onBack={onBack}
+        onOpenDrafts={onOpenDrafts}
         onStartOperation={onStartOperation}
         requestGateway={requestGateway}
       />

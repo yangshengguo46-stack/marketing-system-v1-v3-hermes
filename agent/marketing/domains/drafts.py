@@ -12,7 +12,7 @@ from agent.marketing.domains.storage import MarketingDomainRepository
 from agent.marketing.domains.video_production import VideoProductionRepository
 
 
-_ACTIVE_CONTENT_STATUSES = {"draft", "review_ready"}
+_ACTIVE_CONTENT_STATUSES = {"draft", "review_ready", "approved"}
 _ACTIVE_VIDEO_STATUSES = {"prepared", "approved", "running", "completed", "failed"}
 
 
@@ -47,13 +47,21 @@ class DraftBoxRepository(MarketingDomainRepository):
             }
             content_rows = db.execute(
                 """SELECT * FROM content_assets
-                WHERE user_id=? AND account_id=? AND status IN (?,?,?)
+                WHERE user_id=? AND account_id=? AND status IN (?,?,?,?)
                 ORDER BY updated_at DESC LIMIT 500""",
-                (user_id, account_id, "draft", "review_ready", "archived"),
+                (
+                    user_id,
+                    account_id,
+                    "draft",
+                    "review_ready",
+                    "approved",
+                    "archived",
+                ),
             ).fetchall()
             video_rows = db.execute(
                 """SELECT p.*,s.title AS source_title,
-                    o.title AS output_title,o.human_review_status AS output_review_status
+                    o.title AS output_title,o.status AS output_status,
+                    o.human_review_status AS output_review_status
                 FROM marketing_video_productions p
                 LEFT JOIN content_assets s ON s.id=p.source_asset_id
                 LEFT JOIN content_assets o ON o.id=p.output_asset_id
@@ -61,6 +69,25 @@ class DraftBoxRepository(MarketingDomainRepository):
                 ORDER BY p.updated_at DESC LIMIT 500""",
                 (user_id, account_id),
             ).fetchall()
+            publish_action_rows = db.execute(
+                """SELECT id,asset_id,platform,status,failure_code,updated_at
+                FROM marketing_publish_actions
+                WHERE user_id=? AND account_id=?
+                ORDER BY updated_at DESC""",
+                (user_id, account_id),
+            ).fetchall()
+
+        publish_actions_by_asset: dict[str, list[dict[str, Any]]] = {}
+        for row in publish_action_rows:
+            publish_actions_by_asset.setdefault(str(row["asset_id"]), []).append(
+                {
+                    "id": row["id"],
+                    "platform": row["platform"],
+                    "status": row["status"],
+                    "failure_code": row["failure_code"] or "",
+                    "updated_at": row["updated_at"],
+                }
+            )
 
         items: list[dict[str, Any]] = []
         for row in content_rows:
@@ -71,9 +98,12 @@ class DraftBoxRepository(MarketingDomainRepository):
                     continue
             elif row["status"] not in _ACTIVE_CONTENT_STATUSES:
                 continue
-            if not archived and row["human_review_status"] == "accepted":
-                continue
-            items.append(_content_item(row))
+            items.append(
+                _content_item(
+                    row,
+                    publish_actions=publish_actions_by_asset.get(str(row["id"]), []),
+                )
+            )
 
         for row in video_rows:
             if archived:
@@ -82,12 +112,31 @@ class DraftBoxRepository(MarketingDomainRepository):
             else:
                 if row["status"] not in _ACTIVE_VIDEO_STATUSES:
                     continue
-                if (
-                    row["status"] == "completed"
-                    and row["output_review_status"] == "accepted"
-                ):
+                if row["output_status"] == "published":
                     continue
-            items.append(_video_item(row))
+            try:
+                readiness = self.video.render_readiness(
+                    production_id=str(row["id"]),
+                    user_id=user_id,
+                    account_id=account_id,
+                )
+            except (KeyError, ValueError):
+                readiness = {
+                    "ready": False,
+                    "blockers": [{
+                        "code": "readiness_unavailable",
+                        "message": "视频生产就绪状态无法核验",
+                    }],
+                }
+            items.append(
+                _video_item(
+                    row,
+                    readiness=readiness,
+                    publish_actions=publish_actions_by_asset.get(
+                        str(row["output_asset_id"] or ""), []
+                    ),
+                )
+            )
 
         items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
         bounded = items[:safe_limit]
@@ -179,7 +228,9 @@ class DraftBoxRepository(MarketingDomainRepository):
             raise ValueError("video-owned content must be managed through its production")
 
 
-def _content_item(row: sqlite3.Row) -> dict[str, Any]:
+def _content_item(
+    row: sqlite3.Row, *, publish_actions: list[dict[str, Any]]
+) -> dict[str, Any]:
     try:
         content = json.loads(row["content_json"] or "{}")
     except (TypeError, ValueError):
@@ -187,6 +238,8 @@ def _content_item(row: sqlite3.Row) -> dict[str, Any]:
     production_kind = str(content.get("_production_kind") or "article_soft")
     content_kind = "video_source" if production_kind == "faceless_video" else "article"
     archived = row["status"] == "archived"
+    accepted = row["human_review_status"] == "accepted"
+    action_statuses = {str(action["status"]) for action in publish_actions}
     return {
         "id": row["id"],
         "object_type": "content_asset",
@@ -197,16 +250,54 @@ def _content_item(row: sqlite3.Row) -> dict[str, Any]:
         "version": row["version"],
         "human_review_status": row["human_review_status"],
         "failure_code": "",
+        "workflow_stage": _workflow_stage(
+            archived=archived,
+            accepted=accepted,
+            native_status=str(row["status"]),
+            publish_action_statuses=action_statuses,
+        ),
+        "publish_asset_id": row["id"] if accepted and not archived else "",
+        "publish_actions": publish_actions,
         "source_asset_id": row["id"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "can_resume": not archived,
-        "can_archive": not archived,
+        "can_archive": not archived and not accepted and row["status"] != "approved",
+        "can_prepare_publish": accepted
+        and not archived
+        and not action_statuses.intersection({"executing", "unknown", "published"}),
     }
 
 
-def _video_item(row: sqlite3.Row) -> dict[str, Any]:
+def _video_item(
+    row: sqlite3.Row,
+    *,
+    readiness: dict[str, Any],
+    publish_actions: list[dict[str, Any]],
+) -> dict[str, Any]:
     archived = row["status"] == "archived"
+    accepted = row["output_review_status"] == "accepted"
+    action_statuses = {str(action["status"]) for action in publish_actions}
+    publish_failure = next(
+        (
+            str(action.get("failure_code") or "")
+            for action in publish_actions
+            if action.get("failure_code")
+        ),
+        "",
+    )
+    readiness_blocker = next(iter(readiness.get("blockers") or []), {})
+    publish_ready = readiness.get("ready") is True
+    workflow_stage = (
+        "production_blocked"
+        if accepted and not publish_ready
+        else _workflow_stage(
+            archived=archived,
+            accepted=accepted,
+            native_status=str(row["status"]),
+            publish_action_statuses=action_statuses,
+        )
+    )
     return {
         "id": row["id"],
         "object_type": "video_production",
@@ -216,10 +307,47 @@ def _video_item(row: sqlite3.Row) -> dict[str, Any]:
         "previous_status": row["archived_from_status"] if archived else "",
         "version": row["source_asset_version"],
         "human_review_status": row["output_review_status"] or "pending",
-        "failure_code": row["failure_code"] or "",
+        "failure_code": (
+            row["failure_code"]
+            or publish_failure
+            or str(readiness_blocker.get("code") or "")
+        ),
+        "workflow_stage": workflow_stage,
+        "readiness": readiness,
+        "publish_asset_id": (
+            row["output_asset_id"] if accepted and publish_ready and not archived else ""
+        ),
+        "publish_actions": publish_actions,
         "source_asset_id": row["source_asset_id"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "can_resume": not archived,
-        "can_archive": not archived and row["status"] != "running",
+        "can_archive": not archived and row["status"] != "running" and not accepted,
+        "can_prepare_publish": accepted
+        and publish_ready
+        and not archived
+        and row["output_status"] != "published"
+        and not action_statuses.intersection({"executing", "unknown", "published"}),
     }
+
+
+def _workflow_stage(
+    *,
+    archived: bool,
+    accepted: bool,
+    native_status: str,
+    publish_action_statuses: set[str],
+) -> str:
+    if archived:
+        return "archived"
+    if publish_action_statuses.intersection({"executing", "unknown"}):
+        return "publishing"
+    if publish_action_statuses.intersection({"failed", "cancelled"}):
+        return "publish_blocked"
+    if accepted:
+        return "publish_pending"
+    if native_status == "review_ready" or native_status == "completed":
+        return "review"
+    if native_status in {"prepared", "approved", "running", "failed"}:
+        return "production"
+    return "drafting"

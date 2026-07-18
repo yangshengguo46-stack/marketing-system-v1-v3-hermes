@@ -381,6 +381,9 @@ def _hermetic_environment(tmp_path, monkeypatch):
     # should never perform that implicit network/bootstrap path; Tirith-specific
     # tests opt back in by patching the security config directly.
     monkeypatch.setenv("TIRITH_ENABLED", "false")
+    # Default product material discovery may call the public Wikimedia
+    # Commons API. Unit tests opt out and test the provider with fixtures.
+    monkeypatch.setenv("MARKETING_WIKIMEDIA_MATERIALS", "0")
 
     # 5. Reset plugin singleton so tests don't leak plugins from
     #    ~/.hermes/plugins/ (which, per step 3, is now empty — but the

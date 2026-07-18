@@ -315,10 +315,13 @@ def test_one_topic_persists_distinct_variants_for_an_extensible_platform_set(
         "research_only",
     }
     assert created["platform"] == "multi_platform"
+    assert created["status"] == "review_ready"
     assert set(created["content"]["platform_variants"]) == set(platforms)
     assert created["content"]["platform_blueprints"]["mastodon"][
         "guidance_status"
     ] == "generic_unverified_requires_platform_research"
+    assert created["content"]["review_status"] == "ready_for_human_review"
+    assert created["content"]["validation"]["ready"] is True
 
 
 def test_native_content_tools_plan_save_and_resume_in_bound_account(
@@ -577,6 +580,7 @@ def test_content_write_schema_cannot_override_account_scope():
     assert "marketing_read_knowledge" in by_name
     assert "marketing_read_content_assets" in by_name
     assert "marketing_read_video_productions" in by_name
+    assert "marketing_prepare_video_from_script" not in by_name
     assert render_properties["renderer"]["enum"] == ["ffmpeg_timeline_v1"]
     assert effect_properties["confirmed_by_user"]["type"] == "boolean"
 

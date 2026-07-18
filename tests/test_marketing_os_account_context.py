@@ -185,6 +185,7 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
         "marketing_read_publish_state",
     }
     assert expected_marketing_tools <= names
+    assert "marketing_prepare_video_from_script" not in names
     assert {"vision_analyze", "video_analyze"} <= names
     assert {"tool_search", "tool_describe", "tool_call"} <= names
     assert "marketing_read_account_context" in resolve_toolset("hermes-cli")

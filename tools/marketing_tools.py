@@ -714,9 +714,10 @@ CREATE_CONTENT_DRAFT_SCHEMA = {
     "name": "marketing_draft_content_create",
     "description": (
         "Save a substantive, reversible video/image/caption or cross-platform campaign draft for the "
-        "operating entity bound to this conversation. Article drafts must use "
-        "marketing_draft_article_create so parent/variant and "
-        "citation checks cannot be bypassed. At least one verified EvidencePack ID is required. The "
+        "operating entity bound to this conversation. Standalone article_soft drafts must use "
+        "marketing_draft_article_create so parent/variant and citation checks cannot be bypassed; "
+        "a cross_platform_campaign that includes article variants must use this tool with "
+        "platform=multi_platform. At least one verified EvidencePack ID is required. The "
         "draft must include anonymous social reaction scenarios for later comment-cluster retro. The "
         "account id is taken from the Hermes session and cannot be supplied or overridden by the model."
     ),
@@ -744,10 +745,48 @@ CREATE_CONTENT_DRAFT_SCHEMA = {
                     "opening_cue_ms; trend_sound additionally requires a verified sound_id returned "
                     "by marketing_read_sound_trends. cross_platform_campaign drafts use "
                     "platform=multi_platform and must contain one substantive platform_variants "
-                    "entry for every planned platform. Every entry needs format plus an "
+                    "entry for every planned platform. Substantive fields recognized by the owner "
+                    "are body_markdown, caption, carousel_cards, outline, script, short_text, "
+                    "thread, title, or voiceover. Every entry needs format plus an "
                     "adaptation_basis with audience_intent, opening, structure and cta; unknown "
                     "platforms must retain the plan's explicit research gap instead of inventing rules."
                 ),
+                "properties": {
+                    "platform_variants": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                                "format": {"type": "string"},
+                                "body_markdown": {"type": "string"},
+                                "caption": {"type": "string"},
+                                "carousel_cards": {"type": "array"},
+                                "outline": {"type": "string"},
+                                "script": {"type": "string"},
+                                "short_text": {"type": "string"},
+                                "thread": {"type": "string"},
+                                "title": {"type": "string"},
+                                "voiceover": {"type": "string"},
+                                "adaptation_basis": {
+                                    "type": "object",
+                                    "properties": {
+                                        "audience_intent": {"type": "string"},
+                                        "opening": {"type": "string"},
+                                        "structure": {"type": "string"},
+                                        "cta": {"type": "string"},
+                                    },
+                                    "required": [
+                                        "audience_intent",
+                                        "opening",
+                                        "structure",
+                                        "cta",
+                                    ],
+                                },
+                            },
+                            "required": ["format", "adaptation_basis"],
+                        },
+                    },
+                },
             },
             "evidence_refs": {"type": "array", "items": {"type": "string"}},
             "memory_refs": {"type": "array", "items": {"type": "string"}},

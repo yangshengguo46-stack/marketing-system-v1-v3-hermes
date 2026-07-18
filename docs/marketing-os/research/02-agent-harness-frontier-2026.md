@@ -10,7 +10,7 @@ Anthropic 2026 年的工程拆分很适合作为本项目边界：
 - `Harness`：调用模型并把工具请求路由到基础设施的循环。
 - `Sandbox / capability boundary`：Agent 真正可以动手的环境。
 
-对本项目而言，Electron 不是壳，而是 capability boundary：原始 Cookie、Keychain、登录窗口和发布权限留在 Electron；Agent 只看到业务能力、结构化结果和审批状态。
+对本项目而言，Electron 只负责显示、输入和承接审批交互，不是 capability owner。原始 Cookie、浏览器 profile 和登录执行归 AccountRegistry / Browser MCP，发布权限与 effect 归 Python Provider / Repository；Agent 只看到被 Tool Gateway 授权的业务能力、结构化结果和审批状态。
 
 ## 二、目标 Harness 的九个组成部分
 
@@ -110,4 +110,3 @@ OpenAI Agents SDK 和 LangGraph 都把审批建模为可序列化 interruption�
 - [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices) — scope、授权、token 与本地服务边界，A。
 - [NIST AI Agent Identity and Authorization concept paper](https://csrc.nist.gov/pubs/other/2026/02/05/accelerating-the-adoption-of-software-and-ai-agent/ipd) — agent identity、least privilege、审计和不可抵赖，A/B。
 - [Anthropic: Trustworthy agents in practice](https://www.anthropic.com/research/trustworthy-agents) — 人类控制、透明、安全和隐私，B。
-

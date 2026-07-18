@@ -156,8 +156,11 @@ describe('Marketing OS workbench flow', () => {
     selectMarketingAccount('acct-1')
     $gatewayState.set('open')
     const onStartOperation = vi.fn(() => 'topic-task')
+    const calls = vi.fn()
 
-    const requestGateway = async <T,>(method: string): Promise<T> => {
+    const requestGateway = async <T,>(method: string, params?: Record<string, unknown>): Promise<T> => {
+      calls(method, params)
+
       if (method === 'marketing.accounts.list') {
         return {
           accounts: [{ auth_state: 'authenticated', id: 'acct-1', label: '杨炎昭', platform: 'douyin' }],
@@ -252,6 +255,16 @@ describe('Marketing OS workbench flow', () => {
         } as T
       }
 
+      if (method === 'marketing.topic_production.start') {
+        return {
+          id: 'workflow-topic-1',
+          kind: 'topic.production',
+          state: 'running',
+          title: '当前的 AI 是泡沫吗？',
+          updated_at: 1
+        } as T
+      }
+
       return {} as T
     }
 
@@ -279,11 +292,13 @@ describe('Marketing OS workbench flow', () => {
     expect(screen.getByText('从泡沫争议的定义切入')).toBeTruthy()
 
     fireEvent.click(screen.getAllByRole('button', { name: /交给内容工厂/ })[0])
-    expect(onStartOperation).toHaveBeenCalledWith({
-      accountId: 'acct-1',
-      kind: 'content.topic.start',
-      targetId: 'topic-candidate-1',
-      title: '当前的 AI 是泡沫吗？'
-    })
+    await waitFor(() =>
+      expect(calls).toHaveBeenCalledWith('marketing.topic_production.start', {
+        account_id: 'acct-1',
+        candidate_id: 'topic-candidate-1',
+        user_id: 'default'
+      })
+    )
+    expect(onStartOperation).not.toHaveBeenCalled()
   })
 })

@@ -7,6 +7,7 @@ import { type DraftBoxItem, DraftBoxView } from './draft-box-view'
 
 const activeArticle: DraftBoxItem = {
   can_archive: true,
+  can_prepare_publish: false,
   can_resume: true,
   content_kind: 'article',
   created_at: '2026-07-10T08:00:00+00:00',
@@ -15,11 +16,26 @@ const activeArticle: DraftBoxItem = {
   id: 'asset-ai-education',
   object_type: 'content_asset',
   previous_status: '',
+  publish_actions: [],
+  publish_asset_id: '',
   source_asset_id: 'asset-ai-education',
   status: 'review_ready',
   title: 'AI 教育',
   updated_at: '2026-07-10T08:00:00+00:00',
-  version: 4
+  version: 4,
+  workflow_stage: 'review'
+}
+
+const publishReadyArticle: DraftBoxItem = {
+  ...activeArticle,
+  can_archive: false,
+  can_prepare_publish: true,
+  human_review_status: 'accepted',
+  id: 'asset-ready',
+  publish_asset_id: 'asset-ready',
+  source_asset_id: 'asset-ready',
+  title: '待发布文章',
+  workflow_stage: 'publish_pending'
 }
 
 afterEach(() => {
@@ -112,5 +128,45 @@ describe('DraftBoxView', () => {
         object_type: 'content_asset'
       })
     )
+  })
+
+  it('keeps accepted work in the draft box and enters publish preparation there', async () => {
+    $selectedMarketingAccountId.set('acct-1')
+    const calls = vi.fn()
+
+    const requestGateway = async <T,>(method: string, params?: Record<string, unknown>): Promise<T> => {
+      calls(method, params)
+
+      if (method === 'marketing.drafts.list') {
+        return { items: [publishReadyArticle] } as T
+      }
+
+      if (method === 'marketing.content.asset.prepare_publish') {
+        return { actions: [{ id: 'publish-1' }] } as T
+      }
+
+      return {} as T
+    }
+
+    render(
+      <DraftBoxView
+        onOpenArticle={vi.fn()}
+        onOpenVideo={vi.fn()}
+        onStartOperation={vi.fn()}
+        requestGateway={requestGateway}
+      />
+    )
+
+    expect(await screen.findByText(/第 4 版 · 待发布/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '发布准备' }))
+
+    await waitFor(() =>
+      expect(calls).toHaveBeenCalledWith('marketing.content.asset.prepare_publish', {
+        account_id: 'acct-1',
+        asset_id: 'asset-ready',
+        confirmed: true
+      })
+    )
+    expect(await screen.findByText(/已建立 1 个发布审批点/)).toBeTruthy()
   })
 })

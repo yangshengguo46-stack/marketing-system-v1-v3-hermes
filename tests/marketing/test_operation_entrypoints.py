@@ -193,7 +193,9 @@ def test_video_setup_persists_ui_selections_as_structured_native_context():
         "characters": "character-linxi",
         "sound": "voice-warm",
     }
-    assert "创建真实 source content asset" in result["prompt"]
+    assert "不读取或等待图文稿" in result["prompt"]
+    assert "用户库、已配置的许可素材搜索/下载能力、media-use" in result["prompt"]
+    assert "marketing_prepare_video_from_script" not in result["prompt"]
 
 
 def test_revision_rejects_an_unbound_free_text_action():
@@ -308,6 +310,7 @@ def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(
 
     assert "prompt" not in started["result"]
     assert started["result"]["state"] == "working"
+    assert started["result"]["workflow_id"].startswith("workflow_")
     assert captured["create"]["source"] == "desktop-product"
     assert captured["create"]["marketing_account_id"] == "acct_plan_owner"
     assert captured["submit"] == {
@@ -340,6 +343,13 @@ def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(
             "title": "已预演选题计划",
         },
     ]
+    from agent.harness import HarnessRepository
+
+    workflow = HarnessRepository(tmp_path / "state.db").get_workflow(
+        started["result"]["workflow_id"]
+    )
+    assert workflow["state"] == "completed"
+    assert workflow["result"]["results"] == complete["result"]["results"]
 
     server._sessions.pop("product-operation-live")
     recovered = server._methods["marketing.operation.status"](
@@ -349,7 +359,7 @@ def test_gateway_starts_and_tracks_a_product_operation_without_exposing_prompt(
     assert recovered["result"] == complete["result"]
 
 
-def test_gateway_recovers_an_inflight_operation_as_a_retryable_error_after_restart(
+def test_gateway_reclaims_an_inflight_operation_for_durable_retry_after_restart(
     tmp_path, monkeypatch
 ):
     from agent.marketing.domains import MarketingOperationRepository
@@ -382,10 +392,18 @@ def test_gateway_recovers_an_inflight_operation_as_a_retryable_error_after_resta
         {"operation_id": operation_id},
     )
 
-    assert response["result"]["state"] == "error"
-    assert "Gateway 已重启" in response["result"]["error"]
-    assert "安全重试" in response["result"]["error"]
-    assert MarketingOperationRepository().get(operation_id)["state"] == "error"
+    assert response["result"]["state"] == "waiting"
+    assert response["result"]["error"] == ""
+    persisted = MarketingOperationRepository().get(operation_id)
+    assert persisted["state"] == "waiting"
+    from agent.harness import HarnessRepository
+
+    workflow = HarnessRepository(tmp_path / "state.db").get_workflow(
+        persisted["workflow_id"], include_events=True
+    )
+    assert workflow["state"] == "retrying"
+    assert workflow["steps"][0]["state"] == "ready"
+    assert any(event["kind"] == "step.reclaimed" for event in workflow["events"])
 
 
 def test_gateway_does_not_call_an_object_producing_operation_complete_without_an_object(
@@ -427,6 +445,38 @@ def test_gateway_does_not_call_an_object_producing_operation_complete_without_an
 
     assert response["result"]["state"] == "error"
     assert "没有形成产品界面可见的经营对象" in response["result"]["error"]
+
+
+def test_daily_topic_operation_projects_the_created_asset_not_the_candidate(monkeypatch):
+    from tui_gateway import server
+
+    monkeypatch.setattr(
+        server,
+        "_marketing_operation_snapshot",
+        lambda kind, *, user_id, account_id: {
+            "content_assets": ["asset-created-from-topic"],
+            "content_plans": [],
+            "video_productions": [],
+        },
+    )
+    run = {
+        "account_id": "acct-page",
+        "execution_account_id": "acct-plan-owner",
+        "baseline": {"content_assets": []},
+        "kind": "content.topic.start",
+        "operation": {"target_id": "topic-candidate-1"},
+        "user_id": "default",
+    }
+
+    results = server._marketing_operation_results(run)
+
+    assert results == [
+        {
+            "object_id": "asset-created-from-topic",
+            "object_type": "content_asset",
+            "title": "内容资产",
+        }
+    ]
 
 
 def test_gateway_projects_a_failed_hidden_agent_turn_as_an_operation_error(monkeypatch):

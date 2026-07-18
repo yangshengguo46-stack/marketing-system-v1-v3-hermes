@@ -9,9 +9,13 @@ import { PRODUCT_NAME } from '@/product'
 import {
   $marketingOperationTasks,
   $selectedMarketingAccountId,
+  createMarketingOperationTask,
   type MarketingAccountSummary,
+  type MarketingWorkflowProjection,
   selectMarketingAccount,
-  setMarketingAccounts
+  setMarketingAccounts,
+  updateMarketingOperationTask,
+  workflowTaskState
 } from '@/store/marketing'
 import { $gatewayState } from '@/store/session'
 
@@ -127,7 +131,12 @@ interface WorkbenchViewProps {
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
 
-export function WorkbenchView({ onOpenAccounts, onOpenContent, onStartOperation, requestGateway }: WorkbenchViewProps) {
+export function WorkbenchView({
+  onOpenAccounts,
+  onOpenContent,
+  onStartOperation,
+  requestGateway
+}: WorkbenchViewProps) {
   const [accounts, setAccounts] = useState<MarketingAccountsSummary | null>(null)
   const [context, setContext] = useState<AccountContext | null>(null)
   const [assets, setAssets] = useState<ContentAssetSummary[]>([])
@@ -329,6 +338,37 @@ export function WorkbenchView({ onOpenAccounts, onOpenContent, onStartOperation,
     })
   }
 
+  const startTopicProduction = (topic: TopicRecommendation) => {
+    const taskId = createMarketingOperationTask({
+      accountId: scopeAccountId,
+      kind: 'topic.production',
+      label: '正在固化 TopicBrief，并行启动图文 Director 与视频 Director。',
+      title: topic.topic
+    })
+
+    void requestGateway<MarketingWorkflowProjection>('marketing.topic_production.start', {
+      account_id: scopeAccountId,
+      candidate_id: topic.id,
+      user_id: 'default'
+    })
+      .then(workflow => {
+        updateMarketingOperationTask(taskId, {
+          label: '图文与视频正在按平台独立制作；可随时恢复、停止或重试。',
+          results: workflow.result?.results || [],
+          state: workflowTaskState(workflow.state),
+          workflowId: workflow.id
+        })
+      })
+      .catch(reason => {
+        updateMarketingOperationTask(taskId, {
+          error: userFacingError(reason, '选题制作管线启动失败，请重试。'),
+          state: 'error'
+        })
+      })
+
+    return taskId
+  }
+
   return (
     <main className="marketing-workbench h-full overflow-y-auto bg-(--ui-background) text-foreground">
       <div className="mx-auto w-full max-w-[1380px] px-8 pb-16 pt-[calc(var(--titlebar-height)+2rem)] lg:px-12">
@@ -454,14 +494,7 @@ export function WorkbenchView({ onOpenAccounts, onOpenContent, onStartOperation,
                             <TopicRecommendationCard
                               expanded={expandedTopicId === topic.id}
                               key={topic.id}
-                              onStart={() =>
-                                onStartOperation({
-                                  accountId: scopeAccountId,
-                                  kind: 'content.topic.start',
-                                  targetId: topic.id,
-                                  title: topic.topic
-                                })
-                              }
+                              onStart={() => startTopicProduction(topic)}
                               onToggle={() => setExpandedTopicId(current => (current === topic.id ? '' : topic.id))}
                               topic={topic}
                             />

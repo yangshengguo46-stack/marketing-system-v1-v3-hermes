@@ -124,3 +124,13 @@ def test_content_gateway_requires_explicit_review_confirmation(tmp_path, monkeyp
         }
     )
     assert response["error"]["code"] == 4095
+
+    publish_response = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": "publish-prepare",
+            "method": "marketing.content.asset.prepare_publish",
+            "params": {"account_id": "acct-1", "asset_id": "asset-1"},
+        }
+    )
+    assert publish_response["error"]["code"] == 4095

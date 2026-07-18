@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+from agent.marketing.data_paths import MarketingDataPaths
+from agent.marketing.workflows import topic_production
+
+
+def _paths(tmp_path):
+    return MarketingDataPaths(
+        user_data=tmp_path,
+        config_dir=tmp_path / "config",
+        agent_db=tmp_path / "state.db",
+    )
+
+
+def _candidate():
+    return {
+        "id": "topic_candidate_ai_bubble",
+        "user_id": "default",
+        "entity_id": "entity-1",
+        "account_id": "acct-main",
+        "topic": "当前的 AI 是泡沫吗？",
+        "angle": "区分估值、真实需求与生产率",
+        "plan_id": "plan-1",
+        "preflight_id": "preflight-1",
+        "target_platforms": ["wechat_official", "douyin", "x", "future_social"],
+        "evidence_refs": ["evidence-1"],
+        "signal_refs": ["signal-1"],
+        "recommendation_eligible": True,
+        "candidate": {
+            "recommendation_type": "general",
+            "recommended_platforms": ["wechat_official", "douyin", "x"],
+            "platform_matches": [
+                {"platform": "douyin", "match_score": 91},
+                {"platform": "wechat_official", "match_score": 86},
+            ],
+            "platform_blueprints": {},
+        },
+    }
+
+
+def test_topic_workflow_fans_article_and_video_out_as_siblings(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        topic_production.TopicRecommendationRepository,
+        "get_candidate",
+        lambda self, **kwargs: _candidate(),
+    )
+    workflow = topic_production.create_topic_production_workflow(
+        candidate_id="topic_candidate_ai_bubble",
+        user_id="default",
+        entity_id="entity-1",
+        paths=_paths(tmp_path),
+    )
+    steps = {step["key"]: step for step in workflow["steps"]}
+
+    assert steps["article.direct"]["depends_on"] == ["topic_brief.freeze"]
+    assert steps["video.direct"]["depends_on"] == ["topic_brief.freeze"]
+    assert not any(key.startswith("article.") for key in steps["video.direct"]["depends_on"])
+    assert not any(key.startswith("video.") for key in steps["article.direct"]["depends_on"])
+    assert "article.adapt.wechat_official" in steps
+    assert "video.adapt.douyin" in steps
+    assert "article.adapt.x" in steps
+    assert "video.adapt.x" in steps
+    assert steps["platform.research.future_social"]["kind"] == "platform.research"
+    assert "platform.research.future_social" in steps[
+        "video.adapt.future_social"
+    ]["depends_on"]
+    assert steps["video.previs.douyin"]["depends_on"] == [
+        "video.adapt.douyin",
+        "video.material.search",
+        "video.audio.plan",
+    ]
+    assert steps["video.render.douyin"]["depends_on"] == ["video.previs.douyin"]
+    assert steps["video.qa.douyin"]["depends_on"] == ["video.render.douyin"]
+    assert set(steps["video.draft_box"]["depends_on"]) == {
+        "video.qa.douyin",
+        "video.qa.x",
+        "video.qa.future_social",
+    }
+    assert not any(
+        dependency.startswith("article.")
+        for key, step in steps.items()
+        if key.startswith("video.")
+        for dependency in step["depends_on"]
+    )
+    assert set(steps["production.complete"]["depends_on"]) == {
+        "article.draft_box",
+        "video.draft_box",
+    }
+
+
+def test_topic_workflow_is_idempotent_per_preflighted_candidate(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        topic_production.TopicRecommendationRepository,
+        "get_candidate",
+        lambda self, **kwargs: _candidate(),
+    )
+    paths = _paths(tmp_path)
+    first = topic_production.create_topic_production_workflow(
+        candidate_id="topic_candidate_ai_bubble",
+        user_id="default",
+        entity_id="entity-1",
+        paths=paths,
+    )
+    second = topic_production.create_topic_production_workflow(
+        candidate_id="topic_candidate_ai_bubble",
+        user_id="default",
+        entity_id="entity-1",
+        paths=paths,
+    )
+    assert second["id"] == first["id"]
+    assert len(second["steps"]) == len(first["steps"])

@@ -15,6 +15,7 @@ type DraftTab = 'active' | 'archived'
 
 export interface DraftBoxItem {
   can_archive: boolean
+  can_prepare_publish: boolean
   can_resume: boolean
   content_kind: 'article' | 'video' | 'video_source'
   created_at: string
@@ -23,11 +24,24 @@ export interface DraftBoxItem {
   id: string
   object_type: DraftObjectType
   previous_status: string
+  publish_actions: Array<{
+    failure_code: string
+    id: string
+    platform: string
+    status: string
+    updated_at: string
+  }>
+  publish_asset_id: string
+  readiness?: {
+    blockers?: Array<{ code?: string; message?: string }>
+    ready?: boolean
+  }
   source_asset_id: string
   status: string
   title: string
   updated_at: string
   version: number
+  workflow_stage: string
 }
 
 interface DraftBoxViewProps {
@@ -45,6 +59,7 @@ export function DraftBoxView({ onOpenArticle, onOpenVideo, onStartOperation, req
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [archiveTarget, setArchiveTarget] = useState<DraftBoxItem | null>(null)
+  const [preparingId, setPreparingId] = useState('')
   const [restoringId, setRestoringId] = useState('')
 
   const refresh = useCallback(async () => {
@@ -130,6 +145,34 @@ export function DraftBoxView({ onOpenArticle, onOpenVideo, onStartOperation, req
     }
   }
 
+  const preparePublish = async (item: DraftBoxItem) => {
+    if (!item.publish_asset_id || preparingId) {
+      return
+    }
+
+    setPreparingId(item.id)
+    setError('')
+    setNotice('')
+
+    try {
+      const result = await requestGateway<{ actions: Array<{ id: string }> }>(
+        'marketing.content.asset.prepare_publish',
+        {
+          account_id: accountId,
+          asset_id: item.publish_asset_id,
+          confirmed: true
+        }
+      )
+
+      setNotice(`“${item.title || '未命名内容'}”已建立 ${result.actions.length} 个发布审批点；尚未发布。`)
+      await refresh()
+    } catch (cause) {
+      setError(userFacingError(cause, '发布准备未通过，请检查预演与账号经营模型。'))
+    } finally {
+      setPreparingId('')
+    }
+  }
+
   return (
     <ProductPage
       action={
@@ -137,7 +180,7 @@ export function DraftBoxView({ onOpenArticle, onOpenVideo, onStartOperation, req
           <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
         </Button>
       }
-      description="做到一半的图文和视频统一留在这里；归档不会删除历史，恢复后继续原管线。"
+      description="半成品和已确认待发布的图文、视频统一留在这里；归档不会删除历史。"
       maxWidth="1180px"
       title="草稿箱"
     >
@@ -177,7 +220,9 @@ export function DraftBoxView({ onOpenArticle, onOpenVideo, onStartOperation, req
                 key={`${item.object_type}:${item.id}`}
                 onArchive={() => setArchiveTarget(item)}
                 onContinue={() => continueDraft(item)}
+                onPreparePublish={() => void preparePublish(item)}
                 onRestore={() => void restore(item)}
+                preparingPublish={preparingId === item.id}
                 restoring={restoringId === item.id}
                 tab={tab}
               />
@@ -189,7 +234,9 @@ export function DraftBoxView({ onOpenArticle, onOpenVideo, onStartOperation, req
               <Archive className="mx-auto size-5 text-(--ui-text-tertiary)" />
               <strong className="mt-3 block text-sm">{tab === 'active' ? '没有待继续的草稿' : '归档区是空的'}</strong>
               <p className="mt-2 text-xs text-(--ui-text-tertiary)">
-                {tab === 'active' ? '内容工厂里的半成品会自动汇总到这里。' : '从进行中归档的内容会保留在这里。'}
+                {tab === 'active'
+                  ? '内容工厂里的半成品和待发布作品会自动汇总到这里。'
+                  : '从进行中归档的内容会保留在这里。'}
               </p>
             </div>
           </div>
@@ -213,14 +260,18 @@ function DraftRow({
   item,
   onArchive,
   onContinue,
+  onPreparePublish,
   onRestore,
+  preparingPublish,
   restoring,
   tab
 }: {
   item: DraftBoxItem
   onArchive: () => void
   onContinue: () => void
+  onPreparePublish: () => void
   onRestore: () => void
+  preparingPublish: boolean
   restoring: boolean
   tab: DraftTab
 }) {
@@ -241,7 +292,11 @@ function DraftRow({
         <p className="mt-1 text-xs text-(--ui-text-tertiary)">
           第 {item.version || 1} 版 · {draftStatusLabel(item)} · {formatUpdatedAt(item.updated_at)}
         </p>
-        {item.failure_code ? <p className="mt-1 text-xs text-red-600">阻塞原因：{item.failure_code}</p> : null}
+        {item.failure_code ? (
+          <p className="mt-1 text-xs text-red-600">
+            阻塞原因：{item.readiness?.blockers?.[0]?.message || failureLabel(item.failure_code)}
+          </p>
+        ) : null}
       </div>
       <div className="ml-auto flex items-center gap-2">
         {tab === 'active' ? (
@@ -251,9 +306,15 @@ function DraftRow({
                 <Archive className="size-4" /> 归档
               </Button>
             ) : null}
-            <Button onClick={onContinue} size="sm">
-              继续
+            <Button onClick={onContinue} size="sm" variant={item.workflow_stage === 'publish_pending' ? 'outline' : 'default'}>
+              {item.workflow_stage === 'publish_pending' ? '查看' : '继续'}
             </Button>
+            {item.can_prepare_publish ? (
+              <Button disabled={preparingPublish} onClick={onPreparePublish} size="sm">
+                {preparingPublish ? <Loader2 className="size-4 animate-spin" /> : null}
+                {preparingPublish ? '核对发布门…' : '发布准备'}
+              </Button>
+            ) : null}
           </>
         ) : (
           <Button disabled={restoring} onClick={onRestore} size="sm" variant="outline">
@@ -285,11 +346,38 @@ function draftStatusLabel(item: DraftBoxItem): string {
     return `归档前：${statusText(item.previous_status)}`
   }
 
+  if (item.workflow_stage === 'publish_pending') {
+    return item.publish_actions.some(action => action.status === 'prepared') ? '等待发布审批' : '待发布'
+  }
+
+  if (item.workflow_stage === 'publishing') {
+    return '发布执行中'
+  }
+
+  if (item.workflow_stage === 'publish_blocked') {
+    return '发布受阻'
+  }
+
+  if (item.workflow_stage === 'production_blocked') {
+    return '成片仍缺真实素材'
+  }
+
   if (item.status === 'completed' && item.human_review_status !== 'accepted') {
     return '等待验收'
   }
 
   return statusText(item.status)
+}
+
+function failureLabel(code: string): string {
+  return (
+    {
+      readiness_unavailable: '视频生产状态无法核验',
+      renderer_unavailable: '高级渲染模块尚未就绪',
+      storyboard_placeholders: '仍有本地分镜卡未替换',
+      voiceover_missing: '旁白尚未生成或绑定'
+    }[code] || code
+  )
 }
 
 function statusText(status: string): string {

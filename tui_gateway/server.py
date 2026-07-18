@@ -6,8 +6,11 @@ import copy
 import inspect
 import json
 import logging
+import mimetypes
 import os
 import queue
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -142,6 +145,10 @@ _cfg_cache: dict | None = None
 _cfg_mtime: float | None = None
 _cfg_path = None
 _session_resume_lock = threading.Lock()
+_marketing_workflow_lock = threading.Lock()
+_marketing_workflow_dispatcher = None
+_marketing_workflow_thread: threading.Thread | None = None
+_marketing_workflow_stop = threading.Event()
 try:
     _slash_timeout = float(os.environ.get("HERMES_TUI_SLASH_TIMEOUT_S") or "45")
 except (ValueError, TypeError):
@@ -4286,6 +4293,8 @@ def _make_agent(
     reasoning_config_override: dict | None = None,
     service_tier_override: str | None = None,
     marketing_scope: dict | None = None,
+    enabled_toolsets_override: list[str] | None = None,
+    ephemeral_prompt_override: str = "",
 ):
     from run_agent import AIAgent
 
@@ -4341,6 +4350,10 @@ def _make_agent(
             session_id or key,
         )
     base_ephemeral_prompt = system_prompt
+    if ephemeral_prompt_override:
+        system_prompt = "\n\n".join(
+            part for part in (system_prompt, str(ephemeral_prompt_override).strip()) if part
+        ).strip()
     account_scope_prompt = build_account_scope_prompt(stable_scope)
     if account_scope_prompt:
         system_prompt = "\n\n".join(
@@ -4426,7 +4439,11 @@ def _make_agent(
             if service_tier_override is not None
             else _load_service_tier()
         ),
-        enabled_toolsets=_load_enabled_toolsets(),
+        enabled_toolsets=(
+            list(enabled_toolsets_override)
+            if enabled_toolsets_override is not None
+            else _load_enabled_toolsets()
+        ),
         # OpenRouter provider-routing prefs (config.yaml `provider_routing`).
         # Mirrors the messaging gateway + CLI so the desktop/TUI honors the same
         # routing instead of letting OpenRouter pick providers at random.
@@ -8729,6 +8746,9 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                         state=state,
                         results=results,
                         error=projected_error,
+                        workflow_lease_token=str(
+                            run.get("workflow_lease_token") or ""
+                        ),
                     )
                 except Exception:
                     logger.exception("failed to persist Marketing OS operation turn")
@@ -13235,6 +13255,217 @@ def _(rid, params: dict) -> dict:
 # ── Methods: insights ────────────────────────────────────────────────
 
 
+def _marketing_worker_json(text: str) -> dict[str, Any]:
+    """Decode one Worker response without accepting prose as domain truth."""
+
+    raw = str(text or "").strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        start = raw.find("{")
+        if start < 0:
+            raise ValueError("creative Worker returned no JSON object") from None
+        try:
+            value, _end = decoder.raw_decode(raw[start:])
+        except json.JSONDecodeError as exc:
+            raise ValueError("creative Worker returned invalid JSON") from exc
+    if not isinstance(value, dict) or not value:
+        raise ValueError("creative Worker JSON must be a non-empty object")
+    return value
+
+
+def _run_marketing_creative_worker(
+    *,
+    role: str,
+    instruction: str,
+    context: dict[str, Any],
+    task_id: str,
+    toolsets: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Run an isolated Hermes Agent as one bounded Harness Worker role."""
+
+    sid = f"marketing-worker-{task_id}"
+    role_prompt = (
+        "You are a bounded Marketing OS Harness Worker. "
+        "You do not own workflow state and must not claim an action succeeded. "
+        "Follow the requested JSON contract exactly; return one JSON object and no markdown. "
+        "Do not call write tools."
+    )
+    agent = _make_agent(
+        sid,
+        task_id,
+        session_id=task_id,
+        session_db=_get_db(),
+        enabled_toolsets_override=list(toolsets),
+        ephemeral_prompt_override=f"Worker role: {role}\n{role_prompt}",
+    )
+    prompt = (
+        f"{instruction}\n\nCanonical input JSON:\n"
+        + json.dumps(context, ensure_ascii=False, sort_keys=True)
+    )
+    try:
+        result = agent.run_conversation(user_message=prompt, task_id=task_id)
+        if isinstance(result, dict):
+            if result.get("failed") or result.get("status") == "error":
+                raise RuntimeError(str(result.get("error") or "creative Worker failed"))
+            text = str(result.get("final_response") or result.get("text") or "")
+        else:
+            text = str(result or "")
+        return _marketing_worker_json(text)
+    finally:
+        try:
+            agent.close()
+        except Exception:
+            pass
+
+
+def _resolve_marketing_media_skill(
+    *, intent: str, media_type: str, task_id: str
+) -> dict[str, Any]:
+    """Resolve media through the installed media-use skill and freeze its file."""
+
+    if media_type not in {"image", "icon", "logo", "bgm", "sfx", "voice"}:
+        raise ValueError(f"media-use does not resolve this media type: {media_type}")
+    script_candidates = [
+        Path.home() / ".codex/skills/media-use/scripts/resolve.mjs",
+        Path.home() / ".agents/skills/media-use/scripts/resolve.mjs",
+    ]
+    script = next((path for path in script_candidates if path.is_file()), None)
+    if script is None:
+        raise RuntimeError("media-use skill is not installed")
+    node = shutil.which("node")
+    if not node:
+        raise RuntimeError("Node.js is required by the installed media-use skill")
+    project_root = (get_hermes_home() / "marketing-media-resolver").resolve()
+    project_root.mkdir(parents=True, exist_ok=True)
+    resolver_env = hermes_subprocess_env()
+    local_bin = str(Path.home() / ".local/bin")
+    resolver_env["PATH"] = os.pathsep.join(
+        value for value in (local_bin, resolver_env.get("PATH", "")) if value
+    )
+    resolver_env["DO_NOT_TRACK"] = "1"
+    result = subprocess.run(
+        [
+            node,
+            str(script),
+            "--type",
+            media_type,
+            "--intent",
+            str(intent or "").strip(),
+            "--project",
+            str(project_root),
+            # Automatic production is zero-cost by policy. This keeps
+            # media-use on project/global cache and installed local open-source
+            # providers; remote HeyGen/Codex/other cloud providers are skipped.
+            "--local-only",
+            "--json",
+        ],
+        cwd=str(project_root),
+        env=resolver_env,
+        capture_output=True,
+        text=True,
+        timeout=240,
+        check=False,
+    )
+    stdout = str(result.stdout or "").strip().splitlines()
+    payload: dict[str, Any] = {}
+    if stdout:
+        try:
+            parsed = json.loads(stdout[-1])
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = {}
+    if result.returncode != 0 or payload.get("ok") is not True:
+        message = str(payload.get("error") or result.stderr or "media-use resolve failed").strip()
+        raise RuntimeError(message[:1000])
+    if str(payload.get("_source") or "") == "generated":
+        raise RuntimeError(
+            "automatic material generation is disabled; no reusable zero-cost asset matched"
+        )
+    relative = str(payload.get("path") or "").strip()
+    if not relative:
+        raise RuntimeError("media-use resolved no local file")
+    absolute = (project_root / relative).resolve()
+    if project_root not in absolute.parents or not absolute.is_file():
+        raise RuntimeError("media-use output escaped or disappeared from its project cache")
+    mime_type = mimetypes.guess_type(absolute.name)[0] or "application/octet-stream"
+    return {
+        **payload,
+        "absolute_path": str(absolute),
+        "mime_type": mime_type,
+        "resolver_task_id": task_id,
+    }
+
+
+def _marketing_workflow_loop() -> None:
+    while not _marketing_workflow_stop.wait(0.35):
+        dispatcher = _marketing_workflow_dispatcher
+        if dispatcher is None:
+            continue
+        try:
+            dispatcher.dispatch_once()
+        except Exception:
+            logger.exception("Marketing Harness dispatcher iteration failed")
+
+
+def _ensure_marketing_workflow_dispatcher():
+    """Start the recoverable native Worker pool once per Gateway process."""
+
+    global _marketing_workflow_dispatcher, _marketing_workflow_thread
+    with _marketing_workflow_lock:
+        if _marketing_workflow_dispatcher is not None:
+            return _marketing_workflow_dispatcher
+        from agent.harness import HarnessDispatcher, HarnessRepository
+        from agent.marketing.workflows.topic_workers import (
+            build_topic_production_handlers,
+        )
+
+        repository = HarnessRepository()
+        repository.reclaim_expired()
+        _marketing_workflow_dispatcher = HarnessDispatcher(
+            repository,
+            handlers=build_topic_production_handlers(
+                creative_runner=_run_marketing_creative_worker,
+                media_resolver=_resolve_marketing_media_skill,
+            ),
+            max_concurrency=3,
+            lease_seconds=900,
+            worker_prefix="marketing-harness",
+        )
+        _marketing_workflow_stop.clear()
+        _marketing_workflow_thread = threading.Thread(
+            target=_marketing_workflow_loop,
+            daemon=True,
+            name="marketing-harness-dispatcher",
+        )
+        _marketing_workflow_thread.start()
+        return _marketing_workflow_dispatcher
+
+
+def _shutdown_marketing_workflow_dispatcher() -> None:
+    global _marketing_workflow_dispatcher
+    _marketing_workflow_stop.set()
+    dispatcher = _marketing_workflow_dispatcher
+    _marketing_workflow_dispatcher = None
+    if dispatcher is not None:
+        try:
+            dispatcher.shutdown(wait=False)
+        except Exception:
+            pass
+
+
+atexit.register(_shutdown_marketing_workflow_dispatcher)
+
+
 @method("marketing.product.status")
 def _(rid, _params: dict) -> dict:
     """Expose Marketing OS as native capabilities of the Hermes runtime."""
@@ -13366,7 +13597,9 @@ def _marketing_operation_results(run: dict) -> list[dict[str, str]]:
         asset_ids = [
             item for item in current.get("content_assets", []) if item not in before
         ]
-        bound_asset = str(operation.get("asset_id") or operation.get("target_id") or "")
+        bound_asset = str(operation.get("asset_id") or "")
+        if kind == "content.resume":
+            bound_asset = bound_asset or str(operation.get("target_id") or "")
         if bound_asset and bound_asset not in asset_ids:
             asset_ids.insert(0, bound_asset)
         results.extend(
@@ -13478,6 +13711,7 @@ def _marketing_operation_persist_state(
     state: str,
     results: list[dict[str, str]] | None = None,
     error: str = "",
+    workflow_lease_token: str = "",
 ) -> dict:
     from agent.marketing.domains import MarketingOperationRepository
 
@@ -13486,6 +13720,7 @@ def _marketing_operation_persist_state(
         state=state,
         results=results,
         error=error,
+        workflow_lease_token=workflow_lease_token,
     )
 
 
@@ -13499,6 +13734,7 @@ def _marketing_operation_response(run: dict) -> dict:
         "state": run.get("state"),
         "title": run.get("title"),
         "visible_text": run.get("visible_text"),
+        "workflow_id": run.get("workflow_id"),
     }
 
 
@@ -13616,6 +13852,11 @@ def _(rid, params: dict) -> dict:
             "title": str(prepared.get("title") or "经营任务"),
             "user_id": user_id,
             "visible_text": str(prepared.get("visible_text") or "Agent 正在执行"),
+            "harness_input": {
+                "baseline": baseline,
+                "operation": prepared.get("operation") or {},
+                "prompt": prepared["prompt"],
+            },
         }
         with _sessions_lock:
             session = _sessions.get(sid)
@@ -13626,7 +13867,21 @@ def _(rid, params: dict) -> dict:
 
         from agent.marketing.domains import MarketingOperationRepository
 
-        MarketingOperationRepository().create(run, live_session_id=sid)
+        persisted_operation = MarketingOperationRepository().create(
+            run, live_session_id=sid
+        )
+        run["workflow_id"] = str(persisted_operation.get("workflow_id") or "")
+        run["workflow_step_id"] = str(
+            persisted_operation.get("workflow_step_id") or ""
+        )
+        run["workflow_lease_token"] = str(
+            persisted_operation.get("workflow_lease_token") or ""
+        )
+        with _sessions_lock:
+            session = _sessions.get(sid)
+            if session is None:
+                raise RuntimeError("operation session disappeared after Harness claim")
+            session["marketing_operation"] = run
 
         submit_response = _methods["prompt.submit"](
             rid,
@@ -13640,6 +13895,7 @@ def _(rid, params: dict) -> dict:
                     (submit_response.get("error") or {}).get("message")
                     or "Agent 启动失败"
                 ),
+                workflow_lease_token=str(run.get("workflow_lease_token") or ""),
             )
             _close_session_by_id(sid, end_reason="marketing_operation_start_failed")
             return submit_response
@@ -13652,6 +13908,7 @@ def _(rid, params: dict) -> dict:
                 "state": "working",
                 "title": run["title"],
                 "visible_text": run["visible_text"],
+                "workflow_id": run.get("workflow_id"),
             },
         )
     except (TypeError, ValueError) as exc:
@@ -13661,6 +13918,9 @@ def _(rid, params: dict) -> dict:
                     operation_id,
                     state="error",
                     error=str(exc),
+                    workflow_lease_token=str(
+                        (locals().get("run") or {}).get("workflow_lease_token") or ""
+                    ),
                 )
         if sid:
             _close_session_by_id(
@@ -13674,6 +13934,9 @@ def _(rid, params: dict) -> dict:
                     operation_id,
                     state="error",
                     error=str(exc),
+                    workflow_lease_token=str(
+                        (locals().get("run") or {}).get("workflow_lease_token") or ""
+                    ),
                 )
         if sid:
             _close_session_by_id(sid, end_reason="marketing_operation_start_failed")
@@ -13706,14 +13969,7 @@ def _(rid, params: dict) -> dict:
         except KeyError:
             return _err(rid, 4044, "Marketing OS operation not found")
         if persisted.get("state") in {"working", "waiting"}:
-            persisted = _marketing_operation_persist_state(
-                operation_id,
-                state="error",
-                error=(
-                    "Gateway 已重启，未完成的 Agent turn 不会自动重放；"
-                    "原始业务输入已经保留，可以安全重试。"
-                ),
-            )
+            persisted = MarketingOperationRepository().recover_execution(operation_id)
         return _ok(rid, _marketing_operation_response(persisted))
 
     run = session.get("marketing_operation") or {}
@@ -13739,13 +13995,16 @@ def _(rid, params: dict) -> dict:
             run,
             turn_status="complete",
         )
-    if state in {"complete", "error"}:
+    if state in {"working", "waiting", "complete", "error"}:
         with contextlib.suppress(Exception):
             _marketing_operation_persist_state(
                 operation_id,
                 state=state,
                 results=results,
                 error=error,
+                workflow_lease_token=str(
+                    run.get("workflow_lease_token") or ""
+                ),
             )
     return _ok(
         rid,
@@ -13758,8 +14017,217 @@ def _(rid, params: dict) -> dict:
             "state": state,
             "title": run.get("title"),
             "visible_text": run.get("visible_text"),
+            "workflow_id": run.get("workflow_id"),
         },
     )
+
+
+def _marketing_workflow_for_user(workflow_id: str, user_id: str) -> dict:
+    from agent.harness import HarnessRepository
+
+    workflow = HarnessRepository().get_workflow(workflow_id)
+    if str(workflow.get("namespace") or "") != "marketing":
+        raise KeyError("Marketing workflow not found")
+    if str(workflow.get("owner_user_id") or "") != user_id:
+        raise KeyError("Marketing workflow not found")
+    return workflow
+
+
+@method("marketing.workflow.list")
+def _(rid, params: dict) -> dict:
+    """List durable Marketing workflows from the Python owner."""
+
+    from agent.harness import HarnessRepository
+
+    values = params if isinstance(params, dict) else {}
+    user_id = str(values.get("user_id") or "default").strip() or "default"
+    entity_id = str(values.get("entity_id") or "").strip()
+    states = values.get("states") or []
+    if not isinstance(states, list):
+        return _err(rid, -32602, "states must be a list")
+    try:
+        workflows = HarnessRepository().list_workflows(
+            namespace="marketing",
+            owner_user_id=user_id,
+            owner_entity_id=entity_id,
+            states=[str(state) for state in states],
+            limit=int(values.get("limit") or 50),
+        )
+    except (TypeError, ValueError) as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, {"workflows": workflows})
+
+
+@method("marketing.workflow.get")
+def _(rid, params: dict) -> dict:
+    values = params if isinstance(params, dict) else {}
+    workflow_id = str(values.get("workflow_id") or "").strip()
+    user_id = str(values.get("user_id") or "default").strip() or "default"
+    if not workflow_id:
+        return _err(rid, -32602, "workflow_id is required")
+    try:
+        workflow = _marketing_workflow_for_user(workflow_id, user_id)
+    except KeyError:
+        return _err(rid, 4045, "Marketing workflow not found")
+    return _ok(rid, workflow)
+
+
+@method("marketing.workflow.events")
+def _(rid, params: dict) -> dict:
+    from agent.harness import HarnessRepository
+
+    values = params if isinstance(params, dict) else {}
+    workflow_id = str(values.get("workflow_id") or "").strip()
+    user_id = str(values.get("user_id") or "default").strip() or "default"
+    if not workflow_id:
+        return _err(rid, -32602, "workflow_id is required")
+    try:
+        _marketing_workflow_for_user(workflow_id, user_id)
+    except KeyError:
+        return _err(rid, 4045, "Marketing workflow not found")
+    return _ok(
+        rid,
+        {
+            "events": HarnessRepository().list_events(
+                workflow_id, after_id=int(values.get("after_id") or 0)
+            )
+        },
+    )
+
+
+@method("marketing.workflow.cancel")
+def _(rid, params: dict) -> dict:
+    from agent.harness import HarnessRepository
+
+    values = params if isinstance(params, dict) else {}
+    workflow_id = str(values.get("workflow_id") or "").strip()
+    user_id = str(values.get("user_id") or "default").strip() or "default"
+    if not workflow_id:
+        return _err(rid, -32602, "workflow_id is required")
+    if values.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit workflow cancellation confirmation is required")
+    try:
+        _marketing_workflow_for_user(workflow_id, user_id)
+        workflow = HarnessRepository().cancel_workflow(
+            workflow_id=workflow_id,
+            actor=f"human:{user_id}",
+            reason=str(values.get("reason") or ""),
+        )
+    except KeyError:
+        return _err(rid, 4045, "Marketing workflow not found")
+    except ValueError as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, workflow)
+
+
+@method("marketing.workflow.retry")
+def _(rid, params: dict) -> dict:
+    from agent.harness import HarnessRepository
+
+    values = params if isinstance(params, dict) else {}
+    workflow_id = str(values.get("workflow_id") or "").strip()
+    step_id = str(values.get("step_id") or "").strip()
+    user_id = str(values.get("user_id") or "default").strip() or "default"
+    if not workflow_id or not step_id:
+        return _err(rid, -32602, "workflow_id and step_id are required")
+    if values.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit workflow retry confirmation is required")
+    try:
+        workflow = _marketing_workflow_for_user(workflow_id, user_id)
+        if step_id not in {str(step.get("id") or "") for step in workflow["steps"]}:
+            raise KeyError("step not found")
+        result = HarnessRepository().retry_step(
+            step_id=step_id,
+            actor=f"human:{user_id}",
+            allow_additional_attempt=values.get("allow_additional_attempt") is True,
+        )
+        _ensure_marketing_workflow_dispatcher().dispatch_once(workflow_id=workflow_id)
+    except KeyError:
+        return _err(rid, 4045, "Marketing workflow or Step not found")
+    except ValueError as exc:
+        return _err(rid, 4096, str(exc))
+    return _ok(rid, result)
+
+
+@method("marketing.workflow.restart")
+def _(rid, params: dict) -> dict:
+    """Explicitly restart a cancelled workflow without erasing its history."""
+
+    from agent.harness import HarnessRepository
+
+    values = params if isinstance(params, dict) else {}
+    workflow_id = str(values.get("workflow_id") or "").strip()
+    user_id = str(values.get("user_id") or "default").strip() or "default"
+    if not workflow_id:
+        return _err(rid, -32602, "workflow_id is required")
+    if values.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit workflow restart confirmation is required")
+    try:
+        _marketing_workflow_for_user(workflow_id, user_id)
+        result = HarnessRepository().restart_cancelled_workflow(
+            workflow_id=workflow_id,
+            actor=f"human:{user_id}",
+        )
+        _ensure_marketing_workflow_dispatcher().dispatch_once(workflow_id=workflow_id)
+    except KeyError:
+        return _err(rid, 4045, "Marketing workflow not found")
+    except ValueError as exc:
+        return _err(rid, 4096, str(exc))
+    return _ok(rid, result)
+
+
+@method("marketing.workflow.approvals")
+def _(rid, params: dict) -> dict:
+    from agent.harness import HarnessRepository
+
+    values = params if isinstance(params, dict) else {}
+    workflow_id = str(values.get("workflow_id") or "").strip()
+    user_id = str(values.get("user_id") or "default").strip() or "default"
+    try:
+        if workflow_id:
+            _marketing_workflow_for_user(workflow_id, user_id)
+        approvals = HarnessRepository().list_pending_approvals(
+            workflow_id=workflow_id, owner_user_id=user_id
+        )
+    except KeyError:
+        return _err(rid, 4045, "Marketing workflow not found")
+    return _ok(rid, {"approvals": approvals})
+
+
+@method("marketing.workflow.approval.respond")
+def _(rid, params: dict) -> dict:
+    from agent.harness import HarnessRepository
+
+    values = params if isinstance(params, dict) else {}
+    workflow_id = str(values.get("workflow_id") or "").strip()
+    approval_id = str(values.get("approval_id") or "").strip()
+    user_id = str(values.get("user_id") or "default").strip() or "default"
+    if not workflow_id or not approval_id:
+        return _err(rid, -32602, "workflow_id and approval_id are required")
+    if not isinstance(values.get("approved"), bool):
+        return _err(rid, -32602, "approved must be a boolean")
+    try:
+        _marketing_workflow_for_user(workflow_id, user_id)
+        pending = HarnessRepository().list_pending_approvals(
+            workflow_id=workflow_id, owner_user_id=user_id
+        )
+        if approval_id not in {str(item.get("id") or "") for item in pending}:
+            raise KeyError("approval not found")
+        approval = HarnessRepository().decide_approval(
+            approval_id=approval_id,
+            approved=bool(values["approved"]),
+            decided_by=f"human:{user_id}",
+            decision=(
+                values.get("decision")
+                if isinstance(values.get("decision"), dict)
+                else {}
+            ),
+        )
+    except KeyError:
+        return _err(rid, 4046, "Pending Marketing approval not found")
+    except ValueError as exc:
+        return _err(rid, 4096, str(exc))
+    return _ok(rid, approval)
 
 
 @method("marketing.accounts.list")
@@ -14044,6 +14512,34 @@ def _(rid, params: dict) -> dict:
     )
 
 
+@method("marketing.topic_production.start")
+def _(rid, params: dict) -> dict:
+    """Create the durable sibling article/video DAG for one recommended topic."""
+
+    from agent.marketing.session_scope import resolve_account_scope
+    from agent.marketing.workflows import create_topic_production_workflow
+
+    values = params if isinstance(params, dict) else {}
+    account_id = str(values.get("account_id") or "").strip()
+    candidate_id = str(values.get("candidate_id") or "").strip()
+    user_id = str(values.get("user_id") or "default").strip() or "default"
+    if not account_id or not candidate_id:
+        return _err(rid, -32602, "account_id and candidate_id are required")
+    try:
+        scope = resolve_account_scope(user_id=user_id, account_id=account_id)
+        workflow = create_topic_production_workflow(
+            candidate_id=candidate_id,
+            user_id=user_id,
+            entity_id=str(scope["entity_id"]),
+        )
+        _ensure_marketing_workflow_dispatcher().dispatch_once(
+            workflow_id=str(workflow["id"])
+        )
+    except (KeyError, ValueError) as exc:
+        return _err(rid, -32602, str(exc))
+    return _ok(rid, workflow)
+
+
 @method("marketing.content.asset.get")
 def _(rid, params: dict) -> dict:
     """Read one full content asset only when the user opens its review surface."""
@@ -14089,6 +14585,82 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, {"asset": asset})
 
 
+@method("marketing.content.asset.prepare_publish")
+def _(rid, params: dict) -> dict:
+    """Prepare every platform checkpoint for an accepted content version.
+
+    This is deliberately a deterministic product action rather than a free-form
+    Agent turn.  It never executes a provider and preserves the preflight gate.
+    """
+    from agent.marketing.domains import ContentAssetRepository, PublishingRepository
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit publish-preparation confirmation is required")
+    account_id = str(params.get("account_id") or "").strip()
+    asset_id = str(params.get("asset_id") or "").strip()
+    user_id = str(params.get("user_id") or "default")
+    if not account_id or not asset_id:
+        return _err(rid, -32602, "account_id and asset_id are required")
+    try:
+        asset = ContentAssetRepository().get(
+            asset_id=asset_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        platforms = list(asset.get("target_platforms") or [])
+        content = asset.get("content") if isinstance(asset.get("content"), dict) else {}
+        variants = (
+            content.get("platform_variants")
+            if isinstance(content.get("platform_variants"), dict)
+            else {}
+        )
+        if not platforms and variants:
+            platforms = list(variants)
+        if not platforms and content.get("_production_plan_id"):
+            plan = ContentAssetRepository().get_production_plan(
+                plan_id=str(content["_production_plan_id"]),
+                user_id=user_id,
+                account_id=account_id,
+            )
+            platforms = list(plan.get("target_platforms") or [])
+        if not platforms and asset.get("platform") not in {"multi_article", "multi_platform"}:
+            platforms = [str(asset.get("platform") or "")]
+        platforms = [str(value or "").strip() for value in platforms if str(value or "").strip()]
+        if not platforms:
+            raise ValueError("content asset has no publishable target platform")
+        repository = PublishingRepository()
+        actions = [
+            repository.prepare_action(
+                user_id=user_id,
+                account_id=account_id,
+                asset_id=asset_id,
+                platform=platform,
+                provider="manual_assisted",
+                session_id="desktop-content-review",
+                tool_call_id=f"content-review:{asset_id}:{platform}",
+            )
+            for platform in platforms
+        ]
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        message = str(exc)
+        if "latest preflight is exploratory only" in message:
+            message = (
+                "当前预演只允许探索稿：请先完成账号定位、内容系统和平台连接，再进入发布准备。"
+            )
+        return _err(rid, 4096, message)
+    return _ok(
+        rid,
+        {
+            "actions": actions,
+            "effect_executed": False,
+            "state": "waiting_for_publish_approval",
+        },
+    )
+
+
 @method("marketing.video.productions.list")
 def _(rid, params: dict) -> dict:
     """List bounded video-production summaries for one account workbench."""
@@ -14108,6 +14680,213 @@ def _(rid, params: dict) -> dict:
     except (TypeError, ValueError) as exc:
         return _err(rid, -32602, str(exc))
     return _ok(rid, result)
+
+
+def _(rid, params: dict) -> dict:
+    """Deterministically prepare a video when the script already belongs to content.
+
+    A pure-text setup should not require the model to serialize another large
+    content object.  The script is matched to its existing campaign so evidence,
+    reaction hypotheses and an actionable faceless-video preflight stay attached.
+    """
+    from agent.marketing.domains import ContentAssetRepository, VideoProductionRepository
+
+    params = params if isinstance(params, dict) else {}
+    user_id = str(params.get("user_id") or "default")
+    account_id = str(params.get("account_id") or "").strip()
+    script = str(params.get("script") or "").strip()
+    platform = str(params.get("platform") or "douyin").strip()
+    if not account_id or not script:
+        return _err(rid, -32602, "account_id and script are required")
+    if len(script) > 20_000:
+        return _err(rid, -32602, "script must not exceed 20000 characters")
+    try:
+        content = ContentAssetRepository()
+        assets = content.list(
+            user_id=user_id,
+            account_id=account_id,
+            limit=100,
+        ).get("assets", [])
+        normalized_script = " ".join(script.split())
+        campaign = None
+        for asset in assets:
+            payload = asset.get("content") if isinstance(asset.get("content"), dict) else {}
+            if payload.get("_production_kind") != "cross_platform_campaign":
+                continue
+            variants = payload.get("platform_variants") or {}
+            variant = variants.get(platform) if isinstance(variants, dict) else None
+            variant = variant if isinstance(variant, dict) else {}
+            candidate_script = str(
+                variant.get("body_markdown")
+                or variant.get("script")
+                or variant.get("voiceover")
+                or ""
+            ).strip()
+            if candidate_script and " ".join(candidate_script.split()) == normalized_script:
+                campaign = asset
+                break
+        if campaign is None:
+            raise ValueError(
+                "当前脚本尚未关联到已核验证据的内容资产，请先从图文/选题资产进入视频制作。"
+            )
+        campaign_content = campaign.get("content") or {}
+        evidence_refs = list(campaign_content.get("_provenance_evidence_refs") or [])
+        if not evidence_refs:
+            raise ValueError("当前内容资产没有可用于视频制作的核验证据。")
+
+        title = str(campaign.get("title") or campaign.get("topic") or "视频作品")
+        plans = content.list_production_plans(
+            user_id=user_id,
+            account_id=account_id,
+            limit=100,
+        ).get("plans", [])
+        title_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())
+        title_fragments = {
+            title_key[index : index + 4]
+            for index in range(max(0, len(title_key) - 3))
+        }
+        ranked_plans = []
+        for item in plans:
+            if (
+                item.get("kind") != "faceless_video"
+                or platform not in (item.get("target_platforms") or [])
+                or item.get("recommendation_eligible") is not True
+            ):
+                continue
+            objective_key = re.sub(
+                r"[^a-z0-9\u4e00-\u9fff]+",
+                "",
+                str(item.get("objective") or "").lower(),
+            )
+            score = sum(fragment in objective_key for fragment in title_fragments)
+            if score:
+                ranked_plans.append((score, item))
+        plan = max(ranked_plans, key=lambda pair: pair[0])[1] if ranked_plans else None
+        if plan is None:
+            raise ValueError(
+                "当前视频脚本还没有通过预演的视频计划，请先在视频设定中补齐目标受众。"
+            )
+        result = VideoProductionRepository().prepare_from_script(
+            user_id=user_id,
+            account_id=account_id,
+            plan_id=str(plan["plan_id"]),
+            title=title,
+            script=script,
+            platform=platform,
+            evidence_refs=evidence_refs,
+            source_campaign_asset_id=str(campaign["id"]),
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, 4096, str(exc))
+    return _ok(rid, result)
+
+
+def _(rid, params: dict) -> dict:
+    """Prepare a platform-native video directly from an existing campaign asset."""
+    from agent.marketing.domains import VideoProductionRepository
+
+    params = params if isinstance(params, dict) else {}
+    user_id = str(params.get("user_id") or "default")
+    account_id = str(params.get("account_id") or "").strip()
+    asset_id = str(params.get("asset_id") or "").strip()
+    platform = str(params.get("platform") or "").strip()
+    if not account_id or not asset_id or not platform:
+        return _err(rid, -32602, "account_id, asset_id and platform are required")
+    try:
+        repository = VideoProductionRepository()
+        result = repository.prepare_from_campaign(
+            user_id=user_id,
+            account_id=account_id,
+            campaign_asset_id=asset_id,
+            platform=platform,
+        )
+        projection = repository.get_review_projection(
+            production_id=result["production"]["id"],
+            user_id=user_id,
+            account_id=account_id,
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, 4096, str(exc))
+    return _ok(rid, {**result, "projection": projection})
+
+
+@method("marketing.video.production.material.select")
+def _(rid, params: dict) -> dict:
+    """Bind one rights-reviewed material candidate as an immutable IR revision."""
+    from agent.marketing.domains import VideoProductionRepository
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit material-source review is required")
+    user_id = str(params.get("user_id") or "default")
+    account_id = str(params.get("account_id") or "").strip()
+    production_id = str(params.get("production_id") or "").strip()
+    scene_id = str(params.get("scene_id") or "").strip()
+    candidate_id = str(params.get("candidate_id") or "").strip()
+    if not account_id or not production_id or not scene_id or not candidate_id:
+        return _err(
+            rid,
+            -32602,
+            "account_id, production_id, scene_id and candidate_id are required",
+        )
+    try:
+        repository = VideoProductionRepository()
+        result = repository.select_material_candidate(
+            production_id=production_id,
+            scene_id=scene_id,
+            candidate_id=candidate_id,
+            user_id=user_id,
+            account_id=account_id,
+            rights_reviewed=True,
+        )
+        projection = repository.get_review_projection(
+            production_id=result["production"]["id"],
+            user_id=user_id,
+            account_id=account_id,
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except ValueError as exc:
+        return _err(rid, 4096, str(exc))
+    return _ok(rid, {**result, "projection": projection})
+
+
+@method("marketing.video.production.voice.generate")
+def _(rid, params: dict) -> dict:
+    """Generate the prepared voiceover after one explicit user confirmation."""
+    from agent.marketing.domains import VideoProductionRepository
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit voice-generation approval is required")
+    user_id = str(params.get("user_id") or "default")
+    account_id = str(params.get("account_id") or "").strip()
+    production_id = str(params.get("production_id") or "").strip()
+    if not account_id or not production_id:
+        return _err(rid, -32602, "account_id and production_id are required")
+    try:
+        repository = VideoProductionRepository()
+        result = repository.generate_and_bind_voiceover(
+            production_id=production_id,
+            user_id=user_id,
+            account_id=account_id,
+            approval_ref=f"desktop-video-voice:{production_id}",
+            confirmed_by_user=True,
+        )
+        projection = repository.get_review_projection(
+            production_id=result["production"]["id"],
+            user_id=user_id,
+            account_id=account_id,
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except (RuntimeError, ValueError) as exc:
+        return _err(rid, 4096, str(exc))
+    return _ok(rid, {**result, "projection": projection})
 
 
 @method("marketing.drafts.list")
@@ -14204,6 +14983,46 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 4044, str(exc))
     except ValueError as exc:
         return _err(rid, -32602, str(exc))
+    return _ok(rid, projection)
+
+
+@method("marketing.video.production.render")
+def _(rid, params: dict) -> dict:
+    """Render one reviewed local Video IR after explicit product confirmation."""
+    from agent.marketing.domains import VideoProductionRepository
+
+    params = params if isinstance(params, dict) else {}
+    if params.get("confirmed") is not True:
+        return _err(rid, 4095, "explicit video render confirmation is required")
+    user_id = str(params.get("user_id") or "default")
+    account_id = str(params.get("account_id") or "").strip()
+    production_id = str(params.get("production_id") or "").strip()
+    if not account_id or not production_id:
+        return _err(rid, -32602, "account_id and production_id are required")
+    try:
+        repository = VideoProductionRepository()
+        repository.approve(
+            production_id=production_id,
+            user_id=user_id,
+            account_id=account_id,
+            approval_ref=f"desktop-director-review:{production_id}",
+            confirmed_by_user=True,
+        )
+        repository.execute(
+            production_id=production_id,
+            user_id=user_id,
+            account_id=account_id,
+            session_id="desktop-video-director",
+        )
+        projection = repository.get_review_projection(
+            production_id=production_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+    except KeyError as exc:
+        return _err(rid, 4044, str(exc))
+    except (RuntimeError, ValueError) as exc:
+        return _err(rid, 4096, str(exc))
     return _ok(rid, projection)
 
 

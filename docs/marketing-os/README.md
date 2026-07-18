@@ -8,7 +8,8 @@
 
 1. [产品哲学](./current/PRODUCT_PHILOSOPHY.md)
 2. [Hermes 原生架构](./current/NATIVE_ARCHITECTURE.md)
-3. [当前执行台账](./current/EXECUTION_LEDGER.md)
+3. [Durable Multi-Agent Harness 架构](./current/HARNESS_ARCHITECTURE.md)
+4. [当前执行台账](./current/EXECUTION_LEDGER.md)
 
 ## 其它区域
 
@@ -21,4 +22,4 @@
 
 旧总台账、Claude/GLM 任务、套壳架构、FastAPI/AgentCoreStore 路线和阶段事故日志已从工作树删除。需要追溯时使用 Git 历史，不得把历史文件恢复为任务入口。
 
-裁决顺序：产品哲学 → 当前代码和验证事实 → 原生架构 → 当前执行台账 → ADR/Research。
+裁决顺序：产品哲学 → 当前代码和验证事实 → 原生架构 → Harness 架构 → 当前执行台账 → ADR/Research。

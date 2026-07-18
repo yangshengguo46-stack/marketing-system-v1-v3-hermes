@@ -169,13 +169,22 @@ def test_draft_box_projects_unfinished_work_without_duplicate_video_assets(
 
     result = repository.list(user_id="default", account_id="acct-1")
 
-    assert [(item["object_type"], item["id"]) for item in result["items"]] == [
-        ("content_asset", "article-current"),
-        ("video_production", "video-production"),
-    ]
-    assert result["items"][0]["title"] == "AI 教育"
+    by_id = {item["id"]: item for item in result["items"]}
+    assert set(by_id) == {
+        "article-current",
+        "video-production",
+        "accepted-article",
+        "accepted-production",
+    }
+    assert by_id["article-current"]["title"] == "AI 教育"
     assert "video-source" not in {item["id"] for item in result["items"]}
-    assert "accepted-article" not in {item["id"] for item in result["items"]}
+    assert by_id["accepted-article"]["workflow_stage"] == "publish_pending"
+    assert by_id["accepted-article"]["publish_asset_id"] == "accepted-article"
+    assert by_id["accepted-article"]["can_prepare_publish"] is True
+    assert by_id["accepted-article"]["can_archive"] is False
+    assert by_id["accepted-production"]["workflow_stage"] == "production_blocked"
+    assert by_id["accepted-production"]["publish_asset_id"] == ""
+    assert by_id["accepted-production"]["can_prepare_publish"] is False
 
 
 def test_draft_box_archives_and_restores_native_content_and_video_state(

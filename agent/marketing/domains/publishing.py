@@ -91,6 +91,12 @@ class PublishingRepository(MarketingDomainRepository):
                     "current content asset version requires explicit human review acceptance"
                 )
             content = _object(asset["content_json"], "content asset")
+            self._require_video_output_ready(
+                db,
+                content=content,
+                user_id=user_id,
+                account_id=account_id,
+            )
             plan_id = str(content.get("_production_plan_id") or "").strip()
             if not plan_id:
                 raise ValueError("content asset has no production plan")
@@ -168,6 +174,66 @@ class PublishingRepository(MarketingDomainRepository):
                 ),
             )
         return self.get_action(action_id)
+
+    @staticmethod
+    def _require_video_output_ready(
+        db,
+        *,
+        content: dict[str, Any],
+        user_id: str,
+        account_id: str,
+    ) -> None:
+        production_info = (
+            content.get("production")
+            if isinstance(content.get("production"), dict)
+            else {}
+        )
+        production_id = str(production_info.get("production_id") or "").strip()
+        if not production_id:
+            return
+        production = db.execute(
+            """SELECT p.*,s.content_json AS source_content_json
+            FROM marketing_video_productions p
+            LEFT JOIN content_assets s ON s.id=p.source_asset_id
+            WHERE p.id=? AND p.user_id=? AND p.account_id=?""",
+            (production_id, user_id, account_id),
+        ).fetchone()
+        if production is None or production["status"] != "completed":
+            raise ValueError("video output has no completed native production")
+        video_ir = _object(production["video_ir_json"], "video IR")
+        render_plan = _object(production["render_plan_json"], "video render plan")
+        if render_plan.get("executable") is not True:
+            raise ValueError("video output uses an unavailable scene renderer")
+        visual_ids = [
+            str(visual.get("media_asset_id") or "")
+            for scene in video_ir.get("scenes") or []
+            if isinstance(scene, dict)
+            for visual in scene.get("visuals") or []
+            if isinstance(visual, dict) and visual.get("media_asset_id")
+        ]
+        if visual_ids:
+            placeholders = db.execute(
+                f"""SELECT COUNT(*) AS total FROM media_asset_library
+                WHERE user_id=? AND id IN ({','.join('?' for _ in visual_ids)})
+                  AND provider='marketing_os_local_storyboard'""",
+                (user_id, *visual_ids),
+            ).fetchone()["total"]
+            if placeholders:
+                raise ValueError(
+                    "video output still contains local storyboard placeholders"
+                )
+        source_content = _object(
+            production["source_content_json"] or "{}",
+            "video source asset",
+        )
+        sound_plan = (
+            source_content.get("sound_plan")
+            if isinstance(source_content.get("sound_plan"), dict)
+            else {}
+        )
+        audio = video_ir.get("audio") if isinstance(video_ir.get("audio"), dict) else {}
+        if sound_plan.get("voice_required") is True and not audio.get("voice_asset_id"):
+            raise ValueError("video output is missing its required voiceover")
 
     def mark_execution_started(
         self,

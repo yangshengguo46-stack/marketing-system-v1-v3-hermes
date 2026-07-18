@@ -37,6 +37,7 @@ interface ContentAssetDetail extends ContentAssetSummary {
 interface ContentReviewSheetProps {
   accountId: string
   asset: ContentAssetSummary | null
+  onOpenDrafts?: () => void
   onOpenChange: (open: boolean) => void
   onReviewed: (asset: ContentAssetDetail) => void
   onStartOperation: StartMarketingOperation
@@ -46,6 +47,7 @@ interface ContentReviewSheetProps {
 export function ContentReviewSheet({
   accountId,
   asset,
+  onOpenDrafts,
   onOpenChange,
   onReviewed,
   onStartOperation,
@@ -136,6 +138,7 @@ export function ContentReviewSheet({
 
   const content = record(detail?.content)
   const parentDraft = record(content.parent_draft)
+  const contentKernel = record(content.content_kernel)
   const validation = record(content.validation)
   const variants = record(content.platform_variants)
   const evidence = records(content.evidence_pack)
@@ -146,20 +149,6 @@ export function ContentReviewSheet({
   const issues = strings(validation.issues)
   const pendingChecks = strings(validation.pending_human_checks)
   const accepted = detail?.human_review_status === 'accepted'
-
-  const continueAsset = () => {
-    if (!detail) {
-      return
-    }
-
-    onStartOperation({
-      accountId,
-      kind: 'content.resume',
-      targetId: detail.id,
-      title: detail.title || detail.topic || '内容资产'
-    })
-    onOpenChange(false)
-  }
 
   return (
     <Sheet onOpenChange={onOpenChange} open={Boolean(asset)}>
@@ -210,7 +199,14 @@ export function ContentReviewSheet({
               ) : null}
 
               <ReviewSection title="母稿">
-                <ArticleBody body={text(parentDraft.body_markdown) || '当前没有可展示的正文。'} />
+                <ArticleBody
+                  body={
+                    text(parentDraft.body_markdown) ||
+                    text(content.content_kernel) ||
+                    text(contentKernel.claim) ||
+                    '跨平台内容内核已拆分到下方各平台版本。'
+                  }
+                />
               </ReviewSection>
 
               {Object.keys(variants).length ? (
@@ -290,6 +286,11 @@ export function ContentReviewSheet({
         </div>
 
         <SheetFooter className="border-t border-(--ui-stroke-tertiary) bg-(--ui-sidebar-surface-background) px-7 py-5">
+          {accepted ? (
+            <p className="rounded-xl bg-emerald-500/8 px-3 py-2 text-xs text-emerald-700">
+              当前版本已确认并归入草稿箱；发布准备、审批和失败恢复统一从草稿箱继续。
+            </p>
+          ) : null}
           <label className="text-xs font-semibold" htmlFor="content-review-note">
             修改意见
           </label>
@@ -301,7 +302,11 @@ export function ContentReviewSheet({
             value={note}
           />
           <div className="flex flex-wrap justify-end gap-2">
-            {accepted ? <Button onClick={continueAsset}>继续推进到发布准备</Button> : null}
+            {accepted ? (
+              <Button onClick={onOpenDrafts}>
+                前往草稿箱
+              </Button>
+            ) : null}
             <Button
               disabled={!detail || !note.trim() || submitting !== null}
               onClick={() => void submitReview('changes_requested')}

@@ -18,6 +18,7 @@ from agent.marketing.domains import (
     ContentAssetRepository,
     EvidenceRepository,
     MediaAssetRepository,
+    PublishingRepository,
     ProductionAudioRepository,
     VideoProductionRepository,
     VideoQualityAnalyzer,
@@ -429,6 +430,271 @@ def _video_ir(asset_id, *, motion_intent=None, text=None):
     }
 
 
+def test_compact_video_setup_builds_idempotent_local_storyboard_and_ir(tmp_path):
+    paths = _paths(tmp_path)
+    evidence_id = EvidenceRepository(paths).capture_web_extract_result(
+        user_id="default",
+        account_id="acct-1",
+        result={
+            "results": [{
+                "url": "https://example.com/ai-bubble",
+                "title": "source",
+                "content": "Verified context for the short-video script.",
+            }]
+        },
+        session_id="compact-video-test",
+    )[0]["id"]
+    content = ContentAssetRepository(paths)
+    plan = content.save_production_plan(
+        user_id="default",
+        account_id="acct-1",
+        plan={
+            "status": "planned",
+            "kind": "faceless_video",
+            "objective": "把一篇有证据的稿子做成抖音短视频",
+            "target_platforms": ["douyin"],
+            "constraints": {},
+            "audience_model": {"target_audience": "独立创业者"},
+        },
+    )
+    script = """### Shot 1 — HOOK (0-3s)
+**On-screen text**: AI 工具不是护城河
+
+### Shot 2 — CLOSE (3-9s)
+**VO**: 真正重要的是判断力和问题定义能力。
+"""
+    repository = VideoProductionRepository(paths)
+    first = repository.prepare_from_script(
+        user_id="default",
+        account_id="acct-1",
+        plan_id=plan["plan_id"],
+        title="AI 泡沫之后",
+        script=script,
+        platform="douyin",
+        evidence_refs=[evidence_id],
+    )
+    repeated = repository.prepare_from_script(
+        user_id="default",
+        account_id="acct-1",
+        plan_id=plan["plan_id"],
+        title="AI 泡沫之后",
+        script=script,
+        platform="douyin",
+        evidence_refs=[evidence_id],
+    )
+
+    assert first["production"]["status"] == "prepared"
+    assert first["production"]["id"] == repeated["production"]["id"]
+    assert first["source_asset"]["id"] == repeated["source_asset"]["id"]
+    assert len(first["production"]["video_ir"]["scenes"]) == 2
+    assert [scene["duration"] for scene in first["production"]["video_ir"]["scenes"]] == [3.0, 6.0]
+    assert len(first["storyboard_assets"]) == 2
+    assert all(item["provider"] == "marketing_os_local_storyboard" for item in first["storyboard_assets"])
+    assert all(item["rights_status"] == "inherited" for item in first["storyboard_assets"])
+    assert len(first["material_searches"]) == 2
+    assert first["voice_job"]["status"] == "prepared"
+    assert first["production"]["video_ir"]["scenes"][0]["text"][0]["text"] == "AI 工具不是护城河"
+    assert first["production"]["video_ir"]["captions"][0]["text"] == "真正重要的是判断力和问题定义能力。"
+    readiness = repository.render_readiness(
+        production_id=first["production"]["id"],
+        user_id="default",
+        account_id="acct-1",
+    )
+    assert readiness["ready"] is False
+    assert {item["code"] for item in readiness["blockers"]} >= {
+        "storyboard_placeholders",
+        "voiceover_missing",
+    }
+    assert first["external_effect_executed"] is False
+
+    # A previously accepted static-card preview must not be able to bypass the
+    # native video-production gate and enter publishing approval.
+    with sqlite3.connect(paths.agent_db) as db:
+        source_row = db.execute(
+            "SELECT content_json FROM content_assets WHERE id=?",
+            (first["source_asset"]["id"],),
+        ).fetchone()
+        source_content = json.loads(source_row[0])
+        source_content["production"] = {
+            "production_id": first["production"]["id"],
+        }
+        db.execute(
+            """UPDATE content_assets
+            SET status='review_ready',human_review_status='accepted',content_json=?
+            WHERE id=?""",
+            (
+                json.dumps(source_content, ensure_ascii=False),
+                first["source_asset"]["id"],
+            ),
+        )
+        db.execute(
+            "UPDATE marketing_video_productions SET status='completed' WHERE id=?",
+            (first["production"]["id"],),
+        )
+    with pytest.raises(ValueError, match="storyboard placeholders"):
+        PublishingRepository(paths).prepare_action(
+            user_id="default",
+            account_id="acct-1",
+            asset_id=first["source_asset"]["id"],
+            platform="douyin",
+            provider="playwright_mcp",
+        )
+
+
+def test_accepted_campaign_hands_video_variant_directly_to_material_pipeline(tmp_path):
+    paths = _paths(tmp_path)
+    evidence_id = EvidenceRepository(paths).capture_web_extract_result(
+        user_id="default",
+        account_id="acct-1",
+        result={
+            "results": [{
+                "url": "https://example.com/direct-video",
+                "title": "source",
+                "content": "Verified evidence for one platform-native video variant.",
+            }]
+        },
+        session_id="direct-video-test",
+    )[0]["id"]
+    content = ContentAssetRepository(paths)
+    campaign_plan = content.save_production_plan(
+        user_id="default",
+        account_id="acct-1",
+        plan={
+            "status": "planned",
+            "kind": "cross_platform_campaign",
+            "objective": "AI 泡沫过后，判断力才是一人公司的护城河",
+            "target_platforms": ["douyin", "wechat_official"],
+            "constraints": {},
+            "audience_model": {"target_audience": "独立创业者"},
+        },
+    )
+    campaign = content.create_draft(
+        user_id="default",
+        account_id="acct-1",
+        title="AI 泡沫过后，判断力才是护城河",
+        plan_id=campaign_plan["plan_id"],
+        asset_type="script",
+        platform="multi_platform",
+        production_kind="cross_platform_campaign",
+        content={
+            "content_kernel": "AI 工具会同质化，判断力不会。",
+            "platform_variants": {
+                "douyin": {
+                    "adaptation_basis": {
+                        "audience_intent": "刷流中快速获得反常识判断",
+                        "cta": "评论自己的护城河",
+                        "format": "short_video",
+                        "opening": "先给结论",
+                        "structure": "冲突到结论",
+                    },
+                    "body_markdown": """### Shot 1 — HOOK (0-3s)
+**Visual**: 创业者工位近景
+**VO**: AI 工具会同质化，但判断力不会。
+**On-screen text**: 真正的护城河是判断力
+
+### Shot 2 — CLOSE (3-7s)
+**Visual**: 电脑画面快切
+**VO**: 别再把工具清单当成经营战略。
+**On-screen text**: 工具不是战略
+""",
+                    "format": "short_video",
+                    "title": "判断力才是护城河",
+                },
+                "wechat_official": {
+                    "adaptation_basis": {
+                        "audience_intent": "系统理解经营判断",
+                        "cta": "转发给创业伙伴",
+                        "opening": "从工具同质化切入",
+                        "structure": "问题到框架",
+                    },
+                    "body_markdown": "这是一篇平台长文。",
+                    "format": "long_article",
+                    "title": "判断力才是护城河",
+                },
+            },
+        },
+        evidence_refs=[evidence_id],
+    )
+    campaign = content.record_human_review(
+        asset_id=campaign["id"],
+        user_id="default",
+        account_id="acct-1",
+        decision="accepted",
+        confirmed=True,
+    )
+    video_plan = content.save_production_plan(
+        user_id="default",
+        account_id="acct-1",
+        plan={
+            "status": "planned",
+            "kind": "faceless_video",
+            "objective": "把 AI 泡沫过后判断力才是护城河做成抖音素材视频",
+            "target_platforms": ["douyin"],
+            "constraints": {},
+            "audience_model": {"target_audience": "独立创业者"},
+        },
+    )
+    OperatingLoopRepository(paths).create_preflight(
+        user_id="default",
+        account_id="acct-1",
+        plan_id=video_plan["plan_id"],
+        platform="douyin",
+        session_id="direct-video-test",
+        formula_version="test-v1",
+        input={},
+        scores={"overall": 0.9},
+        decision={
+            "preflight_decision": {"go": True, "status": "ready_for_asset_draft"}
+        },
+    )
+    library_asset = _visual_asset(
+        MediaAssetRepository(paths),
+        account_id="acct-1",
+        name="创业者工位 电脑画面",
+        color="#305f66",
+    )
+    repository = VideoProductionRepository(
+        paths,
+        enabled_renderers=[
+            "ffmpeg_timeline_v1",
+            "remotion_scene_v1",
+            "hyperframes_scene_v1",
+        ],
+    )
+
+    prepared = repository.prepare_from_campaign(
+        user_id="default",
+        account_id="acct-1",
+        campaign_asset_id=campaign["id"],
+        platform="douyin",
+    )
+
+    assert prepared["source_asset"]["content"]["source_campaign_asset_id"] == campaign["id"]
+    assert len(prepared["material_searches"]) == 2
+    assert all(search["candidates"] for search in prepared["material_searches"])
+    assert [scene["renderer"] for scene in prepared["production"]["render_plan"]["scenes"]] == [
+        "remotion_scene_v1",
+        "hyperframes_scene_v1",
+    ]
+    first_search = prepared["material_searches"][0]
+    local_candidate = next(
+        candidate
+        for candidate in first_search["candidates"]
+        if candidate["provider_asset_id"] == library_asset["id"]
+    )
+    revised = repository.select_material_candidate(
+        production_id=prepared["production"]["id"],
+        scene_id="scene_001",
+        candidate_id=local_candidate["id"],
+        user_id="default",
+        account_id="acct-1",
+        rights_reviewed=True,
+    )
+    assert revised["production"]["id"] != prepared["production"]["id"]
+    assert revised["production"]["video_ir"]["scenes"][0]["visuals"][0]["media_asset_id"] == library_asset["id"]
+    assert revised["readiness"]["placeholder_scene_count"] == 1
+
+
 def test_video_ir_prepare_persists_ir_plan_and_compiled_edl(tmp_path):
     paths = _paths(tmp_path)
     source = _source_asset(paths)
@@ -466,18 +732,29 @@ def test_video_ir_prepare_blocks_unavailable_renderer_capability(tmp_path):
         name="advanced-ir",
         color="#305f66",
     )
-    repository = VideoProductionRepository(paths)
+    repository = VideoProductionRepository(
+        paths,
+        enabled_renderers=["ffmpeg_timeline_v1"],
+    )
 
-    with pytest.raises(ValueError, match="unavailable renderer capabilities"):
-        repository.prepare(
+    prepared = repository.prepare(
+        user_id="default",
+        account_id="acct-1",
+        source_asset_id=source["id"],
+        video_ir=_video_ir(
+            visual["id"],
+            motion_intent=["kinetic_typography"],
+            text=[{"text": "先看结果", "role": "headline"}],
+        ),
+    )
+    assert prepared["render_plan"]["executable"] is False
+    with pytest.raises(ValueError, match="not render-ready"):
+        repository.approve(
+            production_id=prepared["id"],
             user_id="default",
             account_id="acct-1",
-            source_asset_id=source["id"],
-            video_ir=_video_ir(
-                visual["id"],
-                motion_intent=["kinetic_typography"],
-                text=[{"text": "先看结果", "role": "headline"}],
-            ),
+            approval_ref="human-review:blocked-renderer",
+            confirmed_by_user=True,
         )
 
 

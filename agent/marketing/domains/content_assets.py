@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -158,6 +159,7 @@ class ContentAssetRepository(MarketingDomainRepository):
             platform=platform,
             production_kind=production_kind,
         )
+        review_ready = production_kind == "cross_platform_campaign"
         return self._save_draft(
             user_id=user_id,
             account_id=account_id,
@@ -172,6 +174,10 @@ class ContentAssetRepository(MarketingDomainRepository):
             evidence_refs=evidence_refs,
             memory_refs=memory_refs,
             reaction_scenarios=reaction_scenarios,
+            asset_status="review_ready" if review_ready else "draft",
+            plan_checkpoint_status=(
+                "review_ready" if review_ready else "draft_created"
+            ),
             parent_id=parent_id,
             asset_version=asset_version,
         )
@@ -356,6 +362,92 @@ class ContentAssetRepository(MarketingDomainRepository):
             plans.append(value)
         return {"plans": plans, "total": len(plans)}
 
+    def resolve_faceless_video_plan_for_campaign(
+        self,
+        *,
+        asset_id: str,
+        platform: str,
+        user_id: str,
+        account_id: str,
+    ) -> dict[str, Any]:
+        """Resolve an already-preflighted video plan for one campaign variant."""
+
+        campaign = self.get(
+            asset_id=asset_id,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        content = campaign.get("content") if isinstance(campaign.get("content"), dict) else {}
+        if content.get("_production_kind") != "cross_platform_campaign":
+            raise ValueError("video handoff requires a cross-platform campaign")
+        if campaign.get("human_review_status") != "accepted":
+            raise ValueError("campaign must be accepted before video production")
+        variants = content.get("platform_variants")
+        variants = variants if isinstance(variants, dict) else {}
+        variant = variants.get(platform)
+        variant = variant if isinstance(variant, dict) else {}
+        script = str(
+            variant.get("body_markdown")
+            or variant.get("script")
+            or variant.get("voiceover")
+            or ""
+        ).strip()
+        if not script:
+            raise ValueError("campaign has no substantive variant for this platform")
+        adaptation = (
+            variant.get("adaptation_basis")
+            if isinstance(variant.get("adaptation_basis"), dict)
+            else {}
+        )
+        format_value = str(variant.get("format") or adaptation.get("format") or "").strip()
+        if format_value and format_value not in {"short_video", "video", "vertical_video"}:
+            raise ValueError("selected platform variant is not a video deliverable")
+
+        title = str(campaign.get("title") or campaign.get("topic") or "").strip()
+        title_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())
+        fragments = {
+            title_key[index : index + 4]
+            for index in range(max(0, len(title_key) - 3))
+            if title_key[index : index + 4]
+        }
+        ranked: list[tuple[int, str, dict[str, Any]]] = []
+        for plan in self.list_production_plans(
+            user_id=user_id,
+            account_id=account_id,
+            limit=100,
+        )["plans"]:
+            if (
+                plan.get("kind") != "faceless_video"
+                or platform not in (plan.get("target_platforms") or [])
+                or plan.get("recommendation_eligible") is not True
+            ):
+                continue
+            objective_key = re.sub(
+                r"[^a-z0-9\u4e00-\u9fff]+",
+                "",
+                str(plan.get("objective") or "").lower(),
+            )
+            score = sum(fragment in objective_key for fragment in fragments)
+            if title_key and title_key in objective_key:
+                score += 20
+            ranked.append((score, str(plan.get("updated_at") or ""), plan))
+        if not ranked:
+            raise ValueError(
+                "campaign video variant has no preflight-approved faceless-video plan"
+            )
+        scored = [item for item in ranked if item[0] > 0]
+        if not scored and len(ranked) > 1:
+            raise ValueError(
+                "multiple video plans exist but none is traceably related to this campaign"
+            )
+        plan = max(scored or ranked, key=lambda item: (item[0], item[1]))[2]
+        return {
+            "campaign": campaign,
+            "variant": variant,
+            "script": script,
+            "plan": plan,
+        }
+
     def create_article_bundle(
         self,
         *,
@@ -533,6 +625,18 @@ class ContentAssetRepository(MarketingDomainRepository):
                     target_platforms=plan_platforms,
                 )
                 payload["platform_blueprints"] = platform_content_blueprints(plan_platforms)
+                payload["review_status"] = "ready_for_human_review"
+                payload["validation"] = {
+                    "version": "marketing.cross_platform_campaign_validation.v1",
+                    "ready": True,
+                    "issues": [],
+                    "pending_human_checks": [
+                        "platform tone and account fit",
+                        "claim meaning matches cited evidence",
+                        "visual and audio rights",
+                        "final article preview and video production",
+                    ],
+                }
             elif platform not in plan_platforms:
                 raise ValueError("draft platform is outside its production plan")
             payload["_production_plan_id"] = plan_id_value
@@ -1219,6 +1323,13 @@ def _validated_sound_plan(
         "mix_role": str(value.get("mix_role") or "support").strip()[:80],
         "opening_cue_ms": max(0, int(value.get("opening_cue_ms") or 0)),
     }
+    voice_required = value.get("voice_required") is True
+    voice_job_id = str(value.get("voice_job_id") or "").strip()
+    if voice_required:
+        result["voice_required"] = True
+        result["voice_status"] = str(value.get("voice_status") or "pending").strip()[:40]
+        if voice_job_id:
+            result["voice_job_id"] = voice_job_id[:160]
     if mode == "trend_sound":
         sound = repository.require_sound(
             user_id=user_id,

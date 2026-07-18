@@ -63,6 +63,7 @@ export interface VideoProductionSummary {
   id: string
   output_asset_id?: string | null
   renderers: string[]
+  readiness?: VideoRenderReadiness
   scene_count: number
   settled_at?: string | null
   source_asset_id: string
@@ -155,6 +156,44 @@ interface MediaAssetProjection {
   source_type: string
 }
 
+interface MaterialCandidateProjection {
+  creator?: string
+  id: string
+  license_name?: string
+  license_url?: string
+  media_type?: 'image' | 'video'
+  preview_url?: string
+  provider?: string
+  score?: number
+  source_url?: string
+}
+
+interface MaterialSearchProjection {
+  candidates?: MaterialCandidateProjection[]
+  id: string
+  scene_id?: string
+  status?: string
+  visual_query?: string
+}
+
+interface VideoRenderReadiness {
+  blockers?: Array<{
+    code?: string
+    count?: number
+    message?: string
+    scene_ids?: string[]
+  }>
+  placeholder_scene_count?: number
+  ready?: boolean
+  status?: string
+  voice_required?: boolean
+}
+
+interface VoiceJobProjection {
+  id: string
+  status: string
+}
+
 interface ContentAssetProjection {
   human_review_status?: string
   id: string
@@ -163,17 +202,21 @@ interface ContentAssetProjection {
 }
 
 interface VideoReviewProjection {
+  material_searches?: MaterialSearchProjection[]
   media_assets: MediaAssetProjection[]
   output_asset?: ContentAssetProjection | null
   production: VideoProductionDetail
   source_asset: ContentAssetProjection
   summary: VideoProductionSummary
+  readiness?: VideoRenderReadiness
+  voice_job?: VoiceJobProjection | null
 }
 
 interface VideoProductionWorkbenchProps {
   accountId: string
   initialProductionId?: string
   onBack?: () => void
+  onOpenDrafts?: () => void
   onStartOperation: StartMarketingOperation
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
@@ -307,6 +350,7 @@ export function VideoProductionWorkbench({
   accountId,
   initialProductionId,
   onBack,
+  onOpenDrafts,
   onStartOperation,
   requestGateway
 }: VideoProductionWorkbenchProps) {
@@ -322,6 +366,7 @@ export function VideoProductionWorkbench({
   const [error, setError] = useState('')
   const [reviewNote, setReviewNote] = useState('')
   const [reviewing, setReviewing] = useState<'accepted' | 'changes_requested' | null>(null)
+  const [stageConfirming, setStageConfirming] = useState(false)
   const [activeStage, setActiveStage] = useState<DirectorStage>('setup')
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>(initialView.inspectorTab)
   const [setupCategory, setSetupCategory] = useState<SetupCategory | null>(null)
@@ -347,6 +392,8 @@ export function VideoProductionWorkbench({
   const [setupSubmitting, setSetupSubmitting] = useState(false)
   const [setupStatus, setSetupStatus] = useState('')
   const [setupError, setSetupError] = useState('')
+  const [selectingCandidateId, setSelectingCandidateId] = useState('')
+  const [generatingVoice, setGeneratingVoice] = useState(false)
   const setupOperation = operationProgress?.kind === 'video.setup' ? operationProgress : null
 
   const setupRunning = Boolean(
@@ -611,6 +658,104 @@ export function VideoProductionWorkbench({
     }
   }
 
+  const selectMaterialCandidate = async (sceneId: string, candidateId: string) => {
+    if (!selectedId || selectingCandidateId) {
+      return
+    }
+
+    setSelectingCandidateId(candidateId)
+    setError('')
+
+    try {
+      const result = await requestGateway<{ projection: VideoReviewProjection; production: { id: string } }>(
+        'marketing.video.production.material.select',
+        {
+          account_id: accountId,
+          candidate_id: candidateId,
+          confirmed: true,
+          production_id: selectedId,
+          scene_id: sceneId
+        }
+      )
+
+      await refresh()
+      setSelectedId(result.production.id)
+      setDetail(result.projection)
+      setSelectedSceneId(sceneId)
+    } catch (cause) {
+      setError(userFacingError(cause, '素材绑定失败，请核对来源、授权和媒体类型。'))
+    } finally {
+      setSelectingCandidateId('')
+    }
+  }
+
+  const generateVoiceover = async () => {
+    if (!selectedId || generatingVoice) {
+      return
+    }
+
+    setGeneratingVoice(true)
+    setError('')
+
+    try {
+      const result = await requestGateway<{ projection: VideoReviewProjection; production: { id: string } }>(
+        'marketing.video.production.voice.generate',
+        {
+          account_id: accountId,
+          confirmed: true,
+          production_id: selectedId
+        }
+      )
+
+      await refresh()
+      setSelectedId(result.production.id)
+      setDetail(result.projection)
+    } catch (cause) {
+      setError(userFacingError(cause, '旁白生成失败，请检查语音服务配置后重试。'))
+    } finally {
+      setGeneratingVoice(false)
+    }
+  }
+
+  const confirmStage = async () => {
+    if (!summary || stageConfirming) {
+      return
+    }
+
+    if (summary.status === 'completed' && detail?.output_asset?.id) {
+      await submitReview('accepted')
+
+      return
+    }
+
+    const activeIndex = DIRECTOR_STAGES.findIndex(stage => stage.id === activeStage)
+
+    if (activeStage !== 'edit') {
+      setActiveStage(DIRECTOR_STAGES[Math.min(activeIndex + 1, DIRECTOR_STAGES.length - 1)].id)
+
+      return
+    }
+
+    setStageConfirming(true)
+    setError('')
+
+    try {
+      const result = await requestGateway<VideoReviewProjection>('marketing.video.production.render', {
+        account_id: accountId,
+        confirmed: true,
+        production_id: summary.id
+      })
+
+      setDetail(result)
+      setProductions(current => current.map(item => (item.id === result.summary.id ? result.summary : item)))
+      setActiveStage('final')
+    } catch (cause) {
+      setError(userFacingError(cause, '本地渲染失败，项目和时间线已保留，可以重试。'))
+    } finally {
+      setStageConfirming(false)
+    }
+  }
+
   const pickSetupPaths = async (options: Parameters<NonNullable<typeof window.hermesDesktop>['selectPaths']>[0]) => {
     setSetupError('')
 
@@ -750,6 +895,8 @@ export function VideoProductionWorkbench({
   const selectedVisualId = selectedScene?.visuals?.[0]?.media_asset_id
   const selectedVisual = detail?.media_assets.find(asset => asset.id === selectedVisualId)
   const scenePlan = production?.render_plan?.scenes?.find(item => item.scene_id === selectedScene?.id)
+  const readiness = detail?.readiness || summary?.readiness
+  const selectedMaterialSearch = detail?.material_searches?.find(search => search.scene_id === selectedScene?.id)
   const ratio = ratioLabel(canvas)
   const accepted = detail?.output_asset?.human_review_status === 'accepted'
 
@@ -1024,9 +1171,14 @@ export function VideoProductionWorkbench({
 
           <VersionStrip
             assets={detail?.media_assets || []}
+            materialCandidates={selectedMaterialSearch?.candidates || []}
+            onSelectCandidate={(candidateId: string) =>
+              selectedScene?.id ? void selectMaterialCandidate(selectedScene.id, candidateId) : undefined
+            }
             onStartOperation={startOperation}
             scene={selectedScene}
             selectedAsset={selectedVisual}
+            selectingCandidateId={selectingCandidateId}
             summary={summary}
           />
 
@@ -1034,6 +1186,7 @@ export function VideoProductionWorkbench({
             accepted={accepted}
             activeStage={activeStage}
             completed={summary?.status === 'completed' && Boolean(detail?.output_asset?.id)}
+            onOpenDrafts={onOpenDrafts}
             onReview={decision => void submitReview(decision)}
             onReviewNote={setReviewNote}
             onStartOperation={startOperation}
@@ -1062,21 +1215,13 @@ export function VideoProductionWorkbench({
             assets={detail?.media_assets || []}
             canvas={canvas}
             completed={summary?.status === 'completed' && Boolean(detail?.output_asset?.id)}
-            onConfirm={() => {
-              if (summary?.status === 'completed' && detail?.output_asset?.id) {
-                void submitReview('accepted')
-              } else {
-                startOperation({
-                  kind: 'video.stage.confirm',
-                  productionId: summary?.id || selectedId,
-                  sceneId: selectedScene?.id,
-                  stage: activeStage,
-                  title: summary?.title || '当前视频'
-                })
-              }
-            }}
+            confirming={stageConfirming}
+            generatingVoice={generatingVoice}
+            onConfirm={() => void confirmStage()}
+            onGenerateVoice={() => void generateVoiceover()}
             onTab={setInspectorTab}
             quality={quality}
+            readiness={readiness}
             rendered={summary?.status === 'completed'}
             scene={selectedScene}
             scenePlan={scenePlan}
@@ -1092,14 +1237,20 @@ export function VideoProductionWorkbench({
 
 function VersionStrip({
   assets,
+  materialCandidates,
+  onSelectCandidate,
   onStartOperation,
   scene,
+  selectingCandidateId,
   selectedAsset,
   summary
 }: {
   assets: MediaAssetProjection[]
+  materialCandidates: MaterialCandidateProjection[]
+  onSelectCandidate: (candidateId: string) => void
   onStartOperation: StartVideoOperation
   scene?: VideoScene
+  selectingCandidateId: string
   selectedAsset?: MediaAssetProjection
   summary?: VideoProductionSummary
 }) {
@@ -1141,6 +1292,25 @@ function VersionStrip({
       ) : (
         <span className="text-[0.62rem] text-[#a0978a]">当前镜头还没有可切换版本</span>
       )}
+      {materialCandidates.slice(0, 4).map(candidate => (
+        <button
+          className="flex h-12 max-w-40 shrink-0 items-center gap-2 rounded-lg border border-dashed border-[#cfc5b6] px-3 text-left text-[0.6rem] text-[#796f63] transition hover:border-[#ef704f]/50 hover:text-[#dc603f] disabled:opacity-50"
+          disabled={Boolean(selectingCandidateId)}
+          key={candidate.id}
+          onClick={() => onSelectCandidate(candidate.id)}
+          title={candidate.license_name || '采用前请核对素材来源与授权'}
+          type="button"
+        >
+          {selectingCandidateId === candidate.id ? (
+            <Loader2 className="size-3.5 shrink-0 animate-spin" />
+          ) : (
+            <FileImage className="size-3.5 shrink-0" />
+          )}
+          <span className="min-w-0 truncate">
+            采用 {candidate.provider || '候选素材'} · 确认来源
+          </span>
+        </button>
+      ))}
       <button
         className="flex h-12 shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-[#cfc5b6] px-3 text-[0.62rem] text-[#796f63] transition hover:border-[#ef704f]/50 hover:text-[#dc603f]"
         onClick={() =>
@@ -1166,6 +1336,7 @@ function DirectorCommandBox({
   onStartOperation,
   onReview,
   onReviewNote,
+  onOpenDrafts,
   reviewNote,
   reviewing,
   scene,
@@ -1177,6 +1348,7 @@ function DirectorCommandBox({
   onStartOperation: StartVideoOperation
   onReview: (decision: 'accepted' | 'changes_requested') => void
   onReviewNote: (note: string) => void
+  onOpenDrafts?: () => void
   reviewNote: string
   reviewing: 'accepted' | 'changes_requested' | null
   scene?: VideoScene
@@ -1246,9 +1418,12 @@ function DirectorCommandBox({
         </div>
       </div>
       {accepted ? (
-        <p className="mt-2 rounded-lg bg-emerald-500/8 px-3 py-2 text-[0.66rem] text-emerald-700">
-          当前成片已经确认，发布后的数据会回到总工作台。
-        </p>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-500/8 px-3 py-2 text-[0.66rem] text-emerald-700">
+          <p>当前成片已经确认并归入草稿箱；发布准备、审批和失败恢复统一从草稿箱继续。</p>
+          <Button onClick={onOpenDrafts} size="sm" variant="outline">
+            前往草稿箱
+          </Button>
+        </div>
       ) : null}
     </section>
   )
@@ -1261,9 +1436,13 @@ function DirectorInspector({
   assets,
   canvas,
   completed,
+  confirming,
+  generatingVoice,
   onConfirm,
+  onGenerateVoice,
   onTab,
   quality,
+  readiness,
   rendered,
   scene,
   scenePlan,
@@ -1277,9 +1456,13 @@ function DirectorInspector({
   assets: MediaAssetProjection[]
   canvas: CanvasSpec
   completed: boolean
+  confirming: boolean
+  generatingVoice: boolean
   onConfirm: () => void
+  onGenerateVoice: () => void
   onTab: (tab: InspectorTab) => void
   quality?: VideoQualityReport
+  readiness?: VideoRenderReadiness
   rendered: boolean
   scene?: VideoScene
   scenePlan?: { fallback_used?: boolean; renderer?: string }
@@ -1299,7 +1482,11 @@ function DirectorInspector({
   const currentStage = DIRECTOR_STAGES[Math.max(0, activeIndex)]
   const nextStage = DIRECTOR_STAGES[Math.min(DIRECTOR_STAGES.length - 1, Math.max(0, activeIndex) + 1)]
 
-  const confirmLabel = completed
+  const confirmLabel = confirming
+    ? '正在本地渲染…'
+    : activeStage === 'edit' && readiness?.ready === false
+    ? '先补齐真实素材与声音'
+    : completed
     ? accepted
       ? '成片已确认'
       : '确认成片'
@@ -1363,12 +1550,45 @@ function DirectorInspector({
         <section className="mt-4 border-t border-[#ded6c9] pt-3">
           <QualityAssurance rendered={rendered} report={quality} />
         </section>
+
+        {readiness?.ready === false ? (
+          <section className="mt-4 border-t border-[#ded6c9] pt-3">
+            <h3 className="text-xs font-semibold">进入渲染前还缺</h3>
+            <div className="mt-2 space-y-2">
+              {(readiness.blockers || []).map(blocker => (
+                <div
+                  className="rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-[0.64rem] leading-5 text-amber-800"
+                  key={blocker.code || blocker.message}
+                >
+                  {blocker.message || blocker.code}
+                </div>
+              ))}
+            </div>
+            {readiness.voice_required && (readiness.blockers || []).some(item => item.code === 'voiceover_missing') ? (
+              <Button
+                className="mt-2 w-full"
+                disabled={generatingVoice}
+                onClick={onGenerateVoice}
+                size="sm"
+                variant="outline"
+              >
+                {generatingVoice ? <Loader2 className="size-4 animate-spin" /> : <Mic className="size-4" />}
+                {generatingVoice ? '正在生成旁白…' : '确认并生成旁白'}
+              </Button>
+            ) : null}
+          </section>
+        ) : null}
       </div>
 
       <div className="border-t border-[#d8d0c2] bg-[#faf7ef] p-3">
         <Button
           className="h-12 w-full rounded-xl bg-[#f06443] text-sm font-semibold shadow-[0_12px_28px_-18px_rgba(225,83,48,.75)] hover:bg-[#df5838]"
-          disabled={accepted || quality?.disposition === 'reject'}
+          disabled={
+            accepted ||
+            confirming ||
+            quality?.disposition === 'reject' ||
+            (activeStage === 'edit' && readiness?.ready === false)
+          }
           onClick={onConfirm}
         >
           {accepted ? <CheckCircle2 className="mr-2 size-4" /> : <Zap className="mr-2 size-4" />}
