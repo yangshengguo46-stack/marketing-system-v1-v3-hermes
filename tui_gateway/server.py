@@ -13319,6 +13319,195 @@ def _marketing_worker_json(text: str) -> dict[str, Any]:
     return value
 
 
+_MARKETING_DOUBAO_TEXT_ROLES = {
+    "platform_video_showrunner",
+    "platform_video_showrunner_revision",
+    "video_platform_adapter",
+}
+
+
+def _run_marketing_doubao_text_worker(
+    *, role: str, instruction: str, context: dict[str, Any]
+) -> dict[str, Any]:
+    """Run bounded video planning on the configured low-cost vision lane."""
+
+    from agent.auxiliary_client import call_llm, extract_content_or_reasoning
+
+    response = call_llm(
+        task="vision",
+        messages=[{
+            "role": "user",
+            "content": (
+                "You are the Marketing OS visual-production worker. Return one JSON "
+                "object and no markdown. Never invent evidence or claim execution success.\n\n"
+                f"Worker role: {role}\n{instruction}\n\nCanonical input JSON:\n"
+                + json.dumps(context, ensure_ascii=False, sort_keys=True)
+            ),
+        }],
+        temperature=0.15,
+        max_tokens=5000,
+        timeout=240,
+    )
+    return _marketing_worker_json(extract_content_or_reasoning(response))
+
+
+def _run_marketing_doubao_cut_reviewer(
+    *, instruction: str, context: dict[str, Any]
+) -> dict[str, Any]:
+    """Inspect the rendered cut directly with the configured multimodal model."""
+
+    import asyncio
+
+    from tools.vision_tools import video_analyze_tool
+
+    final_path = str(context.get("final_video_path") or "").strip()
+    if not final_path:
+        raise ValueError("video cut reviewer requires final_video_path")
+    prompt_context = {key: value for key, value in context.items() if key != "final_video_path"}
+    prompt = (
+        f"{instruction}\n\nReturn exactly the requested JSON object and no markdown. "
+        "Treat contact sheets as sampled visual evidence and never infer unheard audio.\n\n"
+        "Canonical review context JSON:\n"
+        + json.dumps(prompt_context, ensure_ascii=False, sort_keys=True)
+    )
+    raw = asyncio.run(
+        video_analyze_tool(
+            final_path,
+            prompt,
+            analysis_mode="sampled",
+            max_frames=12,
+        )
+    )
+    envelope = json.loads(raw)
+    if envelope.get("success") is not True:
+        raise RuntimeError(str(envelope.get("error") or "multimodal cut review failed"))
+    return _marketing_worker_json(str(envelope.get("analysis") or ""))
+
+
+def _marketing_visual_source(value: str, media_type: str) -> str:
+    """Convert one bounded local candidate into a vision-safe data URL."""
+
+    import base64
+
+    source = str(value or "").strip()
+    if source.startswith("https://"):
+        return source
+    path = Path(source).expanduser().resolve()
+    if not path.is_file():
+        raise ValueError("material preview is unavailable")
+    if str(media_type or "").strip().lower() == "video":
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("ffmpeg is required to inspect local video material")
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                "0.5",
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale='min(640,iw)':-2",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        payload = result.stdout
+        mime_type = "image/jpeg"
+    else:
+        if path.stat().st_size > 12 * 1024 * 1024:
+            raise ValueError("material preview exceeds the 12 MB visual-review limit")
+        payload = path.read_bytes()
+        mime_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+    if not payload:
+        raise RuntimeError("material preview produced no image bytes")
+    return f"data:{mime_type};base64,{base64.b64encode(payload).decode('ascii')}"
+
+
+def _run_marketing_material_judge(
+    *,
+    shot: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    aspect_ratio: str,
+    task_id: str,
+) -> dict[str, Any]:
+    """Rank at most six candidate thumbnails in one low-cost multimodal call."""
+
+    from agent.auxiliary_client import call_llm, extract_content_or_reasoning
+
+    bounded = list(candidates or [])[:6]
+    if not bounded:
+        raise ValueError("material judge requires candidates")
+    content: list[dict[str, Any]] = [{
+        "type": "text",
+        "text": (
+            "You are the visual director for a faceless short video. Judge only what is "
+            "visibly present in each candidate. Rank every candidate by whether it directly "
+            "communicates this shot's narration/purpose, not merely whether it shares a loose "
+            "keyword. Also choose its composition. full_bleed is allowed only when the source "
+            "aspect and subject safety genuinely support the target canvas; otherwise use "
+            "inset_card or letterbox with contain. Return JSON only: ranked_candidates array of "
+            "{candidate_id,relevance_score (0..1),presentation "
+            "(full_bleed|inset_card|letterbox),fit (cover|contain),subject_anchor "
+            "(center|left|right|top|bottom),reason}. Do not add candidates.\n\n"
+            f"Target aspect ratio: {aspect_ratio}\nShot JSON:\n"
+            + json.dumps(shot, ensure_ascii=False, sort_keys=True)
+        ),
+    }]
+    for candidate in bounded:
+        candidate_id = str(candidate.get("id") or "")
+        content.append({
+            "type": "text",
+            "text": "Candidate metadata:\n" + json.dumps(
+                {
+                    key: value
+                    for key, value in candidate.items()
+                    if key != "preview_url"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        })
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": _marketing_visual_source(
+                    str(candidate.get("preview_url") or ""),
+                    str(candidate.get("media_type") or "image"),
+                ),
+                "detail": "low",
+            },
+        })
+        if not candidate_id:
+            raise ValueError("material candidate has no id")
+    response = call_llm(
+        task="vision",
+        messages=[{"role": "user", "content": content}],
+        temperature=0.1,
+        max_tokens=900,
+        timeout=180,
+    )
+    result = _marketing_worker_json(extract_content_or_reasoning(response))
+    result["budget"] = {
+        "task_id": task_id,
+        "candidate_count": len(bounded),
+        "image_detail": "low",
+        "max_output_tokens": 900,
+    }
+    return result
+
+
 def _run_marketing_creative_worker(
     *,
     role: str,
@@ -13328,6 +13517,18 @@ def _run_marketing_creative_worker(
     toolsets: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Run an isolated Hermes Agent as one bounded Harness Worker role."""
+
+    if role in _MARKETING_DOUBAO_TEXT_ROLES:
+        return _run_marketing_doubao_text_worker(
+            role=role,
+            instruction=instruction,
+            context=context,
+        )
+    if role == "platform_video_cut_reviewer":
+        return _run_marketing_doubao_cut_reviewer(
+            instruction=instruction,
+            context=context,
+        )
 
     sid = f"marketing-worker-{task_id}"
     role_prompt = (
@@ -13473,6 +13674,7 @@ def _ensure_marketing_workflow_dispatcher():
             handlers=build_topic_production_handlers(
                 creative_runner=_run_marketing_creative_worker,
                 media_resolver=_resolve_marketing_media_skill,
+                material_judge=_run_marketing_material_judge,
             ),
             max_concurrency=3,
             lease_seconds=900,
@@ -14560,6 +14762,9 @@ def _(rid, params: dict) -> dict:
     account_id = str(values.get("account_id") or "").strip()
     candidate_id = str(values.get("candidate_id") or "").strip()
     user_id = str(values.get("user_id") or "default").strip() or "default"
+    selected_platforms = values.get("selected_platforms")
+    if selected_platforms is not None and not isinstance(selected_platforms, list):
+        return _err(rid, -32602, "selected_platforms must be an array")
     if not account_id or not candidate_id:
         return _err(rid, -32602, "account_id and candidate_id are required")
     try:
@@ -14568,6 +14773,12 @@ def _(rid, params: dict) -> dict:
             candidate_id=candidate_id,
             user_id=user_id,
             entity_id=str(scope["entity_id"]),
+            selected_platforms=(
+                [str(item) for item in selected_platforms]
+                if isinstance(selected_platforms, list)
+                else None
+            ),
+            explicit_user_override=values.get("explicit_user_override") is True,
         )
         _ensure_marketing_workflow_dispatcher().dispatch_once(
             workflow_id=str(workflow["id"])

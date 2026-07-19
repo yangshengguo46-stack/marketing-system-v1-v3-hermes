@@ -30,6 +30,7 @@
 | New-media operating model | 创作者资产、赛道路线、行为受众、七角色对标图谱、定位、内容系统和可证伪实验进入 Hermes 原生领域 owner；用户只确认自己的身份、偏好、经营方向和外部动作；Gateway 每次模型调用前从原生 owner 重建实时个人 IP 上下文 | automated | 真实赛道研究、对标采集、自然对话真人验收 |
 | Human Observation Core | 已从 Marketing OS 拆成 source-agnostic AGI 研究基础设施；原始观察、时间图谱、版本理论、竞争解释、假设、封存预测、结果和模型修订各有独立 owner；“人不可被还原成标签”是伦理/产品公理，具体存在策略是 `fixed_axiom=false` 的可修订研究 seed；Marketing Receipt 与用户已确认的个人 IP 自述/经营选择通过两个单向连接器进入伪名化观察，后者不自动心理解释 | automated | 合法多源长期样本、代表性/偏差审计、跨语境校准、研究者评审与安全评估 |
 | Agent perception layer | `vision_analyze`、`browser_vision`、`video_analyze` 作为 Marketing Agent 的原生底层感知能力；主业务 toolset、受约束媒体代码 worker、默认委派和文件读取引导均已贯通，视频能力在产品运行时不可被渐进披露隐藏 | automated | 真人长视频、多格式/损坏文件、音频转写联动与跨模型视觉一致性验收 |
+| Video visual direction | 火山 `Seed 2.0 Mini` 作为同一 Agent 内部的低成本视觉 lane，直接负责平台视频方案、素材图像相关性/构图判断与成片抽帧审查；不经 DeepSeek 转发，也不形成第二个 Agent | dev-runtime | 用新视觉门完整重跑十镜头作品、真人审片与真实平台效果校准 |
 | Four knowledge bases | Platform/Market/Account/Content 四库进入 Hermes `state.db`；Cron 静默执行时效淘汰、显式冲突隔离、重复公域样本聚合、Receipt-backed 账号学习和历史回放校准；候选读取/决策 RPC 已从产品面删除，知识写入必须持有系统能力 | automated | 更大规模真实采集、官方平台规则原生刷新源、中央服务真实部署 |
 | Desktop | `apps/desktop` 唯一 UI/Electron；首轮经营、图文和视频动作提交结构化意图后由 Gateway 原子启动 Agent，结果回到原经营对象，不再跳新对话或要求二次发送；一级草稿箱只投影 Hermes 半成品并回到原图文/视频管线 | automated | 开发机真人首半小时、Gateway 重启后的 operation 恢复、草稿箱真人视觉验收、干净机安装 |
 | Session/account scope | SessionDB 新增稳定经营主体 scope；一个 creator/brand 可关联多个平台账号，Agent 读取账号上下文、内容资产和证据时按主体聚合，登录/浏览器/发布仍固定 action account；新会话自动获得稳定 `prospect_*` 作用域；MCP 真实登录验证后原子迁移经营事实 | automated | 真人二维码/验证码校准、多经营主体显式建组/拆组 UI、历史账号误分组审查、successor UI 切换与打包浏览器策略 |
@@ -97,6 +98,17 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 - **成片必须回到总引擎。** Render Receipt 的黑场、冻结、分辨率、音轨和响度 QA 只证明技术可用；`platform_video_cut_reviewer` 必须对真实本地成片调用 `video_analyze`，观察前三秒、镜头/素材答题、字幕、证据、音画、CTA 与 Treatment 一致性。观察结果交给确定性 Cut Preflight；不合格成片明确阻断，不能以“渲染成功”冒充内容合格。
 - **剪辑工具边界。** 已安装的 `video-use` 定位为后续剪辑 executor/方法库，其 audio-first、字幕最后、输出自检和最多三轮修复规则可由未来 `EditorActivity` 消费，但它不负责选题、编导、预演或业务状态。当前仓库没有 OpenCut/Chat Cut 原生接线；Chat Cut 因计费不进入当前方案，OpenCut 只有在出现可验证的本地 adapter 与回执合同后才可接入，不能先写一个假按钮。
 - **当前证据与未完成。** 新 DAG、平台账号绑定、公域冷启动、EvidencePack 冻结、Treatment/Article/Cut Preflight、素材画幅和成片观察已有定向 `36 passed`，全 `tests/marketing` 回归退出码 0，相关 Content/Operating/产品身份/账号上下文回归退出码 0；Python compile、Ruff 和 `git diff --check` 通过。尚未用 v2 合同跑真实模型五平台端到端，也没有自动成片重剪 executor、真人审片、发布与跨天回收，因此证据等级是 `automated`，不得升级成 human-loop。
+
+### PRODUCTION-03 单 Agent 运行时与豆包视觉导演（dev-runtime，2026-07-19）
+
+- **一套 Agent、一套状态根。** Desktop、Gateway、Cron、Harness 与 Marketing 原生能力统一读取 `~/.hermes`；Desktop 旧运行目录只保留指向该根的兼容链接，不再启动或保存第二套 app-scoped Hermes。Marketing 是 Hermes Agent 的原生经营能力和 Durable Workflow，不是与 Hermes 并列的另一个 Agent。旧 Desktop 状态已先备份到 `~/Library/Application Support/marketing-os-desktop/backups/unified-hermes-20260719-224213`，真实 `state.db` 与既有业务对象没有清空。
+- **豆包只接视觉生产窄链。** `doubao-seed-2-0-mini-260428` 接入 Hermes `auxiliary.vision`；平台视频 Showrunner、视频平台适配、逐镜头素材视觉裁判和成片抽帧审查直接调用该 lane，不再先让 DeepSeek 看图或协调一次。DeepSeek 继续承担适合它的通用文本/经营推理；这里没有新增供应商 Agent、数据库或业务 owner。
+- **费用门禁。** 默认固定 Seed 2.0 Mini，不自动升级 Lite/Pro。素材裁判每镜头最多看 6 个候选，图片使用 `detail=low`，单次结果最多 900 output tokens；HTTP 明文预览拒绝送模。按火山当前公开价，Mini 常规在线推理的非音频输入/输出分别为 `¥0.20/¥2.00 每百万 tokens`，而 Lite 为 `¥0.60/¥3.60`；Seed 2.0 图像高细节会固定到 1280 tokens/图，因此生产默认低细节。以 10 镜头、每镜头 6 张候选的上限估算，纯图片输入约 `¥0.015`，再加短 JSON 输出通常仍是几分钱级；任何后续模型升级必须由实际误判样本证明收益后再显式修改。
+- **素材相关性成为硬门，不再按搜索排序盲选。** 每镜头先汇总本地素材库、Wikimedia/Pexels 与本地素材 Skill 候选，再由多模态裁判返回 `relevance_score/reason/recommended_presentation/fit/subject_anchor`；低于 `0.68` 的素材拒绝下载/绑定，全部不合格就明确阻断。下载失败继续下一候选，多样性门仍要求整片至少一半镜头拥有独立素材、单素材最多复用两次。
+- **全屏不再是素材默认值。** `marketing.video.ir.v1` 新增 `full_bleed/inset_card/letterbox`、`contain/cover` 与主体锚点合同；视觉裁判默认推荐 `inset_card + contain`，只有构图证据支持时才允许 full-bleed。Remotion 与 HyperFrames 都消费同一布局字段；Remotion 实渲染的 `/tmp/marketing-os-inset-probe.mp4` 已证明素材以圆角画中画呈现、标题保留独立版面，而不是把任意图片拉伸铺满。
+- **去除演示残留和未经证实内容。** Remotion 删除内部 `purpose` 文本与硬编码 `37/68/92 SIGNAL` 假数据卡，HyperFrames 删除内部 purpose/演示标签；Article/Video 主张如果没有 Evidence 映射即被拒绝，Preflight 只发现一条未核验主张也会阻断，不允许模型把装饰数字或内部编导提示渲进成片。
+- **真实模型与感知证据。** Seed Mini 已对旧失败成片抽帧做在线判断，给出相关性 `0.2` 并指出画面虽出现 DeepSeek/市场信息，却没有回答镜头要求的“人物核验 AI 答案”，证明新门会拒绝昨天那类“能下载但与内容无关”的素材；密钥只在本机 `~/.hermes/.env`，仓库、台账和业务投影均不保存明文。
+- **验证和剩余项。** 当前 Marketing/Gateway 回归拆为三组执行，共 `213 passed, 1 skipped`；跳过项仍是需要显式浏览器可执行文件的高级 renderer 集成。Python compile、Ruff、Desktop TypeScript、Electron 环境 `7/7`、renderer 固定依赖、secret scan 与 `git diff --check` 全部通过；开发应用已重启并保持在 Vite `5174` / Electron CDP `9222`。历史失败成片保持被 Cut Preflight 阻断且不进草稿箱；系统性修复只对新 revision/新 workflow 生效，尚未把旧文件伪装成修复后的成片，也尚未发布或写入跨天指标。
 
 ### HARNESS-00 全项目 Durable Multi-Agent Harness 重构（H1～H4 首条端到端 dev-runtime 已验，2026-07-18）
 

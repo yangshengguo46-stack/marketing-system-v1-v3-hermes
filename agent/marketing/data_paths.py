@@ -29,7 +29,7 @@ class MarketingDataPaths:
         user_data = (
             Path(user_data_value).expanduser()
             if user_data_value
-            else hermes_home.parent
+            else hermes_home
         )
         config_value = str(values.get("MARKETING_OS_CONFIG_DIR") or "").strip()
         db_value = str(values.get("MARKETING_OS_AGENT_DB") or "").strip()

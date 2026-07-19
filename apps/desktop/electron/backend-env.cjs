@@ -74,6 +74,21 @@ function normalizeHermesHomeRoot(hermesHome, { pathModule = pathModuleForPlatfor
   return resolved
 }
 
+function resolveDefaultHermesHome({
+  platform = process.platform,
+  homeDir,
+  localAppData,
+  pathModule = pathModuleForPlatform(platform)
+} = {}) {
+  if (platform === 'win32' && localAppData) {
+    return pathModule.join(localAppData, 'hermes')
+  }
+  if (!homeDir) {
+    throw new Error('homeDir is required to resolve the default Hermes home')
+  }
+  return pathModule.join(homeDir, '.hermes')
+}
+
 function buildDesktopBackendEnv({
   hermesHome,
   pythonPathEntries = [],
@@ -105,5 +120,6 @@ module.exports = {
   buildDesktopBackendPath,
   delimiterForPlatform,
   normalizeHermesHomeRoot,
-  pathEnvKey
+  pathEnvKey,
+  resolveDefaultHermesHome
 }

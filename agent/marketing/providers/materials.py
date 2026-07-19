@@ -247,6 +247,9 @@ class WikimediaCommonsMaterialProvider:
             "gsrlimit": str(limit),
             "prop": "imageinfo",
             "iiprop": "url|mime|size|sha1|extmetadata",
+            # A bounded public thumbnail lets the visual relevance gate inspect
+            # candidates before downloading a potentially large source file.
+            "iiurlwidth": "640",
             "iiextmetadatafilter": (
                 "LicenseShortName|LicenseUrl|Artist|Credit|UsageTerms"
             ),
@@ -349,7 +352,7 @@ class WikimediaCommonsMaterialProvider:
             "provider_asset_id": provider_id,
             "media_type": media_type,
             "source_url": source_url,
-            "preview_url": "",
+            "preview_url": str(info.get("thumburl") or download_url),
             "download_url": download_url,
             "creator": creator[:500],
             "creator_url": source_url,

@@ -11,8 +11,8 @@ from hermes_state import SessionDB
 def test_marketing_paths_default_to_the_hermes_state_owner(tmp_path):
     paths = MarketingDataPaths.from_env({"HERMES_HOME": str(tmp_path / "runtime")})
 
-    assert paths.user_data == tmp_path
-    assert paths.config_dir == tmp_path / "config"
+    assert paths.user_data == tmp_path / "runtime"
+    assert paths.config_dir == tmp_path / "runtime" / "config"
     assert paths.agent_db == tmp_path / "runtime" / "state.db"
 
 

@@ -464,6 +464,13 @@ def build_video_treatment_preflight(
         and _text(item.get("claim"))
         and _claim_refs(item) & evidence_refs
     ]
+    unmapped_claims = [
+        item
+        for item in claim_map
+        if isinstance(item, dict)
+        and _text(item.get("claim"))
+        and not (_claim_refs(item) & evidence_refs)
+    ]
     platform_contract = all(
         _text(treatment.get(field))
         for field in ("aspect_ratio", "pacing", "caption_style", "cta")
@@ -547,6 +554,8 @@ def build_video_treatment_preflight(
         blockers.append("platform_contract_incomplete")
     if evidence_refs and not mapped_claims:
         blockers.append("treatment_claim_evidence_missing")
+    elif unmapped_claims:
+        blockers.append("treatment_contains_unverified_claims")
     if not has_audience:
         warnings.append("personal_model_missing_public_prior_cold_start")
     if profile.get("guidance_status", "").startswith("generic_"):
@@ -595,6 +604,7 @@ def build_video_treatment_preflight(
             "complete_shot_count": len(complete_shots),
             "beat_count": len(beats),
             "mapped_claim_count": len(mapped_claims),
+            "unmapped_claim_count": len(unmapped_claims),
             "target_duration": target_duration,
             "shot_duration": round(shot_duration, 3),
             "duration_alignment": round(duration_alignment, 3),

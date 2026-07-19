@@ -41,6 +41,8 @@ def create_topic_production_workflow(
     candidate_id: str,
     user_id: str,
     entity_id: str,
+    selected_platforms: list[str] | None = None,
+    explicit_user_override: bool = False,
     paths: MarketingDataPaths | None = None,
 ) -> dict[str, Any]:
     """Create one idempotent production DAG from a preflighted candidate."""
@@ -52,7 +54,17 @@ def create_topic_production_workflow(
     )
     if candidate.get("recommendation_eligible") is not True:
         raise ValueError("topic production requires a preflight-approved candidate")
-    brief = _topic_brief(candidate)
+    requested_platforms = [
+        str(item).strip()
+        for item in (selected_platforms or [])
+        if str(item).strip()
+    ]
+    if requested_platforms and not explicit_user_override:
+        raise ValueError("selected platforms require an explicit user override")
+    brief = _topic_brief(
+        candidate,
+        selected_platforms=requested_platforms or None,
+    )
     harness = HarnessRepository((paths or MarketingDataPaths.from_env()).agent_db)
     existing = harness.find_by_source(
         namespace="marketing",
@@ -73,6 +85,8 @@ def create_topic_production_workflow(
         input={
             "contract": TOPIC_PRODUCTION_WORKFLOW_VERSION,
             "account_id": str(candidate.get("account_id") or ""),
+            "selected_platforms": brief["target_platforms"],
+            "explicit_user_platform_override": bool(requested_platforms),
             "topic_brief_ref": {
                 "candidate_id": candidate["id"],
                 "plan_id": candidate["plan_id"],
@@ -95,13 +109,18 @@ def create_topic_production_workflow(
             "material_cost_policy": "zero_cost_only",
             "publish_requires_effect_approval": True,
             "unknown_platform_requires_research": True,
+            "explicit_user_platform_override": bool(requested_platforms),
         },
         steps=_steps(brief),
         actor="marketing.topic-production",
     )
 
 
-def _topic_brief(candidate: dict[str, Any]) -> dict[str, Any]:
+def _topic_brief(
+    candidate: dict[str, Any],
+    *,
+    selected_platforms: list[str] | None = None,
+) -> dict[str, Any]:
     nested = candidate.get("candidate") if isinstance(candidate.get("candidate"), dict) else {}
     candidate_platforms = [str(item) for item in candidate.get("target_platforms") or []]
     recommended_platforms = [
@@ -112,7 +131,17 @@ def _topic_brief(candidate: dict[str, Any]) -> dict[str, Any]:
     # A recommendation is an immutable production order, not permission to
     # manufacture every platform that was merely evaluated.  Older candidates
     # without the v2 field keep their historical target set.
-    platforms = recommended_platforms or candidate_platforms
+    if selected_platforms:
+        requested = list(dict.fromkeys(str(item) for item in selected_platforms))
+        unsupported = [item for item in requested if item not in candidate_platforms]
+        if unsupported:
+            raise ValueError(
+                "selected platforms were not evaluated by the topic preflight: "
+                + ", ".join(unsupported)
+            )
+        platforms = requested
+    else:
+        platforms = recommended_platforms or candidate_platforms
     blueprints = nested.get("platform_blueprints")
     if not isinstance(blueprints, dict):
         blueprints = {}
@@ -167,7 +196,9 @@ def _topic_brief(candidate: dict[str, Any]) -> dict[str, Any]:
         "signal_refs": list(candidate.get("signal_refs") or []),
         "target_platforms": platforms,
         "evaluated_platforms": candidate_platforms,
-        "recommended_platforms": platforms,
+        "recommended_platforms": recommended_platforms or candidate_platforms,
+        "selected_platforms": platforms,
+        "explicit_user_platform_override": bool(selected_platforms),
         "platform_targets": platform_targets,
         "recommendation_type": str(nested.get("recommendation_type") or "general"),
         "platform_matches": list(nested.get("platform_matches") or []),

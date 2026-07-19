@@ -13,7 +13,12 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from agent.harness import PermanentStepError, StepExecutionContext, StepResult
+from agent.harness import (
+    PermanentStepError,
+    RetryableStepError,
+    StepExecutionContext,
+    StepResult,
+)
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.account_context import AccountContextRepository
 from agent.marketing.domains.content_assets import ContentAssetRepository
@@ -57,6 +62,19 @@ class MediaResolver(Protocol):
 
     def __call__(
         self, *, intent: str, media_type: str, task_id: str
+    ) -> dict[str, Any]: ...
+
+
+class MaterialJudge(Protocol):
+    """Use one bounded visual model call to rank candidate materials for a shot."""
+
+    def __call__(
+        self,
+        *,
+        shot: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        aspect_ratio: str,
+        task_id: str,
     ) -> dict[str, Any]: ...
 
 
@@ -107,11 +125,13 @@ class TopicProductionWorkers:
         *,
         creative_runner: CreativeRunner,
         media_resolver: MediaResolver,
+        material_judge: MaterialJudge | None = None,
         paths: MarketingDataPaths | None = None,
     ) -> None:
         self.paths = paths or MarketingDataPaths.from_env()
         self.creative = creative_runner
         self.resolve_media = media_resolver
+        self.judge_material = material_judge
         self.content = ContentAssetRepository(self.paths)
         self.topics = TopicRecommendationRepository(self.paths)
         self.loop = OperatingLoopRepository(self.paths)
@@ -150,7 +170,17 @@ class TopicProductionWorkers:
             user_id=user_id,
             entity_id=entity_id,
         )
-        brief = _topic_brief(candidate)
+        workflow_input = workflow.get("input") or {}
+        selected_platforms = workflow_input.get("selected_platforms")
+        brief = _topic_brief(
+            candidate,
+            selected_platforms=(
+                [str(item) for item in selected_platforms]
+                if workflow_input.get("explicit_user_platform_override") is True
+                and isinstance(selected_platforms, list)
+                else None
+            ),
+        )
         if str(candidate.get("account_id") or "") != account_id:
             raise PermanentStepError("topic candidate is outside the workflow account scope")
         origin_preflight = self.loop.get_preflight(str(brief["preflight_id"]))
@@ -325,11 +355,17 @@ class TopicProductionWorkers:
                     "production_target": production_target,
                 },
             )
-            article = _normalize_article_deliverable(
-                result,
-                platform=platform,
-                allowed_evidence_refs=set(brief["evidence_refs"]),
-            )
+            try:
+                article = _normalize_article_deliverable(
+                    result,
+                    platform=platform,
+                    allowed_evidence_refs=set(brief["evidence_refs"]),
+                )
+            except PermanentStepError as exc:
+                # A malformed creative response is not a permanent domain
+                # failure. Preserve the failed attempt and let Harness ask the
+                # bounded writer again without rebuilding the work order.
+                raise RetryableStepError(str(exc)) from exc
             return StepResult(output={"platform": platform, "article": article})
 
         # Compatibility for durable v1 workflows.
@@ -451,11 +487,14 @@ class TopicProductionWorkers:
                         "preflight_findings": _bounded_preflight_projection(evaluated),
                     },
                 )
-                article = _normalize_article_deliverable(
-                    revised,
-                    platform=platform,
-                    allowed_evidence_refs=set(brief["evidence_refs"]),
-                )
+                try:
+                    article = _normalize_article_deliverable(
+                        revised,
+                        platform=platform,
+                        allowed_evidence_refs=set(brief["evidence_refs"]),
+                    )
+                except PermanentStepError as exc:
+                    raise RetryableStepError(str(exc)) from exc
             approved = evaluations[-1]
             asset = self.content.create_draft(
                 user_id=user_id,
@@ -600,11 +639,17 @@ class TopicProductionWorkers:
                 "production_target": production_target,
             },
         )
-        treatment = _normalize_video_treatment(
-            result,
-            platform=platform,
-            allowed_evidence_refs=set(brief["evidence_refs"]),
-        )
+        try:
+            treatment = _normalize_video_treatment(
+                result,
+                platform=platform,
+                allowed_evidence_refs=set(brief["evidence_refs"]),
+            )
+        except PermanentStepError as exc:
+            # JSON can be syntactically valid while missing one semantic field.
+            # That is a retryable model-contract miss, not a terminal workflow
+            # failure. Native evidence/preflight owners still fail closed.
+            raise RetryableStepError(str(exc)) from exc
         return StepResult(
             output={
                 "platform": platform,
@@ -722,11 +767,14 @@ class TopicProductionWorkers:
                     "preflight_findings": _bounded_preflight_projection(evaluated),
                 },
             )
-            treatment = _normalize_video_treatment(
-                revised,
-                platform=platform,
-                allowed_evidence_refs=set(brief["evidence_refs"]),
-            )
+            try:
+                treatment = _normalize_video_treatment(
+                    revised,
+                    platform=platform,
+                    allowed_evidence_refs=set(brief["evidence_refs"]),
+                )
+            except PermanentStepError as exc:
+                raise RetryableStepError(str(exc)) from exc
         final = evaluations[-1]
         raise PermanentStepError(
             "video treatment failed preflight after two revisions: "
@@ -746,6 +794,8 @@ class TopicProductionWorkers:
         asset_use_counts: dict[str, int] = {}
         used_provider_assets: set[tuple[str, str]] = set()
         skill_resolutions: list[dict[str, Any]] = []
+        material_reviews: list[dict[str, Any]] = []
+        visual_layouts: dict[str, dict[str, str]] = {}
         resolver_errors: list[str] = []
         unresolved: list[str] = []
         distinct_target = max(1, (len(direction["shot_list"]) + 1) // 2)
@@ -764,12 +814,17 @@ class TopicProductionWorkers:
                     query=query,
                     role="broll",
                     orientation=orientation,
-                    media_type=str(shot.get("media_type") or "either"),
+                    # The showrunner's media_type is a preference, not a hard
+                    # rights/source constraint. A relevant licensed still is a
+                    # valid fallback for a motion-composed shot when no clip is
+                    # available, and avoids hammering providers with a second
+                    # search for the same concept.
+                    media_type="either",
                     target_duration=float(shot["duration"]),
                     limit=8,
                     request_ref=(
-                        f"{context.workflow['id']}:video-v4:{platform or 'legacy'}:"
-                        f"{shot['id']}:{query_index}"
+                        f"{context.workflow['id']}:video-v5:{platform or 'legacy'}:"
+                        f"{shot['id']}:{query_index}:{context.attempt_id}"
                     ),
                 )
                 search_attempts.append(search)
@@ -781,12 +836,73 @@ class TopicProductionWorkers:
                     if all(source_key):
                         candidates_by_source.setdefault(source_key, candidate)
             candidates = list(candidates_by_source.values())
+            judge = getattr(self, "judge_material", None)
+            review_by_id: dict[str, dict[str, Any]] = {}
+            reviewed_candidates: list[dict[str, Any]] | None = None
+            reviewable = [
+                item
+                for item in sorted(
+                    candidates,
+                    key=lambda candidate: -float(candidate.get("score") or 0),
+                )
+                if str(item.get("preview_url") or "").strip()
+                and (
+                    item.get("provider") == "user_library"
+                    or (
+                        item.get("license_name")
+                        and item.get("license_url")
+                        and item.get("source_url")
+                    )
+                )
+            ][:6]
+            if judge is not None and reviewable:
+                try:
+                    review = _normalize_material_judgment(
+                        judge(
+                            shot=shot,
+                            candidates=[
+                                _material_candidate_projection(item)
+                                for item in reviewable
+                            ],
+                            aspect_ratio=str(direction.get("aspect_ratio") or "9:16"),
+                            task_id=context.attempt_id,
+                        ),
+                        allowed_candidate_ids={str(item["id"]) for item in reviewable},
+                    )
+                except Exception as exc:
+                    raise RetryableStepError(
+                        f"visual material judge failed for {shot['id']}: {exc}",
+                        delay_seconds=1,
+                    ) from exc
+                material_reviews.append({"shot_id": shot["id"], **review})
+                review_by_id = {
+                    str(item["candidate_id"]): item
+                    for item in review["ranked_candidates"]
+                }
+                reviewed_candidates = [
+                    next(
+                        item
+                        for item in reviewable
+                        if str(item["id"]) == candidate_id
+                    )
+                    for candidate_id in review["accepted_candidate_ids"]
+                ]
+            elif judge is not None:
+                reviewed_candidates = []
+                resolver_errors.append(
+                    f"{shot['id']}: no previewable candidate reached the visual relevance gate"
+                )
+
+            selection_pool = candidates if reviewed_candidates is None else reviewed_candidates
             owned = next(
                 (
-                    item
-                    for source_key, item in candidates_by_source.items()
+                    item for item in selection_pool
                     if item.get("provider") == "user_library"
-                    and source_key not in used_provider_assets
+                    and (
+                        str(item.get("provider") or ""),
+                        str(item.get("provider_asset_id") or item.get("id") or ""),
+                    )
+                    not in used_provider_assets
                 ),
                 None,
             )
@@ -804,6 +920,9 @@ class TopicProductionWorkers:
                 used_provider_assets.add(
                     (str(owned.get("provider") or ""), str(owned.get("provider_asset_id") or owned["id"]))
                 )
+                visual_layouts[str(shot["id"])] = _review_layout(
+                    review_by_id.get(str(owned["id"]))
+                )
             # Official/search providers are the second tier. Their candidate
             # records already carry a durable source URL, creator and licence
             # URL. For a reversible local preview the workflow may freeze the
@@ -811,9 +930,13 @@ class TopicProductionWorkers:
             # gate for people/property/trademark context.
             licensed_candidates = [
                 item
-                for source_key, item in candidates_by_source.items()
+                for item in selection_pool
                 if item.get("provider") != "user_library"
-                and source_key not in used_provider_assets
+                and (
+                    str(item.get("provider") or ""),
+                    str(item.get("provider_asset_id") or item.get("id") or ""),
+                )
+                not in used_provider_assets
                 and item.get("license_name")
                 and item.get("license_url")
                 and item.get("source_url")
@@ -843,17 +966,31 @@ class TopicProductionWorkers:
                         str(licensed.get("provider_asset_id") or licensed["id"]),
                     )
                 )
+                visual_layouts[str(shot["id"])] = _review_layout(
+                    review_by_id.get(str(licensed["id"]))
+                )
             if str(shot["id"]) not in selected:
                 try:
-                    resolved = self.resolve_media(
-                        intent=str(shot["visual_query"]),
-                        media_type=(
-                            "image"
-                            if str(shot.get("media_type") or "either") == "image"
-                            else "video"
-                        ),
-                        task_id=context.attempt_id,
+                    requested_media_type = str(shot.get("media_type") or "either")
+                    resolve_types = (
+                        ["image"]
+                        if requested_media_type == "image"
+                        else ["video", "image"]
                     )
+                    resolved: dict[str, Any] | None = None
+                    resolution_failures: list[str] = []
+                    for resolve_type in resolve_types:
+                        try:
+                            resolved = self.resolve_media(
+                                intent=str(shot["visual_query"]),
+                                media_type=resolve_type,
+                                task_id=context.attempt_id,
+                            )
+                            break
+                        except Exception as exc:
+                            resolution_failures.append(f"{resolve_type}: {exc}")
+                    if resolved is None:
+                        raise RuntimeError("; ".join(resolution_failures))
                     source = str(resolved.get("_source") or "")
                     if source == "generated":
                         raise RuntimeError(
@@ -872,6 +1009,38 @@ class TopicProductionWorkers:
                     resolved_media_type = (
                         "image" if resolved_mime.startswith("image/") else "video"
                     )
+                    resolved_review: dict[str, Any] | None = None
+                    if judge is not None:
+                        resolved_candidate_id = f"skill:{shot['id']}"
+                        resolved_review = _normalize_material_judgment(
+                            judge(
+                                shot=shot,
+                                candidates=[{
+                                    "id": resolved_candidate_id,
+                                    "provider": f"skill:{provider}",
+                                    "media_type": resolved_media_type,
+                                    "preview_url": str(resolved_path),
+                                    "source_url": str(provenance.get("source_url") or ""),
+                                    "width": 0,
+                                    "height": 0,
+                                    "description": str(
+                                        resolved.get("description") or shot["visual_query"]
+                                    )[:500],
+                                }],
+                                aspect_ratio=str(direction.get("aspect_ratio") or "9:16"),
+                                task_id=context.attempt_id,
+                            ),
+                            allowed_candidate_ids={resolved_candidate_id},
+                        )
+                        material_reviews.append({
+                            "shot_id": shot["id"],
+                            "source": "media_skill",
+                            **resolved_review,
+                        })
+                        if not resolved_review["accepted_candidate_ids"]:
+                            raise RuntimeError(
+                                "media skill result failed visual relevance gate"
+                            )
                     asset = self.media.import_generated_file(
                         user_id=user_id,
                         account_id=account_id,
@@ -918,6 +1087,13 @@ class TopicProductionWorkers:
                         )
                     else:
                         selected[str(shot["id"])] = asset_id
+                        visual_layouts[str(shot["id"])] = _review_layout(
+                            (
+                                resolved_review["ranked_candidates"][0]
+                                if resolved_review is not None
+                                else None
+                            )
+                        )
                         reusable_assets.append(asset_id)
                         asset_use_counts[asset_id] = 1
                         skill_resolutions.append({
@@ -952,6 +1128,7 @@ class TopicProductionWorkers:
                     break
                 asset_id = min(available, key=lambda item: asset_use_counts.get(item, 0))
                 selected[shot_id] = asset_id
+                visual_layouts[shot_id] = _review_layout(None)
                 asset_use_counts[asset_id] = asset_use_counts.get(asset_id, 0) + 1
                 next(
                     item.update({"selected_asset_id": asset_id, "reused": True})
@@ -964,16 +1141,34 @@ class TopicProductionWorkers:
             if str(shot["id"]) not in selected
         ]
         if missing:
-            raise PermanentStepError(
+            message = (
                 "material diversity gate blocked rendering; "
                 f"required_unique={distinct_target}; resolved_unique={len(reusable_assets)}; "
                 f"missing={missing}; errors={resolver_errors}"
             )
+            transient_markers = (
+                "429",
+                "timed out",
+                "timeout",
+                "handshake",
+                "temporarily",
+                "connection reset",
+                "remote disconnected",
+            )
+            if any(
+                marker in str(error).lower()
+                for error in resolver_errors
+                for marker in transient_markers
+            ):
+                raise RetryableStepError(message, delay_seconds=2)
+            raise PermanentStepError(message)
         return StepResult(
             output={
                 "platform": platform or None,
                 "searches": searches,
                 "selected_assets": selected,
+                "visual_layouts": visual_layouts,
+                "material_reviews": material_reviews,
                 "diversity": {
                     "minimum_unique_assets": distinct_target,
                     "unique_assets": len(reusable_assets),
@@ -1031,11 +1226,18 @@ class TopicProductionWorkers:
                 approval_ref="user-config:marketing.video.auto_voiceover",
                 confirmed_by_user=True,
             )
-            job = self.audio.execute(
-                job_id=str(job["id"]),
-                user_id=user_id,
-                account_id=account_id,
-            )
+            try:
+                job = self.audio.execute(
+                    job_id=str(job["id"]),
+                    user_id=user_id,
+                    account_id=account_id,
+                )
+            except (OSError, RuntimeError) as exc:
+                # Cloud TTS may end a chunked response before its terminal
+                # event. The audio repository already records the provider
+                # failure and resets the same idempotent job on approval; ask
+                # Harness to retry that job instead of terminating the video.
+                raise RetryableStepError(str(exc), delay_seconds=1) from exc
         voice_asset_id = str(job.get("output_asset_id") or "").strip() or None
         artifacts = [_artifact("audio_job", "marketing_audio_job", job["id"])]
         if voice_asset_id:
@@ -1110,6 +1312,7 @@ class TopicProductionWorkers:
         video_ir = _video_ir(
             treatment=direction,
             visual_asset_ids=visuals,
+            visual_layouts=dict(materials.get("visual_layouts") or {}),
             voice_asset_id=audio["render_voice_asset_id"],
         )
         production = self.video.prepare(
@@ -1210,8 +1413,8 @@ class TopicProductionWorkers:
             context,
             role="platform_video_cut_reviewer",
             instruction=(
-                "You are the cut reviewer, not the renderer and not the showrunner. You MUST call "
-                "video_analyze on final_video_path and judge the observed cut itself; do not infer "
+                "You are the cut reviewer, not the renderer and not the showrunner. Judge the "
+                "observed sampled frames of the final cut itself; do not infer "
                 "success from filenames, treatment JSON, or render receipts. Check the first three "
                 "seconds, representative middle transitions, captions, material relevance, ending "
                 "CTA, and audio when the analysis evidence includes audio. Return JSON only with "
@@ -1553,11 +1756,13 @@ def build_topic_production_handlers(
     *,
     creative_runner: CreativeRunner,
     media_resolver: MediaResolver,
+    material_judge: MaterialJudge | None = None,
     paths: MarketingDataPaths | None = None,
 ) -> dict[str, Callable[[StepExecutionContext], StepResult]]:
     return TopicProductionWorkers(
         creative_runner=creative_runner,
         media_resolver=media_resolver,
+        material_judge=material_judge,
         paths=paths,
     ).handlers()
 
@@ -1642,6 +1847,10 @@ def _normalize_article_deliverable(
         if not isinstance(raw, dict):
             raise PermanentStepError("article claim evidence mapping must be an object")
         refs = _evidence_refs(raw.get("evidence_refs") or raw.get("evidence_ref"))
+        if not refs:
+            raise PermanentStepError(
+                "every article claim must reference verified TopicBrief evidence"
+            )
         unknown = sorted(set(refs) - allowed_evidence_refs)
         if unknown:
             raise PermanentStepError(
@@ -1724,7 +1933,13 @@ def _normalize_video_treatment(
             {
                 "id": str(beat.get("id") or f"beat_{index + 1:02d}")[:120],
                 "purpose": _required_text(
-                    beat.get("purpose") or beat.get("summary") or beat.get("beat"),
+                    beat.get("purpose")
+                    or beat.get("summary")
+                    or beat.get("description")
+                    or beat.get("title")
+                    or beat.get("beat")
+                    or beat.get("step")
+                    or beat.get("phase"),
                     "beat purpose",
                 )[:1000],
                 "payoff": str(beat.get("payoff") or "").strip()[:1000],
@@ -1740,6 +1955,10 @@ def _normalize_video_treatment(
         if not isinstance(raw, dict):
             raise PermanentStepError("claim evidence mapping must be an object")
         refs = _evidence_refs(raw.get("evidence_refs") or raw.get("evidence_ref"))
+        if not refs:
+            raise PermanentStepError(
+                "every video treatment claim must reference verified TopicBrief evidence"
+            )
         unknown = sorted(set(refs) - allowed_evidence_refs)
         if unknown:
             raise PermanentStepError(
@@ -1812,6 +2031,11 @@ def _normalize_shot(
     except (TypeError, ValueError) as exc:
         raise PermanentStepError("video shot duration is invalid") from exc
     motion = value.get("motion_intent") or ["kinetic_typography"]
+    if isinstance(motion, str):
+        # A one-item enum array is often collapsed to the enum string by a
+        # creative model. The semantic value is unambiguous, so canonicalize it
+        # instead of wasting a durable workflow attempt.
+        motion = [motion]
     if not isinstance(motion, list):
         raise PermanentStepError("video shot motion_intent must be an array")
     allowed = {
@@ -1849,10 +2073,116 @@ def _normalize_shot(
     }
 
 
+_MATERIAL_PRESENTATIONS = {"full_bleed", "inset_card", "letterbox"}
+_MATERIAL_ANCHORS = {"center", "left", "right", "top", "bottom"}
+
+
+def _material_candidate_projection(value: dict[str, Any]) -> dict[str, Any]:
+    """Expose only visual/ranking inputs; never leak provider download details."""
+
+    metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+    return {
+        "id": str(value.get("id") or ""),
+        "provider": str(value.get("provider") or ""),
+        "media_type": str(value.get("media_type") or ""),
+        "preview_url": str(value.get("preview_url") or ""),
+        "source_url": str(value.get("source_url") or ""),
+        "width": int(value.get("width") or 0),
+        "height": int(value.get("height") or 0),
+        "duration": float(value.get("duration") or 0),
+        "description": str(
+            metadata.get("title") or metadata.get("asset_name") or ""
+        )[:500],
+    }
+
+
+def _normalize_material_judgment(
+    value: Any,
+    *,
+    allowed_candidate_ids: set[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise PermanentStepError("visual material judge must return an object")
+    raw_rankings = value.get("ranked_candidates")
+    if not isinstance(raw_rankings, list) or not raw_rankings:
+        raise PermanentStepError("visual material judge returned no candidate rankings")
+    rankings: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_rankings[:6]:
+        if not isinstance(raw, dict):
+            continue
+        candidate_id = str(raw.get("candidate_id") or raw.get("id") or "").strip()
+        if candidate_id not in allowed_candidate_ids or candidate_id in seen:
+            continue
+        try:
+            score = float(raw.get("relevance_score"))
+        except (TypeError, ValueError):
+            score = 0.0
+        if score > 1:
+            score /= 10
+        score = max(0.0, min(score, 1.0))
+        presentation = str(raw.get("presentation") or "inset_card").strip().lower()
+        if presentation not in _MATERIAL_PRESENTATIONS:
+            presentation = "inset_card"
+        fit = str(raw.get("fit") or "contain").strip().lower()
+        if fit not in {"cover", "contain"}:
+            fit = "contain"
+        if presentation != "full_bleed":
+            fit = "contain"
+        anchor = str(raw.get("subject_anchor") or "center").strip().lower()
+        if anchor not in _MATERIAL_ANCHORS:
+            anchor = "center"
+        rankings.append({
+            "candidate_id": candidate_id,
+            "relevance_score": round(score, 4),
+            "presentation": presentation,
+            "fit": fit,
+            "subject_anchor": anchor,
+            "reason": str(raw.get("reason") or "").strip()[:800],
+        })
+        seen.add(candidate_id)
+    if not rankings:
+        raise PermanentStepError("visual material judge ranked no known candidate")
+    rankings.sort(key=lambda item: -float(item["relevance_score"]))
+    accepted = [
+        str(item["candidate_id"])
+        for item in rankings
+        if float(item["relevance_score"]) >= 0.68
+    ]
+    raw_budget = value.get("budget") if isinstance(value.get("budget"), dict) else {}
+    return {
+        "model_lane": "auxiliary.vision",
+        "candidate_budget": min(len(allowed_candidate_ids), 6),
+        "billing_guard": {
+            "candidate_count": min(int(raw_budget.get("candidate_count") or len(rankings)), 6),
+            "image_detail": "low",
+            "max_output_tokens": min(int(raw_budget.get("max_output_tokens") or 900), 900),
+        },
+        "acceptance_threshold": 0.68,
+        "accepted_candidate_ids": accepted,
+        "ranked_candidates": rankings,
+    }
+
+
+def _review_layout(value: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {
+            "presentation": "inset_card",
+            "fit": "contain",
+            "subject_anchor": "center",
+        }
+    return {
+        "presentation": str(value.get("presentation") or "inset_card"),
+        "fit": str(value.get("fit") or "contain"),
+        "subject_anchor": str(value.get("subject_anchor") or "center"),
+    }
+
+
 def _video_ir(
     *,
     treatment: dict[str, Any],
     visual_asset_ids: dict[str, str],
+    visual_layouts: dict[str, dict[str, str]] | None = None,
     voice_asset_id: str | None = None,
 ) -> dict[str, Any]:
     aspect = str(treatment.get("aspect_ratio") or "9:16")
@@ -1864,11 +2194,13 @@ def _video_ir(
     scenes = []
     captions = []
     cursor = 0.0
+    layouts = visual_layouts or {}
     for shot in treatment["shot_list"]:
         duration = float(shot["duration"])
         preference = str(shot.get("preferred_renderer") or "auto")
         if preference not in {"auto", "remotion", "hyperframes"}:
             preference = "auto"
+        layout = _review_layout(layouts.get(str(shot["id"])))
         scenes.append({
             "id": shot["id"],
             "duration": duration,
@@ -1876,7 +2208,9 @@ def _video_ir(
             "visuals": [{
                 "media_asset_id": visual_asset_ids[shot["id"]],
                 "source_in": 0,
-                "fit": "cover",
+                "fit": layout["fit"],
+                "presentation": layout["presentation"],
+                "subject_anchor": layout["subject_anchor"],
             }],
             "text": [{
                 "text": shot["on_screen_text"],

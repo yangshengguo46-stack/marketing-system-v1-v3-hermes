@@ -118,6 +118,64 @@ def test_platform_targets_bind_real_account_and_label_public_prior_fallback():
     assert targets["youtube"]["personalization_available"] is False
 
 
+def test_platform_fit_drops_citations_outside_candidate_evidence_pack():
+    hypotheses = daily._platform_fit_hypotheses(
+        [
+            {
+                "platform": "douyin",
+                "match_score": 91,
+                "rationale": "争议性结论适合短视频开场",
+                "evidence_refs": [
+                    "evidence_1111111111111111111111111111",
+                    "evidence_2222222222222222222222222222",
+                ],
+            }
+        ],
+        evidence_refs=["evidence_1111111111111111111111111111"],
+    )
+
+    assert hypotheses["douyin"]["evidence_refs"] == [
+        "evidence_1111111111111111111111111111"
+    ]
+    assert hypotheses["douyin"]["dropped_evidence_refs"] == [
+        "evidence_2222222222222222222222222222"
+    ]
+
+
+def test_candidate_citation_typo_binds_to_current_session_evidence_pack(
+    tmp_path, monkeypatch
+):
+    paths = _paths(tmp_path, monkeypatch)
+    captured = EvidenceRepository(paths).capture_web_extract_result(
+        user_id="default",
+        account_id="acct-main",
+        session_id="cron-fresh",
+        result={
+            "results": [
+                {
+                    "url": "https://example.com/current-signal",
+                    "title": "今日信号",
+                    "content": "这是本轮真实抓取并固化的候选证据。",
+                }
+            ]
+        },
+    )
+
+    resolution = daily._resolve_candidate_evidence(
+        paths=paths,
+        user_id="default",
+        account_ids=["acct-main"],
+        evidence_ids=["evidence_aaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        session_id="cron-fresh",
+    )
+
+    assert [item["id"] for item in resolution["records"]] == [captured[0]["id"]]
+    assert resolution["warnings"] == [
+        "rejected_unverified_evidence_ref:evidence_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "candidate_bound_to_current_session_evidence_pack",
+    ]
+
+
 def test_daily_batch_delivers_only_preflight_go_candidates_and_is_idempotent(
     tmp_path, monkeypatch
 ):

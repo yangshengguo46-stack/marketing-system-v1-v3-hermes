@@ -1,6 +1,37 @@
 from __future__ import annotations
 
 
+def test_video_creative_roles_route_to_doubao_without_constructing_deepseek_agent(
+    monkeypatch,
+):
+    from tui_gateway import server
+
+    calls = []
+
+    def fake_visual_worker(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_run_marketing_doubao_text_worker", fake_visual_worker)
+    monkeypatch.setattr(
+        server,
+        "_make_agent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("video planning must not construct the DeepSeek agent")
+        ),
+    )
+
+    result = server._run_marketing_creative_worker(
+        role="platform_video_showrunner",
+        instruction="plan the cut",
+        context={"topic": "AI"},
+        task_id="attempt-1",
+    )
+
+    assert result == {"ok": True}
+    assert calls[0]["role"] == "platform_video_showrunner"
+
+
 def test_marketing_workflow_rpc_reads_events_and_enforces_owner(tmp_path, monkeypatch):
     from agent.harness import HarnessRepository
     from tui_gateway import server

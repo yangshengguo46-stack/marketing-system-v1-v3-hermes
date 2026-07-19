@@ -8,8 +8,25 @@ const {
   buildDesktopBackendEnv,
   buildDesktopBackendPath,
   normalizeHermesHomeRoot,
-  pathEnvKey
+  pathEnvKey,
+  resolveDefaultHermesHome
 } = require('./backend-env.cjs')
+
+test('Desktop and CLI resolve the same default Hermes home', () => {
+  assert.equal(
+    resolveDefaultHermesHome({ platform: 'darwin', homeDir: '/Users/test', pathModule: path.posix }),
+    '/Users/test/.hermes'
+  )
+  assert.equal(
+    resolveDefaultHermesHome({
+      platform: 'win32',
+      homeDir: 'C:\\Users\\test',
+      localAppData: 'C:\\Users\\test\\AppData\\Local',
+      pathModule: path.win32
+    }),
+    'C:\\Users\\test\\AppData\\Local\\hermes'
+  )
+})
 
 test('desktop backend PATH adds Hermes-managed bins and missing POSIX sane entries', () => {
   const result = buildDesktopBackendPath({

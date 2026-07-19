@@ -239,6 +239,52 @@ def test_general_preflight_missing_private_audience_is_warning_not_brain_death()
     assert "public_prior_exploratory_draft_only" in result["decision"]["warnings"]
 
 
+def test_video_treatment_preflight_blocks_even_one_unverified_claim():
+    treatment = {
+        "platform": "douyin",
+        "hook": "模型越强越要核验",
+        "hook_hypothesis": {"first_three_seconds": "模型越强，你越危险"},
+        "aspect_ratio": "9:16",
+        "target_duration": 6,
+        "pacing": "快",
+        "caption_style": "大字",
+        "cta": "评论",
+        "voiceover_script": "先核验证据。",
+        "beat_sheet": [{"purpose": "hook"}],
+        "claim_evidence_map": [
+            {"claim": "模型已发布", "evidence_refs": ["evidence-1"]},
+            {"claim": "60% 的人被误导", "evidence_refs": []},
+        ],
+        "shot_list": [
+            {
+                "duration": 3,
+                "purpose": "hook",
+                "visual_query": "AI release screen",
+                "on_screen_text": "模型发布",
+            },
+            {
+                "duration": 3,
+                "purpose": "close",
+                "visual_query": "person fact checking",
+                "on_screen_text": "先核验",
+            },
+        ],
+    }
+
+    result = build_video_treatment_preflight({
+        "platform": "douyin",
+        "treatment": treatment,
+        "evidence_refs": ["evidence-1"],
+        "knowledge_context": {"platform": [{}], "market": [{}], "content": [{}]},
+        "account_context": {},
+    })
+
+    assert result["preflight_decision"]["go"] is False
+    assert "treatment_contains_unverified_claims" in result[
+        "preflight_decision"
+    ]["blockers"]
+    assert result["treatment_features"]["unmapped_claim_count"] == 1
+
 def test_cut_preflight_requires_observed_hook_material_audio_and_treatment_parity():
     review = {
         "playable": True,

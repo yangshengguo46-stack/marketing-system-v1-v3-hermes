@@ -330,6 +330,8 @@ class VideoRendererRuntime:
                 "mediaType": asset["media_type"],
                 "sourceIn": visual["source_in"],
                 "fit": visual["fit"],
+                "presentation": visual["presentation"],
+                "subjectAnchor": visual["subject_anchor"],
             })
         spec = {
             "canvas": canvas,

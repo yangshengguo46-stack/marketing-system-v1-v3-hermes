@@ -59,6 +59,8 @@ _REMOTION_HINTS = {
     "brand_layout",
     "static_text",
 }
+_VISUAL_PRESENTATIONS = {"full_bleed", "inset_card", "letterbox"}
+_SUBJECT_ANCHORS = {"center", "left", "right", "top", "bottom"}
 
 
 def _canonical_json(value: Any) -> str:
@@ -168,6 +170,18 @@ def _normalize_scene(scene: Any, index: int) -> dict[str, Any]:
         fit = str(visual.get("fit") or "cover").strip().lower()
         if fit not in {"cover", "contain"}:
             raise ValueError("scene visual fit must be cover or contain")
+        presentation = str(
+            visual.get("presentation") or "full_bleed"
+        ).strip().lower()
+        if presentation not in _VISUAL_PRESENTATIONS:
+            raise ValueError("scene visual presentation is unsupported")
+        if presentation != "full_bleed" and fit != "contain":
+            raise ValueError("non-full-bleed visuals must use contain fit")
+        subject_anchor = str(
+            visual.get("subject_anchor") or "center"
+        ).strip().lower()
+        if subject_anchor not in _SUBJECT_ANCHORS:
+            raise ValueError("scene visual subject_anchor is unsupported")
         normalized_visuals.append({
             "media_asset_id": _text(
                 visual.get("media_asset_id"),
@@ -185,6 +199,8 @@ def _normalize_scene(scene: Any, index: int) -> dict[str, Any]:
                 3,
             ),
             "fit": fit,
+            "presentation": presentation,
+            "subject_anchor": subject_anchor,
         })
 
     text_layers = scene.get("text") or []
@@ -244,6 +260,10 @@ def _normalize_scene(scene: Any, index: int) -> dict[str, Any]:
         capabilities.update(_MOTION_CAPABILITIES[item])
     if len(normalized_visuals) > 1:
         capabilities.add("layered_composition")
+    if any(
+        visual["presentation"] == "inset_card" for visual in normalized_visuals
+    ):
+        capabilities.add("brand_layout")
     if normalized_text:
         capabilities.add("static_text")
 
@@ -403,6 +423,8 @@ def video_ir_from_edl(edl: dict[str, Any]) -> dict[str, Any]:
                     "media_asset_id": clip["media_asset_id"],
                     "source_in": clip.get("source_in", 0),
                     "fit": clip.get("fit", "cover"),
+                    "presentation": "full_bleed",
+                    "subject_anchor": "center",
                 }
             ],
             "text": [],

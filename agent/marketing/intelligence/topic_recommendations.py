@@ -125,11 +125,17 @@ def _preflight_candidates(
     results: list[dict[str, Any]] = []
     for rank, raw in enumerate(candidates, start=1):
         candidate = _candidate(raw, rank=rank)
-        evidence = _verified_entity_evidence(
+        evidence_resolution = _resolve_candidate_evidence(
             paths=paths,
             user_id=user_id,
             account_ids=entity.get("account_ids", []),
             evidence_ids=candidate["evidence_refs"],
+            session_id=session_id,
+        )
+        evidence = evidence_resolution["records"]
+        candidate["platform_fit_hypotheses"] = _bind_hypotheses_to_evidence(
+            candidate["platform_fit_hypotheses"],
+            evidence_ids=[item["id"] for item in evidence],
         )
         objective = candidate["topic"]
         if candidate["angle"]:
@@ -233,6 +239,7 @@ def _preflight_candidates(
                 "next_action": decision.get("next_action"),
             },
             "platform_blueprints": saved_plan.get("platform_blueprints") or {},
+            "validation_warnings": evidence_resolution["warnings"],
         })
     return results
 
@@ -344,14 +351,13 @@ def _platform_fit_hypotheses(
             limit=600,
         )
         refs = _refs(raw.get("evidence_refs"), limit=20)
-        if any(ref not in allowed_evidence for ref in refs):
-            raise ValueError(
-                "platform fit hypothesis evidence must belong to the candidate evidence pack"
-            )
+        dropped_refs = [ref for ref in refs if ref not in allowed_evidence]
+        refs = [ref for ref in refs if ref in allowed_evidence]
         result[platform] = {
             "match_score": round(score_value, 1),
             "rationale": rationale,
             "evidence_refs": refs,
+            "dropped_evidence_refs": dropped_refs,
         }
     return result
 
@@ -407,19 +413,54 @@ def _platform_match_scores(
     )
 
 
-def _verified_entity_evidence(
+def _resolve_candidate_evidence(
     *,
     paths: MarketingDataPaths | None,
     user_id: str,
     account_ids: list[str],
     evidence_ids: list[str],
-) -> list[dict[str, Any]]:
-    return EvidenceRepository(paths).require_verified_across_accounts(
+    session_id: str,
+) -> dict[str, Any]:
+    repository = EvidenceRepository(paths)
+    resolution = repository.resolve_verified_across_accounts(
         user_id=user_id,
         account_ids=account_ids,
         evidence_ids=evidence_ids,
-        require_any=False,
     )
+    records = list(resolution["records"])
+    warnings = [
+        f"rejected_unverified_evidence_ref:{ref}"
+        for ref in resolution["rejected_ids"]
+    ]
+    if not records:
+        records = repository.list_verified_for_session_across_accounts(
+            user_id=user_id,
+            account_ids=account_ids,
+            session_id=session_id,
+            limit=30,
+        )
+        if records:
+            warnings.append("candidate_bound_to_current_session_evidence_pack")
+    if not records:
+        warnings.append("candidate_has_no_verified_evidence")
+    return {"records": records, "warnings": warnings}
+
+
+def _bind_hypotheses_to_evidence(
+    hypotheses: dict[str, dict[str, Any]], *, evidence_ids: list[str]
+) -> dict[str, dict[str, Any]]:
+    allowed = set(evidence_ids)
+    result: dict[str, dict[str, Any]] = {}
+    for platform, hypothesis in hypotheses.items():
+        refs = list(hypothesis.get("evidence_refs") or [])
+        dropped = list(hypothesis.get("dropped_evidence_refs") or [])
+        dropped.extend(ref for ref in refs if ref not in allowed)
+        result[platform] = {
+            **hypothesis,
+            "evidence_refs": [ref for ref in refs if ref in allowed],
+            "dropped_evidence_refs": list(dict.fromkeys(dropped)),
+        }
+    return result
 
 
 def _audience_summary(context: dict[str, Any]) -> str:

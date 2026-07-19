@@ -126,3 +126,61 @@ def test_topic_workflow_is_idempotent_per_preflighted_candidate(tmp_path, monkey
     )
     assert second["id"] == first["id"]
     assert len(second["steps"]) == len(first["steps"])
+
+
+def test_explicit_user_override_can_add_an_evaluated_platform(tmp_path, monkeypatch):
+    candidate = _candidate()
+    candidate["candidate"]["recommended_platforms"] = ["wechat_official"]
+    monkeypatch.setattr(
+        topic_production.TopicRecommendationRepository,
+        "get_candidate",
+        lambda self, **kwargs: candidate,
+    )
+    workflow = topic_production.create_topic_production_workflow(
+        candidate_id="topic_candidate_ai_bubble",
+        user_id="default",
+        entity_id="entity-1",
+        selected_platforms=["wechat_official", "douyin"],
+        explicit_user_override=True,
+        paths=_paths(tmp_path),
+    )
+    keys = {step["key"] for step in workflow["steps"]}
+
+    assert workflow["input"]["explicit_user_platform_override"] is True
+    assert workflow["input"]["selected_platforms"] == ["wechat_official", "douyin"]
+    assert "article.write.wechat_official" in keys
+    assert "video.direct.douyin" in keys
+
+
+def test_platform_override_must_be_explicit_and_preflighted(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        topic_production.TopicRecommendationRepository,
+        "get_candidate",
+        lambda self, **kwargs: _candidate(),
+    )
+    try:
+        topic_production.create_topic_production_workflow(
+            candidate_id="topic_candidate_ai_bubble",
+            user_id="default",
+            entity_id="entity-1",
+            selected_platforms=["douyin"],
+            paths=_paths(tmp_path),
+        )
+    except ValueError as exc:
+        assert "explicit user override" in str(exc)
+    else:
+        raise AssertionError("implicit platform override must be rejected")
+
+    try:
+        topic_production.create_topic_production_workflow(
+            candidate_id="topic_candidate_ai_bubble",
+            user_id="default",
+            entity_id="entity-1",
+            selected_platforms=["unpreflighted_platform"],
+            explicit_user_override=True,
+            paths=_paths(tmp_path),
+        )
+    except ValueError as exc:
+        assert "not evaluated" in str(exc)
+    else:
+        raise AssertionError("unpreflighted platform override must be rejected")

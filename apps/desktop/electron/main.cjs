@@ -41,7 +41,7 @@ const { adoptServedDashboardToken } = require('./dashboard-token.cjs')
 const { waitForDashboardPortAnnouncement } = require('./backend-ready.cjs')
 const { serializeJsonBody, setJsonRequestHeaders } = require('./oauth-net-request.cjs')
 const { fetchMarketplaceThemes, searchMarketplaceThemes } = require('./vscode-marketplace.cjs')
-const { buildDesktopBackendEnv, normalizeHermesHomeRoot } = require('./backend-env.cjs')
+const { buildDesktopBackendEnv, normalizeHermesHomeRoot, resolveDefaultHermesHome } = require('./backend-env.cjs')
 const { migrateLegacyProviderEnvironment } = require('./legacy-provider-migration.cjs')
 const { resolveBundledProductRuntime } = require('./bundled-product-runtime.cjs')
 const { productUpdateStatus, rejectRawCoreUpdate } = require('./product-update-policy.cjs')
@@ -275,11 +275,16 @@ if (INSTALL_STAMP) {
   )
 }
 
-// Marketing OS owns one app-scoped Hermes home. It must not depend on, mutate,
-// or silently split state with a user's separately installed ~/.hermes.
+// Marketing OS is a Hermes product surface, not a second agent installation.
+// Desktop, CLI, Cron, Harness and Memory therefore share the same default
+// HERMES_HOME. Electron's userData remains UI/cache state only.
 function resolveHermesHome() {
   if (process.env.HERMES_HOME) return normalizeHermesHomeRoot(process.env.HERMES_HOME)
-  return path.join(path.resolve(USER_DATA_OVERRIDE || app.getPath('userData')), 'agent-runtime')
+  return resolveDefaultHermesHome({
+    platform: process.platform,
+    homeDir: app.getPath('home'),
+    localAppData: process.env.LOCALAPPDATA
+  })
 }
 
 const HERMES_HOME = resolveHermesHome()
@@ -4721,10 +4726,9 @@ async function startHermes() {
         cwd: hermesCwd,
         env: {
           ...process.env,
-          // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
-          // resolves to this product's app-scoped agent-runtime directory. The
-          // native Hermes settings API, sessions, profiles and logs therefore
-          // share one owner instead of falling back to a separate ~/.hermes.
+          // Explicitly pin the already unified HERMES_HOME so every child uses
+          // the same settings, sessions, profiles, Cron, Harness and Memory
+          // owner as Hermes CLI.
           HERMES_HOME,
           ...backend.env,
           TERMINAL_CWD: hermesCwd,

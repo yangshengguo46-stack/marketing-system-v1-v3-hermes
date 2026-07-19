@@ -173,6 +173,40 @@ class EvidenceRepository(MarketingDomainRepository):
     ) -> list[dict[str, Any]]:
         """Resolve evidence inside an already-authorized operating-entity set."""
 
+        resolution = self.resolve_verified_across_accounts(
+            user_id=user_id,
+            account_ids=account_ids,
+            evidence_ids=evidence_ids,
+        )
+        refs = resolution["requested_ids"]
+        if require_any and not refs:
+            raise ValueError(
+                "content production requires at least one verified EvidencePack record"
+            )
+        if not refs:
+            return []
+        missing = resolution["rejected_ids"]
+        if missing:
+            raise ValueError(
+                "evidence_refs must be verified inside the bound operating entity: "
+                + ", ".join(missing)
+            )
+        return resolution["records"]
+
+    def resolve_verified_across_accounts(
+        self,
+        *,
+        user_id: str,
+        account_ids: list[str],
+        evidence_ids: list[str],
+    ) -> dict[str, Any]:
+        """Resolve the verified subset without weakening strict callers.
+
+        Model-facing ingestion boundaries use this to turn malformed citations
+        into auditable candidate warnings.  Production callers continue through
+        :meth:`require_verified_across_accounts` and therefore remain fail-closed.
+        """
+
         refs = _evidence_ids(evidence_ids)
         owners = list(
             dict.fromkeys(
@@ -181,12 +215,8 @@ class EvidenceRepository(MarketingDomainRepository):
                 if str(item or "").strip()
             )
         )
-        if require_any and not refs:
-            raise ValueError(
-                "content production requires at least one verified EvidencePack record"
-            )
         if not refs:
-            return []
+            return {"requested_ids": [], "records": [], "rejected_ids": []}
         if not owners:
             raise ValueError("operating entity has no evidence-owning accounts")
         account_slots = ",".join("?" for _ in owners)
@@ -199,13 +229,41 @@ class EvidenceRepository(MarketingDomainRepository):
                 [user_id, *owners, *refs],
             ).fetchall()
         found = {row["id"]: _record(row) for row in rows}
-        missing = [ref for ref in refs if ref not in found]
-        if missing:
-            raise ValueError(
-                "evidence_refs must be verified inside the bound operating entity: "
-                + ", ".join(missing)
+        return {
+            "requested_ids": refs,
+            "records": [found[ref] for ref in refs if ref in found],
+            "rejected_ids": [ref for ref in refs if ref not in found],
+        }
+
+    def list_verified_for_session_across_accounts(
+        self,
+        *,
+        user_id: str,
+        account_ids: list[str],
+        session_id: str,
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        owners = list(
+            dict.fromkeys(
+                str(item or "").strip()
+                for item in account_ids
+                if str(item or "").strip()
             )
-        return [found[ref] for ref in refs]
+        )
+        bounded_session = str(session_id or "").strip()
+        if not owners or not bounded_session:
+            return []
+        safe_limit = max(1, min(int(limit), 100))
+        account_slots = ",".join("?" for _ in owners)
+        with self._connection() as db:
+            rows = db.execute(
+                f"""SELECT * FROM evidence_records
+                WHERE user_id=? AND account_id IN ({account_slots})
+                  AND session_id=? AND status='verified'
+                ORDER BY captured_at DESC, id DESC LIMIT ?""",
+                [user_id, *owners, bounded_session, safe_limit],
+            ).fetchall()
+        return [_record(row) for row in rows]
 
     def list(
         self,
