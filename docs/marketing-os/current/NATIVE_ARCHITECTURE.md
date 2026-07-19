@@ -176,7 +176,7 @@ User goal
 → metric checkpoints and receipts
 → content_retro(prediction, actual)
 → learning candidate
-→ replay/user governance
+→ replay/system evidence governance
 → Hermes memory / account strategy / Skill
 ```
 

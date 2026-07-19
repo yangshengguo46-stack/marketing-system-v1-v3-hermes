@@ -755,7 +755,7 @@ class AccountStrategyRepository(MarketingDomainRepository):
             _advance_stage(db, project_id, "benchmark_graph_ready", _now())
 
     # -------------------------------------------------------------
-    # Positioning and content system: versioned, user-approved truth.
+    # Positioning and content system: versioned, user-approved operating choices.
     # -------------------------------------------------------------
 
     def draft_positioning(

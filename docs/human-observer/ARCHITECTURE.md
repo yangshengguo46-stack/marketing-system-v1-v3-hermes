@@ -35,12 +35,13 @@ Le Bon 明确标记为历史且有争议的 lens；马斯洛的固定层级顺�
 - 包内私有 `_HumanObserverWriter` 是唯一进程内写 owner，必须持有 `SystemAuthority` capability，只被后台 connector/Cron 调用；它不从 `agent.human_observer` 导出，也没有 Gateway RPC、Tool 或 UI 注册。
 - `HumanObserverReader` 只返回研究投影，没有写方法；Marketing Preflight 即使读取投影，也不能因此加分、扣分或产生缺失警告。
 - `MarketingReceiptConnector` 只把不可变 Marketing Receipt 单向转成观察事件和候选解释；不能自动把候选升级为人类规律，也不能回写 Marketing 决策。
+- `MarketingPersonalIPConnector` 把已确认的创作者自述、赛道/受众/定位/内容系统选择和实验授权转成伪名化纵向观察。它记录的是“主体曾经这样陈述或选择”，明确标记 `not_objective_fact`，删除直接身份和经营 owner ID，并排除画像中自动生成的马斯洛/荣格/存在策略投影；该连接器不自动创建任何心理解释。
 - `human_source_ingestions` 保证连接器幂等并保存来源 hash；不允许同一来源静默换内容。
 
 Capability 是原生产品接口边界，不是对同一 OS 用户执行任意 Python 的密码学沙箱。顶层个人 IP Agent 没有直接 code/terminal 能力；未来若允许不可信插件或多租户代码，writer 必须进一步迁移到独立进程与 OS 权限域。
 
 ## 当前真实状态
 
-v1 schema 为 Hermes `state.db` v25，包含观察、时间图谱、理论、解释、假设、封存预测、结果、模型版本和来源摄取九类 owner。代码与临时库测试已验证观察/解释分离、身份字段拒绝、理论竞争、存在模型可修订、预测结算、Marketing 单向幂等连接器和只读消费边界；Human Core + Marketing + Cron + SessionDB 全量相关回归为 `514 passed, 1 skipped`。
+v1 schema 为 Hermes `state.db` v25，包含观察、时间图谱、理论、解释、假设、封存预测、结果、模型版本和来源摄取九类 owner。代码与临时库测试已验证观察/解释分离、身份字段拒绝、理论竞争、存在模型可修订、预测结算、Marketing Receipt 与个人 IP 选择的单向幂等连接器，以及只读消费边界。本轮 Marketing/Human Observer/实时 AccountContext/完整 Gateway 定向回归为 `544 passed, 1 skipped`；此前 Human Core + Marketing + Cron + SessionDB 更宽回归为 `514 passed, 1 skipped`。
 
 真实长期库在迁移前没有 Human Observation 样本，因此当前只能宣称基础设施完成，不能宣称已经学会了人类模型。下一阶段需要合法数据源、长期跨语境样本、偏差/代表性审计、理论漂移检测、研究者评审和安全评估。

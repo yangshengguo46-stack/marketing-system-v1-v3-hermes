@@ -3885,6 +3885,7 @@ def _apply_personality_to_session(
     agent = session.get("agent")
     if agent:
         agent.ephemeral_system_prompt = new_prompt or None
+        agent._marketing_base_ephemeral_prompt = new_prompt or ""
         # Inject a pivot marker into history so the model sees the change point.
         # This prevents it from pattern-matching its prior style.
         if new_prompt:
@@ -4336,8 +4337,9 @@ def _make_agent(
             ).strip()
     # A conversation has one stable Marketing OS account scope. Resolve it
     # from durable session state on resume, or use the explicit scope attached
-    # to a not-yet-persisted desktop draft. Mutable account facts never enter
-    # this cached prefix; the native account tool remains authoritative.
+    # to a not-yet-persisted desktop draft. Mutable creator/account facts are
+    # rebuilt in the non-cached ephemeral tier immediately before every turn;
+    # the native account owners remain authoritative.
     from agent.marketing.session_scope import (
         build_account_scope_prompt,
         read_session_scope,
@@ -4349,11 +4351,11 @@ def _make_agent(
             session_db if session_db is not None else _get_db(),
             session_id or key,
         )
-    base_ephemeral_prompt = system_prompt
     if ephemeral_prompt_override:
         system_prompt = "\n\n".join(
             part for part in (system_prompt, str(ephemeral_prompt_override).strip()) if part
         ).strip()
+    base_ephemeral_prompt = system_prompt
     account_scope_prompt = build_account_scope_prompt(stable_scope)
     if account_scope_prompt:
         system_prompt = "\n\n".join(
@@ -4470,6 +4472,35 @@ def _make_agent(
     agent._marketing_base_ephemeral_prompt = base_ephemeral_prompt
     agent._marketing_scope = stable_scope
     return agent
+
+
+def _refresh_marketing_personal_ip_prompt(agent) -> None:
+    """Refresh mutable personal-IP state in the non-cached prompt tier."""
+
+    scope = getattr(agent, "_marketing_scope", None)
+    if not scope:
+        return
+    from agent.marketing.session_scope import (
+        build_account_scope_prompt,
+        build_personal_ip_context_prompt,
+    )
+
+    base = str(getattr(agent, "_marketing_base_ephemeral_prompt", "") or "").strip()
+    routing = build_account_scope_prompt(scope)
+    try:
+        personal_ip = build_personal_ip_context_prompt(scope)
+    except Exception as exc:
+        logger.warning("live personal-IP context refresh failed: %s", exc)
+        personal_ip = (
+            "MARKETING OS LIVE PERSONAL IP CONTEXT\n"
+            "Current native-owner projection is unavailable. Treat the creator model as an "
+            "evidence gap and call marketing_read_account_context before personalized advice."
+        )
+    agent.ephemeral_system_prompt = (
+        "\n\n".join(part for part in (base, routing, personal_ip) if part).strip()
+        or None
+    )
+    agent._marketing_live_context_prompt = personal_ip
 
 
 def _init_session(
@@ -8768,6 +8799,11 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
             _profile_home_str = session.get("profile_home")
             if _profile_home_str:
                 home_token = set_hermes_home_override(_profile_home_str)
+            # Creator identity, strategy and first-party account evidence are
+            # mutable native state. Rebuild them at the last responsible
+            # moment so every turn is made by the current personal-IP Agent,
+            # not by a stale snapshot captured when the session was opened.
+            _refresh_marketing_personal_ip_prompt(agent)
             # The sudo password callback is thread-local (tools.terminal_tool
             # _callback_tls), so wiring it on the build thread doesn't reach this
             # turn thread — terminal sudo prompts would fall through to /dev/tty
@@ -12838,6 +12874,7 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
             cfg = _load_cfg()
             new_prompt = _prompt_text((cfg.get("agent") or {}).get("system_prompt", ""))
             agent.ephemeral_system_prompt = new_prompt or None
+            agent._marketing_base_ephemeral_prompt = new_prompt or ""
             agent._cached_system_prompt = None
         elif name == "compress" and agent:
             # Mirror the session.compress RPC: build a before/after summary so

@@ -23,6 +23,8 @@
 
 个人 IP Agent 是产品主体；Human Observer 只是后台研究 owner。两者共享经过治理的观察来源，但不共享写权限。Marketing 可以单向贡献 Receipt，不能直接修改人类模型；Human Observer 的研究结论也不能绕过经营证据替 Agent 做账号决策。
 
+Gateway 在每次模型调用的最后时刻重建 `MARKETING OS LIVE PERSONAL IP CONTEXT`：稳定的 user/entity/action-account 只负责路由，可变的创作者画像、经营选择、真实平台快照和系统推断从各自原生 owner 重新投影。画像内部的 `human_projection_model` 与受众心理投影会被拆到 `system_derived`，不会随用户确认的外壳升级成自述或事实。
+
 ## 原生权限实现
 
 `agent/epistemic_contract.py` 定义六类记录及各自 authority。系统学习写入需要进程内 `SystemAuthority` capability；该 capability 不可序列化，也不接受 RPC、Tool、Prompt 或 renderer 参数构造。
@@ -31,6 +33,7 @@
 - `SystemLearningProjector` 才能把 accepted candidate 投影到账号知识或策略。
 - `KnowledgeBaseRepository` 的证据知识和账号学习投影必须持有同一 capability。
 - Human Observer 写 owner 是包内私有 `_HumanObserverWriter`，构造时必须持有 human-research capability。
+- `MarketingPersonalIPConnector` 只把已经确认的用户自述和经营选择转成伪名化观察；它不自动产生心理解释，且不会保存 user/account/entity/project 直接引用。发布回执则同时绑定伪名 subject 与匿名 cohort，使长期结果能与同一观察主体对账。
 - Gateway 不注册学习候选 list/decide RPC；Desktop 不请求、不展示、不确认候选。
 - 创作者画像、赛道选择、受众假设、定位和内容系统继续要求用户明确确认，因为这些是用户自我陈述或经营选择，不是系统学习结论。
 

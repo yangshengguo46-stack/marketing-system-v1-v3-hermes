@@ -27,8 +27,8 @@
 | Short-video sound intelligence | Playwright MCP 原生短视频/BGM 结构化采集；Sound/Observation/Evidence 入 `state.db`；预演、草稿快照和发布回执携带声音身份 | automated | 真人 selector 验收冻结到账号登录 UI 完成后；再做跨日速度与匹配样本归因 |
 | Public content natural experiments | Playwright MCP 采集公域作品与聚合反馈；Hermes 保存同作品延迟快照，用内容/受众/需求投影/认知投影/存在策略/社会反应模型解释并生成内容与对标学习候选 | automated | 真实抖音/公众号/小红书 selector 验收、跨日调度与大规模重复证据校准 |
 | Central knowledge core | 匿名贡献 wire contract、安全服务与隐私聚合签名；Hermes 原生 Provider 上传 consented outbox、验签安装先验；撤回授权按 pending 本地扣留、submitted 中央删除，处理上传竞态和崩溃恢复 | automated | TLS/反向代理、凭据签发运维、签名私钥轮换演练与真实多用户规模 |
-| New-media operating model | 创作者资产、赛道路线、行为受众、七角色对标图谱、定位、内容系统和可证伪实验进入 Hermes 原生领域 owner；用户只确认自己的身份、偏好、经营方向和外部动作 | automated | 真实赛道研究、对标采集、自然对话真人验收 |
-| Human Observation Core | 已从 Marketing OS 拆成 source-agnostic AGI 研究基础设施；原始观察、时间图谱、版本理论、竞争解释、假设、封存预测、结果和模型修订各有独立 owner；“人不可被还原成标签”是伦理/产品公理，具体存在策略是 `fixed_axiom=false` 的可修订研究 seed；Marketing 仅单向贡献 Receipt 并只读消费 | automated | 合法多源长期样本、代表性/偏差审计、跨语境校准、研究者评审与安全评估 |
+| New-media operating model | 创作者资产、赛道路线、行为受众、七角色对标图谱、定位、内容系统和可证伪实验进入 Hermes 原生领域 owner；用户只确认自己的身份、偏好、经营方向和外部动作；Gateway 每次模型调用前从原生 owner 重建实时个人 IP 上下文 | automated | 真实赛道研究、对标采集、自然对话真人验收 |
+| Human Observation Core | 已从 Marketing OS 拆成 source-agnostic AGI 研究基础设施；原始观察、时间图谱、版本理论、竞争解释、假设、封存预测、结果和模型修订各有独立 owner；“人不可被还原成标签”是伦理/产品公理，具体存在策略是 `fixed_axiom=false` 的可修订研究 seed；Marketing Receipt 与用户已确认的个人 IP 自述/经营选择通过两个单向连接器进入伪名化观察，后者不自动心理解释 | automated | 合法多源长期样本、代表性/偏差审计、跨语境校准、研究者评审与安全评估 |
 | Agent perception layer | `vision_analyze`、`browser_vision`、`video_analyze` 作为 Marketing Agent 的原生底层感知能力；主业务 toolset、受约束媒体代码 worker、默认委派和文件读取引导均已贯通，视频能力在产品运行时不可被渐进披露隐藏 | automated | 真人长视频、多格式/损坏文件、音频转写联动与跨模型视觉一致性验收 |
 | Four knowledge bases | Platform/Market/Account/Content 四库进入 Hermes `state.db`；Cron 静默执行时效淘汰、显式冲突隔离、重复公域样本聚合、Receipt-backed 账号学习和历史回放校准；候选读取/决策 RPC 已从产品面删除，知识写入必须持有系统能力 | automated | 更大规模真实采集、官方平台规则原生刷新源、中央服务真实部署 |
 | Desktop | `apps/desktop` 唯一 UI/Electron；首轮经营、图文和视频动作提交结构化意图后由 Gateway 原子启动 Agent，结果回到原经营对象，不再跳新对话或要求二次发送；一级草稿箱只投影 Hermes 半成品并回到原图文/视频管线 | automated | 开发机真人首半小时、Gateway 重启后的 operation 恢复、草稿箱真人视觉验收、干净机安装 |
@@ -77,6 +77,15 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 - **“存在”分层。** “人是主体、不能被模型完全还原”为不可让渡的伦理/产品公理；“保存、确认、扩展、延续”等存在策略只是可证伪、可替换的研究 seed。项目不再把二者写成同一层真理。
 - **权利不等于真值投票。** 同意、撤回、删除、导出与保留期属于数据主体权利，始终保留；它们不等于接受或拒绝系统知识结论。完整合同见 [`PRODUCT_CONSTITUTION.md`](./PRODUCT_CONSTITUTION.md)、[`PRODUCT_PHILOSOPHY.md`](./PRODUCT_PHILOSOPHY.md) 与 [`ARCHITECTURE_DOCTRINE.md`](./ARCHITECTURE_DOCTRINE.md)。
 - **自动化证据。** Marketing/Human Observer/产品合同相关全量 `230 passed, 1 skipped`；Desktop 定向 `10/10`，TypeScript、ESLint、Ruff、Python compile 与 `git diff --check` 通过。定向测试同时证明伪造 system capability 失败、repository 无 capability 不能裁决、Gateway 两个旧方法不存在、Human Observer 公共包无 writer、Skill 重放幂等。
+
+### EPISTEMIC-02 实时个人 IP Agent 与用户观察纵切（automated，2026-07-19）
+
+- **每轮而非开场快照。** `agent/marketing/session_scope.py` 新增有界、抗提示注入的实时个人 IP 投影；`tui_gateway/server.py` 在每次 `run_conversation` 前重新读取当前经营实体、创作者画像、路线、受众、定位、内容系统、平台快照和数据缺口。人格或系统提示切换只更新 base overlay，下一轮仍会重新合成稳定路由与实时经营模型。
+- **字段级认识论。** 用户确认画像中的 `human_projection_model`、受众需求/认知/存在策略投影不会跟随画像外壳进入 `user_owned`，而是单独进入 `system_derived.human_projection_hypotheses`；混合来源的 `account_dna` 也不再冒充客观观察。真实受众和平台指标保留在 `observed` 并携带可用的观测时间。
+- **用户也是观察主体。** `MarketingPersonalIPConnector` 静默摄取已经确认的创作者自述、赛道/受众/定位/内容系统选择和实验授权，建立稳定伪名 subject；直接身份、user/account/entity/project ID、URL/邮箱/手机号以及已有心理投影在跨入研究 owner 前删除。事件明确标记 `not_objective_fact` 与 `not_psychological_interpretation`，只证明“主体曾这样陈述或选择”。
+- **结果可纵向对账。** Marketing Receipt 连接器现在同时绑定同一用户的伪名 subject 和账号/平台匿名 cohort；选择与后续真实结果可以在 Human Observer 内按主体纵向研究，但两个连接器都只有系统 capability、保持幂等且没有 Gateway/Tool/Desktop 写入口。
+- **代码路径。** `agent/marketing/session_scope.py`、`tui_gateway/server.py`、`agent/human_observer/marketing_connector.py`、`agent/human_observer/runner.py`；架构合同同步更新 `PRODUCT_CONSTITUTION.md`、`PRODUCT_PHILOSOPHY.md`、`ARCHITECTURE_DOCTRINE.md`、`NATIVE_ARCHITECTURE.md` 和 `docs/human-observer/ARCHITECTURE.md`。
+- **自动化证据。** 不重复计数的当前回归共 `544 passed, 1 skipped`：全 Marketing/Human Observer/实时 AccountContext/认识论/Cron/产品身份/经营循环 `243 passed, 1 skipped`，完整 Gateway `301 passed`。Python compile、Ruff 与 `git diff --check` 进入提交前总门。当前证据为 automated；尚未宣称 Human Core 已学会人类模型，仍需要合法长期样本、跨语境反证、偏差审计和安全评估。
 
 ### HARNESS-00 全项目 Durable Multi-Agent Harness 重构（H1～H4 首条端到端 dev-runtime 已验，2026-07-18）
 

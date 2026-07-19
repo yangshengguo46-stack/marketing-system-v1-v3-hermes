@@ -5877,6 +5877,41 @@ def test_prompt_submit_auto_titles_session_on_complete(monkeypatch):
     assert args[3] == "Rome was founded in 753 BC."
 
 
+def test_prompt_submit_refreshes_personal_ip_context_before_model_call(monkeypatch):
+    order: list[str] = []
+
+    class _Agent:
+        def run_conversation(
+            self, prompt, conversation_history=None, stream_callback=None
+        ):
+            order.append("model")
+            return {"final_response": "ok", "messages": []}
+
+    agent = _Agent()
+    server._sessions["sid"] = _session(agent=agent)
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "make_stream_renderer", lambda cols: None)
+    monkeypatch.setattr(server, "render_message", lambda raw, cols: None)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+    monkeypatch.setattr(
+        server,
+        "_refresh_marketing_personal_ip_prompt",
+        lambda current: order.append("refresh") if current is agent else None,
+    )
+
+    with patch("agent.title_generator.maybe_auto_title"):
+        server.handle_request(
+            {
+                "id": "1",
+                "method": "prompt.submit",
+                "params": {"session_id": "sid", "text": "hello"},
+            }
+        )
+
+    assert order == ["refresh", "model"]
+
+
 def test_prompt_submit_skips_auto_title_when_interrupted(monkeypatch):
     """maybe_auto_title must NOT be called when the agent was interrupted."""
 

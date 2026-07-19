@@ -3,7 +3,11 @@ import sqlite3
 
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import AccountContextRepository
-from agent.marketing.session_scope import build_account_scope_prompt, resolve_account_scope
+from agent.marketing.session_scope import (
+    build_account_scope_prompt,
+    build_personal_ip_context_prompt,
+    resolve_account_scope,
+)
 from hermes_state import SessionDB
 from model_tools import get_tool_definitions, handle_function_call
 from toolsets import resolve_toolset
@@ -14,17 +18,22 @@ def _seed_product_store(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "accounts.json").write_text(
-        json.dumps({
-            "accounts": [{
-                "id": "acct-1",
-                "platform": "douyin",
-                "username": "creator",
-                "label": "主账号",
-                "status": "active",
-                "stats": {"followers": 42},
-                "cookie": "must-not-cross-the-domain-port",
-            }]
-        }, ensure_ascii=False),
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "id": "acct-1",
+                        "platform": "douyin",
+                        "username": "creator",
+                        "label": "主账号",
+                        "status": "active",
+                        "stats": {"followers": 42},
+                        "cookie": "must-not-cross-the-domain-port",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     db_path = tmp_path / "agent-runtime" / "agent_core.db"
@@ -62,14 +71,31 @@ def _seed_product_store(tmp_path):
         )
         db.execute(
             "INSERT INTO account_strategy_projects VALUES (?,?,?,?,?,?,?)",
-            ("project-1", "default", "acct-1", "经营 AI 教育账号", "positioning_approved", "active", "2026-07-10"),
+            (
+                "project-1",
+                "default",
+                "acct-1",
+                "经营 AI 教育账号",
+                "positioning_approved",
+                "active",
+                "2026-07-10",
+            ),
         )
         db.execute(
             "INSERT INTO audience_hypotheses VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                "audience-1", "project-1", "default", "acct-1", 1,
-                '[{"label":"想转型的职场人"}]', '["缺少路径"]', '["下班学习"]', '[]',
-                '["真实年龄分布"]', "confirmed", "2026-07-10",
+                "audience-1",
+                "project-1",
+                "default",
+                "acct-1",
+                1,
+                '[{"label":"想转型的职场人"}]',
+                '["缺少路径"]',
+                '["下班学习"]',
+                "[]",
+                '["真实年龄分布"]',
+                "confirmed",
+                "2026-07-10",
             ),
         )
         positioning = {
@@ -82,15 +108,29 @@ def _seed_product_store(tmp_path):
         }
         db.execute(
             "INSERT INTO positioning_versions VALUES (?,?,?,?,?,?,?)",
-            ("position-1", "project-1", "default", "acct-1", 1, json.dumps(positioning, ensure_ascii=False), "approved"),
+            (
+                "position-1",
+                "project-1",
+                "default",
+                "acct-1",
+                1,
+                json.dumps(positioning, ensure_ascii=False),
+                "approved",
+            ),
         )
         db.execute(
             "INSERT INTO audience_snapshots VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
-                "snapshot-1", "project-1", "default", "acct-1", "douyin",
+                "snapshot-1",
+                "project-1",
+                "default",
+                "acct-1",
+                "douyin",
                 '{"age":{"25-34":0.6}}',
                 '{"source_kind":"creator_center_mcp","source_ref":"creator-center","captured_at":"2026-07-10"}',
-                None, None, "2026-07-10",
+                None,
+                None,
+                "2026-07-10",
             ),
         )
         db.execute(
@@ -99,9 +139,19 @@ def _seed_product_store(tmp_path):
         )
         db.execute(
             "INSERT INTO memory_candidates VALUES (?,?,?,?,?,?,?)",
-            ("memory-1", "default", "acct-1", "account", "verified", '{"field":"goals","value":"稳定获客"}', "2026-07-09"),
+            (
+                "memory-1",
+                "default",
+                "acct-1",
+                "account",
+                "verified",
+                '{"field":"goals","value":"稳定获客"}',
+                "2026-07-09",
+            ),
         )
-    return MarketingDataPaths(user_data=tmp_path, config_dir=config_dir, agent_db=db_path)
+    return MarketingDataPaths(
+        user_data=tmp_path, config_dir=config_dir, agent_db=db_path
+    )
 
 
 def test_account_context_projects_existing_product_truth_without_secrets(tmp_path):
@@ -114,7 +164,10 @@ def test_account_context_projects_existing_product_truth_without_secrets(tmp_pat
     assert "cookie" not in accounts["accounts"][0]
     assert context["connected"] is True
     assert context["lifecycle"]["stage"] == "positioning_approved"
-    assert context["lifecycle"]["audience_hypothesis"]["segments"][0]["label"] == "想转型的职场人"
+    assert (
+        context["lifecycle"]["audience_hypothesis"]["segments"][0]["label"]
+        == "想转型的职场人"
+    )
     assert context["lifecycle"]["strategy_alignment"]["positioning_current"] is False
     assert "persona" not in context["account_dna"]
     assert context["account_dna"]["goals"] == "稳定获客"
@@ -153,7 +206,9 @@ def test_native_gateway_reads_same_marketing_store(tmp_path, monkeypatch):
     assert response["result"]["lifecycle"]["business_goal"] == "经营 AI 教育账号"
 
 
-def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_path, monkeypatch):
+def test_native_agent_toolset_reads_account_context_without_outer_adapter(
+    tmp_path, monkeypatch
+):
     paths = _seed_product_store(tmp_path)
     monkeypatch.setenv("MARKETING_OS_USER_DATA", str(paths.user_data))
     monkeypatch.setenv("MARKETING_OS_CONFIG_DIR", str(paths.config_dir))
@@ -161,11 +216,13 @@ def test_native_agent_toolset_reads_account_context_without_outer_adapter(tmp_pa
 
     definitions = get_tool_definitions(enabled_toolsets=["marketing"], quiet_mode=True)
     names = {item["function"]["name"] for item in definitions}
-    result = json.loads(handle_function_call(
-        "marketing_read_account_context",
-        {"account_id": "acct-1"},
-        enabled_toolsets=["marketing"],
-    ))
+    result = json.loads(
+        handle_function_call(
+            "marketing_read_account_context",
+            {"account_id": "acct-1"},
+            enabled_toolsets=["marketing"],
+        )
+    )
 
     expected_marketing_tools = {
         "marketing_read_accounts",
@@ -214,6 +271,63 @@ def test_session_scope_keeps_only_stable_routing_identity_in_prompt(tmp_path):
     assert "account_id=acct-1" in prompt
     assert "marketing_read_account_context" in prompt
     assert "经营 AI 教育账号" not in prompt
+
+
+def test_personal_ip_context_is_live_bounded_and_epistemically_partitioned(tmp_path):
+    repository = AccountContextRepository(_seed_product_store(tmp_path))
+    scope = resolve_account_scope(
+        user_id="default",
+        account_id="acct-1",
+        repository=repository,
+    )
+
+    prompt = build_personal_ip_context_prompt(scope, repository=repository)
+
+    assert "marketing-personal-ip-live-context-v1" in prompt
+    assert "经营 AI 教育账号" in prompt
+    assert "想转型的职场人" in prompt
+    assert "虚构收益" in prompt
+    assert '"user_owned"' in prompt
+    assert '"observed"' in prompt
+    assert '"system_derived"' in prompt
+    assert "revisable_research_lenses_not_user_self_report_or_observed_fact" in prompt
+    assert '"account_operating_memory"' in prompt
+    assert "must-not-cross-the-domain-port" not in prompt
+    projection = json.loads(prompt.split("personal_ip_context=", 1)[1])
+    assert "human_projection_model" not in (
+        projection["user_owned"].get("creator_profile") or {}
+    )
+    assert "human_projection_model" not in (
+        projection["user_owned"].get("audience_hypothesis") or {}
+    )
+    assert projection["system_derived"]["human_projection_hypotheses"]["status"] == (
+        "revisable_research_lenses_not_user_self_report_or_observed_fact"
+    )
+
+
+def test_gateway_refresh_recomposes_base_routing_and_live_creator_state(monkeypatch):
+    from agent.marketing import session_scope
+
+    monkeypatch.setattr(
+        session_scope,
+        "build_personal_ip_context_prompt",
+        lambda scope: f"live-personal-ip:{scope['account_id']}",
+    )
+    agent = type("Agent", (), {})()
+    agent._marketing_scope = {
+        "user_id": "default",
+        "entity_id": "entity-1",
+        "account_id": "acct-1",
+        "platform": "douyin",
+        "connected": True,
+    }
+    agent._marketing_base_ephemeral_prompt = "persona-overlay"
+
+    server._refresh_marketing_personal_ip_prompt(agent)
+
+    assert "persona-overlay" in agent.ephemeral_system_prompt
+    assert "account_id=acct-1" in agent.ephemeral_system_prompt
+    assert "live-personal-ip:acct-1" in agent.ephemeral_system_prompt
 
 
 def test_native_gateway_binds_pristine_session_to_account(tmp_path, monkeypatch):
