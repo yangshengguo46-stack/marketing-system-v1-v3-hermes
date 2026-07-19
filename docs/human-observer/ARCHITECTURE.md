@@ -28,14 +28,16 @@
 
 `human_theories` 保存版本、构念、假设、可证伪条件、来源和认识论状态。v1 注册马斯洛需求层次、荣格认知功能、Le Bon 历史群体视角、社会认同、去个体化、规范涌现、信息级联和“存在策略”研究 seed。
 
-Le Bon 明确标记为历史且有争议的 lens；马斯洛的固定层级顺序和荣格永久类型也不被系统当成定论。“存在”保存在 `human_model_revisions` 的 v1 seed 中，`fixed_axiom=false`，只有封存预测和跨语境反证能推动后续候选版本；它不再是代码中的不可修改哲学前提。
+Le Bon 明确标记为历史且有争议的 lens；马斯洛的固定层级顺序和荣格永久类型也不被系统当成定论。“人是不能被还原为标签和流量的主体”属于产品伦理前提；“存在策略是否能解释行为”才保存在 `human_model_revisions` 的 v1 seed 中，`fixed_axiom=false`，只有封存预测和跨语境反证能推动后续候选版本。价值前提与经验模型不再共用一个“存在”字段。
 
 ## Owner 与权限
 
-- `SystemHumanObserver` 是唯一进程内写 owner，只被后台 connector/Cron 调用，没有 Gateway RPC、Tool 或 UI 注册。
+- 包内私有 `_HumanObserverWriter` 是唯一进程内写 owner，必须持有 `SystemAuthority` capability，只被后台 connector/Cron 调用；它不从 `agent.human_observer` 导出，也没有 Gateway RPC、Tool 或 UI 注册。
 - `HumanObserverReader` 只返回研究投影，没有写方法；Marketing Preflight 即使读取投影，也不能因此加分、扣分或产生缺失警告。
 - `MarketingReceiptConnector` 只把不可变 Marketing Receipt 单向转成观察事件和候选解释；不能自动把候选升级为人类规律，也不能回写 Marketing 决策。
 - `human_source_ingestions` 保证连接器幂等并保存来源 hash；不允许同一来源静默换内容。
+
+Capability 是原生产品接口边界，不是对同一 OS 用户执行任意 Python 的密码学沙箱。顶层个人 IP Agent 没有直接 code/terminal 能力；未来若允许不可信插件或多租户代码，writer 必须进一步迁移到独立进程与 OS 权限域。
 
 ## 当前真实状态
 

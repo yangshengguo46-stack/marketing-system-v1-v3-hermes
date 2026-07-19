@@ -2,8 +2,8 @@
 
 One successful or failed post should not rewrite a creator's strategy.  This
 module looks for repeated, evidence-backed patterns and turns them into
-``weight`` learning candidates.  Candidates remain pending until an explicit
-review path accepts/rejects them.
+``weight`` learning candidates. Candidates remain pending until deterministic
+system evidence and replay gates accept, reject, supersede, or defer them.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ import hashlib
 import re
 from collections import Counter
 from typing import Any
+
+from agent.epistemic_contract import SystemAuthority
 
 from .influence_score import BUCKET_VALUES, INFLUENCE_SCORE_VERSION, RISK_BUCKET_VALUES
 
@@ -444,7 +446,7 @@ def propose_weight_candidate_from_recent_retros(
             },
             "recommendation": rule["recommendation"],
             "average_influence_score": avg_score,
-            "guardrail": "pending weight candidate only; do not change durable strategy weights without review and replay",
+            "guardrail": "pending weight candidate only; do not change durable strategy weights without system replay gates",
         },
         confidence=min(0.86, 0.42 + 0.08 * summary["top_support_count"] + (0.08 if avg_score else 0.0)),
     )
@@ -543,8 +545,8 @@ def propose_publish_recovery_skill_candidate(
                 for item in selected
             ],
             "guardrail": (
-                "pending Skill candidate only; user must review the exact deterministic workflow "
-                "before Hermes creates procedural memory"
+                "pending Skill candidate only; the system must verify the exact deterministic "
+                "workflow, repeated receipt pairs and duplicate-side-effect boundary before creation"
             ),
         },
         confidence=min(0.92, 0.62 + len(selected) * 0.08),
@@ -556,7 +558,7 @@ def propose_publish_recovery_skill_candidate(
         "required_support": required,
         "skill_candidate_id": candidate["id"],
         "candidate_status": candidate["status"],
-        "guardrail": "no Skill was written; explicit candidate review is required",
+        "guardrail": "no Skill was written; system evidence gates must run first",
     }
 
 
@@ -741,12 +743,12 @@ def _strategy_candidate_from_weight(
     candidate: dict[str, Any],
     replay: dict[str, Any],
 ) -> dict[str, Any]:
-    """Create the second-review strategy candidate after replay acceptance.
+    """Create the strategy-projection candidate after replay acceptance.
 
     A replay-approved ``weight`` candidate is still not durable account truth.
-    It becomes a separate ``strategy`` candidate so the operator can inspect
-    the actual account-level change before the versioned strategy owner applies
-    it.  ``source_key`` makes repeated decisions/restarts idempotent.
+    It becomes a separate ``strategy`` candidate so an independent system gate
+    can validate the actual account-level change before the versioned strategy
+    owner applies it. ``source_key`` makes repeated ticks/restarts idempotent.
     """
 
     if candidate.get("status") != "accepted" or replay.get("status") != "passed":
@@ -789,7 +791,7 @@ def _strategy_candidate_from_weight(
                 "coverage": replay.get("coverage"),
             },
             "guardrail": (
-                "pending strategy candidate only; explicit second review is required "
+                "pending strategy candidate only; a separate system projection gate is required "
                 "before versioned account calibration"
             ),
         },
@@ -798,7 +800,7 @@ def _strategy_candidate_from_weight(
     )
     return {
         "status": "candidate_created" if strategy.get("status") == "pending" else "candidate_exists",
-        "reason": "awaiting_explicit_strategy_review",
+        "reason": "awaiting_system_strategy_projection",
         "strategy_candidate_id": strategy["id"],
         "source_weight_candidate_id": source_id,
         "replay_status": replay.get("status"),
@@ -810,6 +812,7 @@ def decide_weight_candidate_with_replay(
     store: Any,
     candidate_id: str,
     *,
+    authority: SystemAuthority,
     decision: str,
     reason: str | None = None,
     window: int = 500,
@@ -860,10 +863,11 @@ def decide_weight_candidate_with_replay(
     decided = store.decide_learning_candidate(
         candidate_id,
         status=decision,
+        authority=authority,
         reason=reason or (
             "weight replay passed; accepted as governed candidate"
             if decision == "accepted"
-            else "rejected by reviewer"
+            else "rejected by system replay gate"
         ),
     )
     strategy_candidate = (
@@ -877,5 +881,5 @@ def decide_weight_candidate_with_replay(
         "replay": replay,
         "strategy_candidate": strategy_candidate,
         "strategy_candidate_id": strategy_candidate.get("strategy_candidate_id"),
-        "guardrail": "weight accepted after replay; durable weights await separate strategy review",
+        "guardrail": "weight accepted after replay; durable weights await separate system strategy projection",
     }

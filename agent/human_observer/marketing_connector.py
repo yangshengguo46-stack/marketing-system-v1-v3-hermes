@@ -12,14 +12,21 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .repository import SystemHumanObserver
+from agent.epistemic_contract import (
+    EpistemicClass,
+    SystemAuthority,
+    require_system_authority,
+)
+
+from .repository import _HumanObserverWriter
 from .theories import COLLECTIVE_MECHANISM_THEORY
 
 
 class MarketingReceiptConnector:
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, authority: SystemAuthority):
+        require_system_authority(authority, EpistemicClass.HUMAN_RESEARCH)
         self.db_path = Path(db_path)
-        self.owner = SystemHumanObserver(self.db_path)
+        self.owner = _HumanObserverWriter(self.db_path, authority=authority)
 
     def run(self, *, limit: int = 500) -> dict[str, Any]:
         rows = self._pending(limit=limit)

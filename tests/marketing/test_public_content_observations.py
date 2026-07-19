@@ -5,6 +5,7 @@ import json
 import hermes_state
 import pytest
 
+from agent.epistemic_contract import _issue_system_authority
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import AccountLifecycleRepository, AccountStrategyRepository
 from agent.marketing.domains.public_content_observations import (
@@ -13,7 +14,7 @@ from agent.marketing.domains.public_content_observations import (
     decode_browser_public_content_result,
 )
 from agent.marketing.evidence_capture import enrich_tool_result_with_evidence
-from agent.marketing.learning import AccountLearningGovernance
+from agent.marketing.learning import SystemLearningProjector
 from hermes_state import SessionDB
 
 
@@ -299,7 +300,10 @@ def test_public_learning_projects_only_a_benchmark_candidate_after_acceptance(tm
         benchmark_projection=_benchmark_projection(),
     )
 
-    projected = AccountLearningGovernance(paths).accept_and_project(
+    projected = SystemLearningProjector(
+        paths,
+        authority=_issue_system_authority("test_public_content_observations"),
+    ).accept_and_project(
         interpreted["strategy_candidate"]["id"], reason="确认作为公域信任表达候选"
     )
     benchmark = projected["account_strategy"]["benchmark"]

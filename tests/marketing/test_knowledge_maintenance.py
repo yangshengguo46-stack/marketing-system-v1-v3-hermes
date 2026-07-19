@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from agent.epistemic_contract import _issue_system_authority
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.evidence import EvidenceRepository
 from agent.marketing.domains.account_strategy import AccountStrategyRepository
@@ -18,7 +19,7 @@ from agent.marketing.intelligence.learning_governance import (
     propose_weight_candidate_from_recent_retros,
 )
 from agent.marketing.knowledge_loop import KnowledgeMaintenanceRunner
-from agent.marketing.learning import AccountLearningGovernance
+from agent.marketing.learning import SystemLearningProjector
 from hermes_state import SessionDB
 
 
@@ -92,6 +93,7 @@ def test_volatile_platform_knowledge_expires_silently(tmp_path):
         evidence_refs=[evidence_id],
         version="old-v1",
         valid_from=old.isoformat(),
+        authority=_issue_system_authority("test_knowledge_maintenance"),
     )
 
     audit = knowledge.audit_freshness_and_conflicts(
@@ -216,7 +218,10 @@ def test_conversation_governance_cannot_accept_or_modify_system_knowledge(tmp_pa
     )
 
     with pytest.raises(ValueError, match="system-governed"):
-        AccountLearningGovernance(paths).accept_and_project(
+        SystemLearningProjector(
+            paths,
+            authority=_issue_system_authority("test_knowledge_maintenance"),
+        ).accept_and_project(
             candidate["id"], reason="user tried to rewrite shared truth"
         )
 

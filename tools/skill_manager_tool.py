@@ -1218,6 +1218,27 @@ def apply_skill_pending(payload: Dict[str, Any]) -> str:
         _skill_gate_bypass.reset(token)
 
 
+def _system_skill_manage(*, authority, **kwargs) -> str:
+    """Apply a system-governed skill projection without a user decision seam.
+
+    Only the Marketing knowledge projector calls this after evidence/replay
+    gates.  The capability is process-local and never part of the model tool
+    schema; normal user and agent skill writes keep the ordinary approval gate.
+    """
+
+    from agent.epistemic_contract import (
+        EpistemicClass,
+        require_system_authority,
+    )
+
+    require_system_authority(authority, EpistemicClass.DERIVED_KNOWLEDGE)
+    token = _skill_gate_bypass.set(True)
+    try:
+        return skill_manage(**kwargs)
+    finally:
+        _skill_gate_bypass.reset(token)
+
+
 def skill_manage(
     action: str,
     name: str,

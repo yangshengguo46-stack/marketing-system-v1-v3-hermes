@@ -8,7 +8,6 @@ export type MarketingOperationKind =
   | 'content.topic.start'
   | 'content.resume'
   | 'content.revise'
-  | 'learning.review'
   | 'materials.cloud.status'
   | 'video.asset.select'
   | 'video.autopilot'

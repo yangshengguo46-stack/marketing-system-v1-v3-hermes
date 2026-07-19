@@ -15192,40 +15192,6 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, {"contribution": contribution})
 
 
-@method("marketing.learning.candidates.list")
-def _(rid, params: dict) -> dict:
-    """List governed learning waiting for a user decision in one account scope."""
-    from agent.marketing.intelligence import OperatingLoopRepository
-
-    params = params if isinstance(params, dict) else {}
-    account_id = str(params.get("account_id") or "").strip()
-    if not account_id:
-        return _err(rid, -32602, "account_id is required")
-    try:
-        candidates = OperatingLoopRepository().list_learning_candidates(
-            candidate_type=str(params.get("candidate_type") or "").strip() or None,
-            status=str(params.get("status") or "pending").strip() or None,
-            user_id=str(params.get("user_id") or "default"),
-            account_id=account_id,
-            platform=str(params.get("platform") or "").strip() or None,
-            limit=int(params.get("limit") or 100),
-        )
-    except (TypeError, ValueError) as exc:
-        return _err(rid, -32602, str(exc))
-    return _ok(rid, {"candidates": candidates, "total": len(candidates)})
-
-
-@method("marketing.learning.candidate.decide")
-def _(rid, params: dict) -> dict:
-    """Learning is observable but never user- or conversation-writable."""
-    return _err(
-        rid,
-        4035,
-        "the evidence-to-retro learning loop is maintained silently by the system; "
-        "users and conversations cannot accept, reject or modify candidates",
-    )
-
-
 @method("marketing.accounts.register")
 def _(rid, params: dict) -> dict:
     """Create a pending account in Hermes before the BrowserContext login flow."""

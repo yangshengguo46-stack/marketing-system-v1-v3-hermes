@@ -1,19 +1,31 @@
-"""Governed projection from reviewed learning into its native Hermes owner."""
+"""System-governed projection from learning into its native Hermes owner."""
 
 from __future__ import annotations
 
 import json
 
+from agent.epistemic_contract import (
+    EpistemicClass,
+    SystemAuthority,
+    require_system_authority,
+)
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.account_strategy import AccountStrategyRepository
 from agent.marketing.domains.knowledge_bases import KnowledgeBaseRepository
 from agent.marketing.intelligence.store import OperatingLoopRepository
 
 
-class AccountLearningGovernance:
-    """Accept one reviewed candidate and route it to account truth by type."""
+class SystemLearningProjector:
+    """Project one system-decided candidate into its native durable owner."""
 
-    def __init__(self, paths: MarketingDataPaths | None = None):
+    def __init__(
+        self,
+        paths: MarketingDataPaths | None = None,
+        *,
+        authority: SystemAuthority,
+    ):
+        require_system_authority(authority, EpistemicClass.DERIVED_KNOWLEDGE)
+        self.authority = authority
         self.paths = paths or MarketingDataPaths.from_env()
         self.loop = OperatingLoopRepository(self.paths)
         self.knowledge = KnowledgeBaseRepository(self.paths)
@@ -28,7 +40,7 @@ class AccountLearningGovernance:
     ) -> dict:
         reason_value = str(reason or "").strip()
         if not reason_value:
-            raise ValueError("account learning acceptance requires a review reason")
+            raise ValueError("account learning projection requires a system decision reason")
         candidate = self.loop.get_learning_candidate(candidate_id)
         candidate_type = str(candidate.get("candidate_type") or "")
         if candidate_type == "weight":
@@ -36,41 +48,37 @@ class AccountLearningGovernance:
                 "weight candidates require replay approval before strategy projection"
             )
         if candidate_type == "skill":
-            skill_name, skill_content = _reviewed_recovery_skill(candidate)
+            skill_name, skill_content = _validated_recovery_skill(candidate)
             from tools.skill_manager_tool import skill_matches, validate_skill_create
 
-            if candidate.get("status") == "accepted" and skill_matches(skill_name, skill_content):
-                return {
-                    "candidate": candidate,
-                    "skill_projection": {
-                        "success": True,
-                        "already_projected": True,
-                        "name": skill_name,
-                    },
+            if skill_matches(skill_name, skill_content):
+                skill_projection = {
+                    "success": True,
+                    "already_projected": True,
+                    "name": skill_name,
                 }
-            if candidate.get("status") == "accepted":
-                from tools import write_approval
+            else:
+                validation = validate_skill_create(skill_name, skill_content, "marketing")
+                if not validation.get("success"):
+                    raise ValueError(
+                        str(validation.get("error") or "invalid Skill candidate")
+                    )
+                from tools.skill_manager_tool import _system_skill_manage
 
-                for pending in write_approval.list_pending(write_approval.SKILLS):
-                    payload = pending.get("payload") or {}
-                    if (
-                        payload.get("action") == "create"
-                        and payload.get("name") == skill_name
-                        and payload.get("content") == skill_content
-                    ):
-                        return {
-                            "candidate": candidate,
-                            "skill_projection": {
-                                "success": True,
-                                "staged": True,
-                                "already_projected": True,
-                                "pending_id": pending["id"],
-                                "name": skill_name,
-                            },
-                        }
-            validation = validate_skill_create(skill_name, skill_content, "marketing")
-            if not validation.get("success"):
-                raise ValueError(str(validation.get("error") or "invalid Skill candidate"))
+                skill_projection = json.loads(
+                    _system_skill_manage(
+                        authority=self.authority,
+                        action="create",
+                        name=skill_name,
+                        content=skill_content,
+                        category="marketing",
+                        agent_created=True,
+                    )
+                )
+                if not skill_projection.get("success"):
+                    raise RuntimeError(
+                        str(skill_projection.get("error") or "native Skill projection failed")
+                    )
         proposal = candidate.get("proposal") or {}
         strategy_kind = str(proposal.get("kind") or "")
         knowledge_kind = str(proposal.get("kind") or "")
@@ -93,9 +101,13 @@ class AccountLearningGovernance:
                 proposal=proposal,
                 evidence_refs=candidate.get("evidence_refs") or [],
                 confidence=float(candidate.get("confidence") or 0),
+                authority=self.authority,
             )
         accepted = self.loop.decide_learning_candidate(
-            candidate_id, status="accepted", reason=reason_value
+            candidate_id,
+            status="accepted",
+            reason=reason_value,
+            authority=self.authority,
         )
         result = {"candidate": accepted}
         if candidate_type == "memory":
@@ -104,6 +116,7 @@ class AccountLearningGovernance:
                 account_id=accepted["account_id"],
                 candidate_id=accepted["id"],
                 topic=topic,
+                authority=self.authority,
             )
         if candidate_type == "strategy":
             if public_benchmark_projection is not None:
@@ -113,26 +126,14 @@ class AccountLearningGovernance:
                     user_id=accepted["user_id"],
                     account_id=accepted["account_id"],
                     candidate_id=accepted["id"],
+                    authority=self.authority,
                 )
         if candidate_type == "skill":
-            from tools.skill_manager_tool import skill_manage
-
-            projection = json.loads(
-                skill_manage(
-                    action="create",
-                    name=skill_name,
-                    content=skill_content,
-                    category="marketing",
-                    agent_created=True,
-                )
-            )
-            if not projection.get("success"):
-                raise RuntimeError(str(projection.get("error") or "native Skill projection failed"))
-            result["skill_projection"] = projection
+            result["skill_projection"] = skill_projection
         return result
 
 
-def _reviewed_recovery_skill(candidate: dict) -> tuple[str, str]:
+def _validated_recovery_skill(candidate: dict) -> tuple[str, str]:
     proposal = candidate.get("proposal") or {}
     if proposal.get("kind") != "publish_unknown_recovery_workflow":
         raise ValueError("unsupported Skill learning projection")
@@ -159,7 +160,7 @@ def _reviewed_recovery_skill(candidate: dict) -> tuple[str, str]:
     description = str(proposal.get("description") or "").strip()
     trigger = str(proposal.get("trigger") or "").strip()
     if not name or not description or not trigger:
-        raise ValueError("Skill candidate is missing its reviewed identity or trigger")
+        raise ValueError("Skill candidate is missing its validated identity or trigger")
     clean_steps: list[str] = []
     for raw in steps:
         step = " ".join(str(raw or "").split())

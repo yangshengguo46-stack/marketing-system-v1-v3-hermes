@@ -13,6 +13,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from agent.epistemic_contract import (
+    EpistemicClass,
+    SystemAuthority,
+    require_system_authority,
+)
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.storage import MarketingDomainRepository
 
@@ -328,8 +333,14 @@ class OperatingLoopRepository(MarketingDomainRepository):
         return [self.get_learning_candidate(row["id"]) for row in rows]
 
     def decide_learning_candidate(
-        self, candidate_id: str, *, status: str, reason: str = ""
+        self,
+        candidate_id: str,
+        *,
+        status: str,
+        reason: str = "",
+        authority: SystemAuthority | None = None,
     ) -> dict[str, Any]:
+        require_system_authority(authority, EpistemicClass.DERIVED_KNOWLEDGE)
         if status not in {"accepted", "rejected", "superseded"}:
             raise ValueError("invalid learning candidate decision")
         with self._transaction() as db:

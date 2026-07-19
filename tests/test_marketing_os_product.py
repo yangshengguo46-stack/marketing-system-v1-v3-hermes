@@ -8,6 +8,7 @@ from agent.product import (
     PRODUCT_CORE_UPDATE_MESSAGE,
     PRODUCT_ECOSYSTEM_COMPATIBILITY,
     PRODUCT_NAME,
+    PERSONAL_IP_AGENT_CONTRACT,
     PRODUCT_RUNTIME_GUIDANCE,
     is_product_code_tool,
     is_product_perception_tool,
@@ -37,6 +38,7 @@ def test_marketing_os_is_the_native_agent_identity():
     assert PRODUCT_NAME == "Marketing OS"
     assert DEFAULT_AGENT_IDENTITY == PRODUCT_AGENT_IDENTITY
     assert DEFAULT_AGENT_IDENTITY.startswith("You are Marketing OS")
+    assert "personal-IP operating agent" in DEFAULT_AGENT_IDENTITY
     assert "generic chatbot" in DEFAULT_AGENT_IDENTITY
     assert "real publishing receipts" in DEFAULT_AGENT_IDENTITY
 
@@ -64,6 +66,10 @@ def test_runtime_guidance_keeps_hermes_primary_without_a_second_agent():
     )
     assert "video_analyze" in HERMES_AGENT_HELP_GUIDANCE
     assert "never put complete articles" in HERMES_AGENT_HELP_GUIDANCE
+    assert "native epistemic contract" in HERMES_AGENT_HELP_GUIDANCE
+    assert "System learning remains silent" in HERMES_AGENT_HELP_GUIDANCE
+    assert any("personal-IP operating agent" in rule for rule in PERSONAL_IP_AGENT_CONTRACT)
+    assert any("user is authoritative" in rule.lower() for rule in PERSONAL_IP_AGENT_CONTRACT)
 
 
 def test_hermes_ecosystem_contracts_remain_product_capabilities():

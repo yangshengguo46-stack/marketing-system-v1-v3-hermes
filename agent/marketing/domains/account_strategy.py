@@ -19,6 +19,12 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
+from agent.epistemic_contract import (
+    EpistemicClass,
+    SystemAuthority,
+    require_system_authority,
+    require_user_confirmation,
+)
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.evidence import EvidenceRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
@@ -163,8 +169,10 @@ class AccountStrategyRepository(MarketingDomainRepository):
         profile_id: str,
         confirmed_by_user: bool,
     ) -> dict[str, Any]:
-        if confirmed_by_user is not True:
-            raise ValueError("explicit user confirmation is required")
+        require_user_confirmation(
+            EpistemicClass.USER_SELF_REPORT,
+            confirmed_by_user=confirmed_by_user,
+        )
         now = _now()
         with self._transaction() as db:
             _require_project(db, user_id=user_id, account_id=account_id, project_id=project_id)
@@ -281,8 +289,10 @@ class AccountStrategyRepository(MarketingDomainRepository):
         route_id: str,
         confirmed_by_user: bool,
     ) -> dict[str, Any]:
-        if confirmed_by_user is not True:
-            raise ValueError("explicit user confirmation is required")
+        require_user_confirmation(
+            EpistemicClass.STRATEGIC_CHOICE,
+            confirmed_by_user=confirmed_by_user,
+        )
         now = _now()
         with self._transaction() as db:
             _require_project(db, user_id=user_id, account_id=account_id, project_id=project_id)
@@ -442,8 +452,10 @@ class AccountStrategyRepository(MarketingDomainRepository):
     ) -> dict[str, Any]:
         if decision not in {"selected", "rejected"}:
             raise ValueError("benchmark decision must be selected or rejected")
-        if confirmed_by_user is not True:
-            raise ValueError("explicit user confirmation is required")
+        require_user_confirmation(
+            EpistemicClass.STRATEGIC_CHOICE,
+            confirmed_by_user=confirmed_by_user,
+        )
         with self._transaction() as db:
             row = _require_benchmark(
                 db, user_id=user_id, account_id=account_id, project_id=project_id,
@@ -540,8 +552,11 @@ class AccountStrategyRepository(MarketingDomainRepository):
         proposal: dict[str, Any],
         evidence_refs: list[str],
         confidence: float,
+        authority: SystemAuthority | None = None,
     ) -> dict[str, Any]:
-        """Idempotently project one explicitly accepted public observation."""
+        """Idempotently project one system-accepted public observation."""
+
+        require_system_authority(authority, EpistemicClass.DERIVED_KNOWLEDGE)
 
         kind = str(proposal.get("kind") or "")
         if kind not in {
@@ -818,8 +833,10 @@ class AccountStrategyRepository(MarketingDomainRepository):
         confirmed_by_user: bool,
         accept_data_gaps: bool = False,
     ) -> dict[str, Any]:
-        if confirmed_by_user is not True:
-            raise ValueError("explicit user confirmation is required")
+        require_user_confirmation(
+            EpistemicClass.STRATEGIC_CHOICE,
+            confirmed_by_user=confirmed_by_user,
+        )
         current = self.get_positioning(
             user_id=user_id, account_id=account_id, project_id=project_id,
             positioning_id=positioning_id,
@@ -919,8 +936,10 @@ class AccountStrategyRepository(MarketingDomainRepository):
         system_id: str,
         confirmed_by_user: bool,
     ) -> dict[str, Any]:
-        if confirmed_by_user is not True:
-            raise ValueError("explicit user confirmation is required")
+        require_user_confirmation(
+            EpistemicClass.STRATEGIC_CHOICE,
+            confirmed_by_user=confirmed_by_user,
+        )
         now = _now()
         with self._transaction() as db:
             current = db.execute(
@@ -1051,8 +1070,10 @@ class AccountStrategyRepository(MarketingDomainRepository):
         experiment_id: str,
         confirmed_by_user: bool,
     ) -> dict[str, Any]:
-        if confirmed_by_user is not True:
-            raise ValueError("explicit user confirmation is required")
+        require_user_confirmation(
+            EpistemicClass.STRATEGIC_CHOICE,
+            confirmed_by_user=confirmed_by_user,
+        )
         now = _now()
         with self._transaction() as db:
             updated = db.execute(
@@ -1099,14 +1120,17 @@ class AccountStrategyRepository(MarketingDomainRepository):
         user_id: str,
         account_id: str,
         candidate_id: str,
+        authority: SystemAuthority | None = None,
     ) -> dict[str, Any]:
         """Promote one accepted strategy candidate into active account weights.
 
-        The learning-candidate table remains the review/audit owner.  This
+        The learning-candidate table remains the system audit owner.  This
         method owns only the durable, versioned strategy truth consumed by
         preflight.  It deliberately refuses raw ``weight`` candidates so replay
-        approval and strategy review cannot be collapsed into one click.
+        evidence replay and strategy projection cannot be collapsed into one user click.
         """
+
+        require_system_authority(authority, EpistemicClass.DERIVED_KNOWLEDGE)
 
         with self._transaction() as db:
             candidate = db.execute(

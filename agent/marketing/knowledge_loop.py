@@ -16,6 +16,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from agent.epistemic_contract import _issue_system_authority
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.knowledge_bases import KnowledgeBaseRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
@@ -24,7 +25,7 @@ from agent.marketing.intelligence.learning_governance import (
     decide_weight_candidate_with_replay,
     replay_weight_candidate,
 )
-from agent.marketing.learning import AccountLearningGovernance
+from agent.marketing.learning import SystemLearningProjector
 
 
 KNOWLEDGE_MAINTENANCE_VERSION = "knowledge-maintenance-v0.2"
@@ -38,6 +39,7 @@ class KnowledgeMaintenanceRunner(MarketingDomainRepository):
         super().__init__(paths)
         self.knowledge = KnowledgeBaseRepository(self.paths)
         self.loop = OperatingLoopRepository(self.paths)
+        self.authority = _issue_system_authority("marketing_knowledge_maintenance")
 
     def run(self, *, as_of: str | None = None) -> dict[str, Any]:
         now = _time(as_of)
@@ -64,7 +66,7 @@ class KnowledgeMaintenanceRunner(MarketingDomainRepository):
         projected: list[str] = []
         rejected: list[str] = []
         waiting: list[str] = []
-        governance = AccountLearningGovernance(self.paths)
+        governance = SystemLearningProjector(self.paths, authority=self.authority)
 
         for candidate in self.loop.list_learning_candidates(
             candidate_type="memory", status="pending", limit=500
@@ -99,6 +101,7 @@ class KnowledgeMaintenanceRunner(MarketingDomainRepository):
                 result = decide_weight_candidate_with_replay(
                     self.loop,
                     candidate["id"],
+                    authority=self.authority,
                     decision="accepted",
                     reason="system-owned historical replay passed every support/conflict/harm gate",
                 )
@@ -115,6 +118,7 @@ class KnowledgeMaintenanceRunner(MarketingDomainRepository):
                 self.loop.decide_learning_candidate(
                     candidate["id"],
                     status="rejected",
+                    authority=self.authority,
                     reason=f"system-owned replay eliminated candidate: {status}",
                 )
                 rejected.append(candidate["id"])
@@ -126,6 +130,30 @@ class KnowledgeMaintenanceRunner(MarketingDomainRepository):
         ):
             self._project_system_strategy(candidate["id"], governance, projected, waiting)
 
+        for candidate in self.loop.list_learning_candidates(
+            candidate_type="skill", status="pending", limit=500
+        ):
+            try:
+                governance.accept_and_project(
+                    candidate["id"],
+                    reason=(
+                        "system-owned reusable workflow passed receipt-pair, scope, "
+                        "bounded-step and deterministic validation gates"
+                    ),
+                )
+                projected.append(candidate["id"])
+            except ValueError as exc:
+                self.loop.decide_learning_candidate(
+                    candidate["id"],
+                    status="rejected",
+                    authority=self.authority,
+                    reason=f"system-owned Skill gate rejected candidate: {exc}",
+                )
+                rejected.append(candidate["id"])
+            except RuntimeError:
+                # A temporary filesystem/runtime failure is not counterevidence.
+                waiting.append(candidate["id"])
+
         return {
             "projected_candidate_ids": list(dict.fromkeys(projected)),
             "rejected_candidate_ids": rejected,
@@ -135,7 +163,7 @@ class KnowledgeMaintenanceRunner(MarketingDomainRepository):
     def _project_system_strategy(
         self,
         candidate_id: str,
-        governance: AccountLearningGovernance,
+        governance: SystemLearningProjector,
         projected: list[str],
         waiting: list[str],
     ) -> None:
@@ -188,7 +216,9 @@ class KnowledgeMaintenanceRunner(MarketingDomainRepository):
         ):
             if (candidate.get("proposal") or {}).get("kind") != "evidence_knowledge_candidate":
                 continue
-            self.knowledge.project_evidence_candidate(candidate["id"])
+            self.knowledge.project_evidence_candidate(
+                candidate["id"], authority=self.authority
+            )
             recovered.append(candidate["id"])
         return recovered
 
@@ -296,13 +326,16 @@ class KnowledgeMaintenanceRunner(MarketingDomainRepository):
                 candidate = self.loop.decide_learning_candidate(
                     candidate["id"],
                     status="accepted",
+                    authority=self.authority,
                     reason=(
                         "system-owned deterministic public cohort passed minimum repeated-case "
                         f"quorum ({len(samples)} cases, two or more snapshots each)"
                     ),
                 )
             if candidate["status"] == "accepted":
-                entry = self.knowledge.project_evidence_candidate(candidate["id"])
+                entry = self.knowledge.project_evidence_candidate(
+                    candidate["id"], authority=self.authority
+                )
                 entry_ids.append(entry["id"])
         return entry_ids
 

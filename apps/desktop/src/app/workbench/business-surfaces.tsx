@@ -367,23 +367,8 @@ function accountMetricSpecs(account: MarketingAccountSummary): { label: string; 
   ]
 }
 
-export function ManagedView({ onStartOperation, requestGateway }: OperationSurfaceProps) {
+export function ManagedView({ onStartOperation }: OperationSurfaceProps) {
   const accountId = useStore($selectedMarketingAccountId)
-  const [pending, setPending] = useState(0)
-
-  useEffect(() => {
-    if (!accountId || accountId.startsWith('prospect_')) {
-      return
-    }
-
-    void requestGateway<{ total: number }>('marketing.learning.candidates.list', {
-      account_id: accountId,
-      limit: 100,
-      status: 'pending'
-    })
-      .then(result => setPending(result.total || 0))
-      .catch(() => setPending(0))
-  }, [accountId, requestGateway])
 
   return (
     <ProductPage
@@ -413,16 +398,16 @@ export function ManagedView({ onStartOperation, requestGateway }: OperationSurfa
           title="后台推进"
         />
         <AutopilotSignal
-          detail={`${pending} 条策略变化等待确认，重要决定仍由你完成。`}
+          detail="事实与学习由系统按证据静默校准；你的偏好、身份、目标和重要动作仍由你决定。"
           icon={<Lock className="size-5" />}
-          title="策略守门"
+          title="分级决策"
         />
       </section>
       <section className="mt-10">
         <div className="max-w-2xl">
           <h2 className="text-xl font-semibold tracking-[-0.03em]">你决定边界，它负责推进</h2>
           <p className="mt-3 text-sm leading-7 text-(--ui-text-secondary)">
-            日常采集、分析和内容推进可以自动完成；发布、账号变更和长期策略调整仍会先征得你的同意。
+            日常采集、事实校验和系统学习在后台完成；你确认个人偏好、IP 身份与经营方向，并授权发布、付费和账号变更。
           </p>
           <Button
             className="mt-6"

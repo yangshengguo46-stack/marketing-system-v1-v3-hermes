@@ -25,12 +25,12 @@
 | Hermes 产品本体 | 完整源码已成为主仓库根 | code + automated | 上游吸收 CI、正式签名发布 |
 | State/data owner | 经营项目、受众、证据、内容、预演、回执和学习表已进入 Hermes `state.db`；旧 `agent_core.db` 一次迁移后只读保留 | dev-runtime | 删除旧兼容读取路径；中央服务仍待部署运维 |
 | Short-video sound intelligence | Playwright MCP 原生短视频/BGM 结构化采集；Sound/Observation/Evidence 入 `state.db`；预演、草稿快照和发布回执携带声音身份 | automated | 真人 selector 验收冻结到账号登录 UI 完成后；再做跨日速度与匹配样本归因 |
-| Public content natural experiments | Playwright MCP 采集公域作品与聚合反馈；Hermes 保存同作品延迟快照，用内容/受众/需求投影/认知投影/存在策略/社会反应模型解释并生成内容与对标学习候选 | automated | 真实抖音/公众号/小红书 selector 验收、跨日调度、样本治理 UI 与大规模重复证据校准 |
+| Public content natural experiments | Playwright MCP 采集公域作品与聚合反馈；Hermes 保存同作品延迟快照，用内容/受众/需求投影/认知投影/存在策略/社会反应模型解释并生成内容与对标学习候选 | automated | 真实抖音/公众号/小红书 selector 验收、跨日调度与大规模重复证据校准 |
 | Central knowledge core | 匿名贡献 wire contract、安全服务与隐私聚合签名；Hermes 原生 Provider 上传 consented outbox、验签安装先验；撤回授权按 pending 本地扣留、submitted 中央删除，处理上传竞态和崩溃恢复 | automated | TLS/反向代理、凭据签发运维、签名私钥轮换演练与真实多用户规模 |
-| New-media operating model | 创作者资产、赛道路线、行为受众、七角色对标图谱、定位、内容系统和可证伪实验进入 Hermes 原生领域 owner；关键版本需用户确认 | automated | 真实赛道研究、对标采集、自然对话真人验收 |
-| Human Observation Core | 已从 Marketing OS 拆成 source-agnostic AGI 研究基础设施；原始观察、时间图谱、版本理论、竞争解释、假设、封存预测、结果和模型修订各有独立 owner；“存在”是 `fixed_axiom=false` 的可修订 seed，Marketing 仅单向贡献 Receipt 并只读消费 | automated | 合法多源长期样本、代表性/偏差审计、跨语境校准、研究者评审与安全评估 |
+| New-media operating model | 创作者资产、赛道路线、行为受众、七角色对标图谱、定位、内容系统和可证伪实验进入 Hermes 原生领域 owner；用户只确认自己的身份、偏好、经营方向和外部动作 | automated | 真实赛道研究、对标采集、自然对话真人验收 |
+| Human Observation Core | 已从 Marketing OS 拆成 source-agnostic AGI 研究基础设施；原始观察、时间图谱、版本理论、竞争解释、假设、封存预测、结果和模型修订各有独立 owner；“人不可被还原成标签”是伦理/产品公理，具体存在策略是 `fixed_axiom=false` 的可修订研究 seed；Marketing 仅单向贡献 Receipt 并只读消费 | automated | 合法多源长期样本、代表性/偏差审计、跨语境校准、研究者评审与安全评估 |
 | Agent perception layer | `vision_analyze`、`browser_vision`、`video_analyze` 作为 Marketing Agent 的原生底层感知能力；主业务 toolset、受约束媒体代码 worker、默认委派和文件读取引导均已贯通，视频能力在产品运行时不可被渐进披露隐藏 | automated | 真人长视频、多格式/损坏文件、音频转写联动与跨模型视觉一致性验收 |
-| Four knowledge bases | Platform/Market/Account/Content 四库进入 Hermes `state.db`；Cron 静默执行时效淘汰、显式冲突隔离、重复公域样本聚合、Receipt-backed 账号学习和历史回放校准；用户/对话写入与候选决策 RPC 均被拒绝 | automated | 更大规模真实采集、官方平台规则原生刷新源、中央服务真实部署 |
+| Four knowledge bases | Platform/Market/Account/Content 四库进入 Hermes `state.db`；Cron 静默执行时效淘汰、显式冲突隔离、重复公域样本聚合、Receipt-backed 账号学习和历史回放校准；候选读取/决策 RPC 已从产品面删除，知识写入必须持有系统能力 | automated | 更大规模真实采集、官方平台规则原生刷新源、中央服务真实部署 |
 | Desktop | `apps/desktop` 唯一 UI/Electron；首轮经营、图文和视频动作提交结构化意图后由 Gateway 原子启动 Agent，结果回到原经营对象，不再跳新对话或要求二次发送；一级草稿箱只投影 Hermes 半成品并回到原图文/视频管线 | automated | 开发机真人首半小时、Gateway 重启后的 operation 恢复、草稿箱真人视觉验收、干净机安装 |
 | Session/account scope | SessionDB 新增稳定经营主体 scope；一个 creator/brand 可关联多个平台账号，Agent 读取账号上下文、内容资产和证据时按主体聚合，登录/浏览器/发布仍固定 action account；新会话自动获得稳定 `prospect_*` 作用域；MCP 真实登录验证后原子迁移经营事实 | automated | 真人二维码/验证码校准、多经营主体显式建组/拆组 UI、历史账号误分组审查、successor UI 切换与打包浏览器策略 |
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、真实登录验证、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放登录窗口，后续以同一持久 profile 后台恢复；删除时清理 profile | automated | 真人多平台登录/退出、Cookie 信号随平台变更的巡检 |
@@ -39,7 +39,7 @@
 | Content plan/assets | 图文、不露脸素材视频与 `cross_platform_campaign` 三 lane policy；同一内容内核按任意国内/海外平台集合生成不同受众、开头、结构、互动、CTA、视觉与格式合同；未知平台保留明确调研缺口；不可变版本、人审与草稿归档继续复用原 owner | automated | 真实模型五平台成品质量、人审与发布；平台画像时效来源；草稿归档/恢复真人验收 |
 | Preflight | InfluenceOS + 不可变记录 + draft gate；每个平台保存独立适配评估；经营优先级/选题推荐必须先产生 plan + preflight，返回 `recommended` 或 `research_only`，阻断候选不得伪装成推荐 | automated | 真实账号历史校准、自动推送任务真人验收、评论聚类 Provider、平台竞争/时段/投流先验 |
 | Receipt/Learning store | ReceiptRef、LearningCandidate、PublishAction、MetricCheckpoint 状态机；观察后自动执行投影机制链对账和分层 causal reflection；系统门禁静默晋级/等待/淘汰，用户与对话不能操作候选 | automated | 更多平台一方指标采集器、真实跨天规模数据 |
-| Hermes memory/Skill | 1 个产品运行 Skill、23 个原始营销 playbook 和 13 个内容/编剧/视频参考 Skill 已纳入源码；经营写入规则已加入 | automated | 候选治理 UI、重复成功流程沉淀；参考 Skill 升级必须逐项审查 |
+| Hermes memory/Skill | 1 个产品运行 Skill、23 个原始营销 playbook 和 13 个内容/编剧/视频参考 Skill 已纳入源码；用户自述/偏好进入 USER/MEMORY，系统学习候选按证据与回放门禁静默投影 | automated | 重复成功流程沉淀；参考 Skill 升级必须逐项审查 |
 | Publishing/metrics | 原生发布 intent、一次性审批、Provider 插槽、unknown 恢复、回执校验、5 段 checkpoint；Hermes Cron 原生触发指标 owner；抖音/公众号已接账号隔离浏览器一方作品采集，支持领取、延期、7d 淘汰、崩溃恢复和 unavailable 回执 | automated | 其余平台真实发布/指标 Provider 和真人跨天验收 |
 | Packaging | 自包含 Hermes/Python/Chromium staging 可构建；固定版本 Remotion/HyperFrames 已进入产品 runtime，并在 staged Electron Node + Chromium 中真实出片 | packaged | 正式安装包签名、公证、干净机断网首启与升级回滚 |
 | High-end video | 已完整迁入独立 `/Users/yangyucheng/projects/video-studio`；Marketing OS 仅保留边界指针，不保留引擎、运行时、角色、Provider 或内部生产 lane | external product | 不计 Marketing OS 桌面完成度；未来接入必须等待独立产品稳定 Port/API |
@@ -54,7 +54,7 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 | `faceless_video` 不露脸素材视频 | 账号/实验绑定、内容计划、素材需求、声音计划、特征快照、Preflight、不可变 Video IR/EDL、scene/IR/render-plan hash、能力路由、显式渲染批准、固定版本 Remotion/HyperFrames 镜头执行、真实 FFmpeg 规格化与合成、场景缓存、派生最终素材、不可变成品版本、失败重试与 Render Receipt；黑场/冻结/响度/技术规格自动 QA；TopicBrief 直接 fan-out 到独立 Video Director，不再依赖或复制图文脚本；素材按用户库 → Wikimedia Commons/Pexels 等零费用开放来源 → 本地缓存检索，拒绝付费生成；Desktop 已真实加载并播放成片 | 首条端到端证明片只复用了一条开放素材，部分 Remotion 大字存在裁切；后续运行已加素材相关性与多查询/多来源策略，但仍需真实模型多平台人审、发布和跨天数据回收 | dev-runtime（成片与播放已验；未达 publish-grade/human-loop） |
 | `cross_platform_campaign` 全平台 campaign | 一个内容内核绑定任意目标平台集合；内置抖音、公众号、视频号、知乎、小红书、B站、快手、TikTok、YouTube、Instagram、LinkedIn、X 的版本化内容画像，非内置安全平台 ID 以 `generic_unverified_requires_platform_research` 降级；每个平台变体必须内容实质不同并说明受众、开头、结构和 CTA 适配依据 | 真实模型成品、平台画像的证据/有效期治理、账号级效果校准、各平台发布 Provider | automated |
 
-三种内部形态共同消费经营主体上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与受治理学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接人工确认，不拥有生产、素材、浏览器、发布或学习事实。
+三种内部形态共同消费经营主体上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与系统门禁治理的学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接用户自身选择与外部动作授权，不拥有生产、素材、浏览器、发布或学习事实。
 
 当前不能宣称“内容制作已完成”。不露脸视频自动化链已证明用户/Provider 素材候选、许可证确认、TTS 意图批准、真实音频导入、BGM 混音、渲染、QA、版本与回执可以贯通；但没有擅自调用当前可能计费的 `volcengine-speech`，也没有在未配置 Pexels Key 时伪造在线下载。仍缺真实账号输入、在线 Provider、真人认可成品、发布回执和跨天指标学习的 `human-loop` 证据。高级视频是独立产品，不属于本台账完成范围；迁移指针见 [`../deferred/high-end-video-volcengine.md`](../deferred/high-end-video-volcengine.md)。
 
@@ -67,12 +67,23 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 
 ## 当前唯一主线
 
+### EPISTEMIC-01 分级认识论与个人 IP Agent 合同（automated，2026-07-19）
+
+- **产品身份。** Marketing OS 的前台第一身份固定为长期运行的个人 IP 经营 Agent：先理解用户的身份、偏好、目标、边界和经营方向，再完成研究、选题、制作、发布授权、回执和复盘。Human Observer 是后台研究底座，不得取代产品任务，也不以诊断面板暴露给用户。
+- **六级认识论合同。** 新增 `USER_SELF_REPORT`、`STRATEGIC_CHOICE`、`EXTERNAL_ACTION`、`OBSERVED_FACT`、`DERIVED_KNOWLEDGE`、`HUMAN_RESEARCH` 六类权威矩阵。前三类分别由用户修订、确认或授权；后三类由来源、Receipt、冲突/时效/回放门禁和系统研究流程治理，用户陈述只能成为新证词或反证，不能成为事实真值投票。
+- **代码级能力边界。** Knowledge/Account Strategy/Learning Candidate/Human Observer 写路径必须持有进程内 `SystemAuthority`；Human Observer writer 已私有化，公共包只暴露 reader 与维护 runner。普通对话、Gateway 和 Electron 不持有该能力。该能力是当前单进程产品的 API 边界；未来若允许不可信插件或多租户代码同进程执行，仍必须升级为独立进程/OS 级隔离。
+- **产品面收口。** 删除 `marketing.learning.candidates.list`、`marketing.learning.candidate.decide` 和 `learning.review` 入口；工作台不再展示学习候选数量，也不要求用户治理模型。用户仍能修改自己的偏好、身份与 IP 方向，并必须授权发布、付费、账号变更等外部动作。
+- **静默闭环。** 指标/公域观察先产生候选；后台维护按不可变证据、时效、冲突和历史回放决定等待、淘汰或投影到 Account KB、权重、策略和系统 Skill。Skill 投影也走系统能力，不复用用户写入批准。
+- **“存在”分层。** “人是主体、不能被模型完全还原”为不可让渡的伦理/产品公理；“保存、确认、扩展、延续”等存在策略只是可证伪、可替换的研究 seed。项目不再把二者写成同一层真理。
+- **权利不等于真值投票。** 同意、撤回、删除、导出与保留期属于数据主体权利，始终保留；它们不等于接受或拒绝系统知识结论。完整合同见 [`PRODUCT_CONSTITUTION.md`](./PRODUCT_CONSTITUTION.md)、[`PRODUCT_PHILOSOPHY.md`](./PRODUCT_PHILOSOPHY.md) 与 [`ARCHITECTURE_DOCTRINE.md`](./ARCHITECTURE_DOCTRINE.md)。
+- **自动化证据。** Marketing/Human Observer/产品合同相关全量 `230 passed, 1 skipped`；Desktop 定向 `10/10`，TypeScript、ESLint、Ruff、Python compile 与 `git diff --check` 通过。定向测试同时证明伪造 system capability 失败、repository 无 capability 不能裁决、Gateway 两个旧方法不存在、Human Observer 公共包无 writer、Skill 重放幂等。
+
 ### HARNESS-00 全项目 Durable Multi-Agent Harness 重构（H1～H4 首条端到端 dev-runtime 已验，2026-07-18）
 
 - **本轮裁决。** 当前主线从 `PUBLISH-01` 和 `MATERIAL-VIDEO-AUDIT-01` 上收为 Harness 重构；此前纵切不删除，但冻结新增功能，只允许作为迁移样本或修复阻断性回归。目标基线见 [`HARNESS_ARCHITECTURE.md`](./HARNESS_ARCHITECTURE.md)。
 - **真实根因。** Marketing 产品按钮当前走 `marketing.operation.start → hidden desktop-product Session → prompt.submit → free Agent turn`；operation 只有四态，靠运行前后对象 ID 差猜结果，Gateway 重启后未完成 turn 直接 error。Hermes 虽已有 delegate 并发和 Kanban `task/run/event + CAS/lease/heartbeat/reclaim`，Marketing 产品没有接入。问题不是 Agent 数量少，而是自由 Agent 承担了业务状态机。
 - **视频边界冻结。** 当前未提交的 campaign/script 直达视频代码只作为失败实验保留在脏工作树，不进入新主链。正确目标是预演 TopicBrief 同时 fan-out 图文和视频兄弟分支；Video Director 独立策划平台视频、脚本/旁白、shot plan、素材、声音、渲染与 QA，Remotion/HyperFrames/FFmpeg 只作为执行 hands。
-- **Git 基线。** 当前分支 `codex/marketing-os-product-source`、HEAD `9d9c3c095`，无 upstream tracking，唯一 remote 为 `hermes-upstream`；工作树已有 28 个 tracked 文件未提交、`+2716/-106`，没有 untracked。重构不得覆盖或误提交这些既有改动，`H0` 必须先逐文件判定 keep/migrate/drop。
+- **HARNESS 启动时 Git 基线。** 当时分支为 `codex/marketing-os-product-source`、HEAD `9d9c3c095`，无 upstream tracking，唯一 remote 为 `hermes-upstream`；工作树已有 28 个 tracked 文件未提交、`+2716/-106`，没有 untracked。该段只记录 H0 启动时证据，不代表当前 Git 状态。
 - **历史删除核对。** Git 不存在“昨天单次删除一万多行”。可对应总量是三次收敛：`7386e9147` 删除旧文档/台账 `6110` 行，`d098c4ad1` 删除 extracted video engine `3401` 行，`f0aa95d62` 删除内部高阶视频 lane `610` 行，合计 `10121` 行；7 月 17 日两个提交本身只删除 `1752` 行。删除的是旧文档/任务入口、第二套 video engine/adapter/store/poller/renderer/多角色 Skill，以及高阶视频内部 lane，不是 Hermes Agent、Remotion/HyperFrames/FFmpeg 或原生素材视频底座。
 - **台账纠错。** `FACELESS-01 已收口、下一步 PUBLISH` 与本文件后部 `MATERIAL-VIDEO-AUDIT-01 P0-1～7` 冲突，前者从本节起不再是当前完成判断；“33 表 entity ownership 完成”只代表列、回填和 trigger 防错完成，不能冒充所有 Repository 已 entity-first。素材、production、草稿和部分 Desktop 查询仍需在 `H5` 迁移。
 - **实施顺序。** `H0` 冻结与基线已完成意图级 keep/migrate/drop 裁决，逐组代码迁移尚未提交；接下来是 `H1` Harness schema/event/lease 与单 Step 兼容 → `H2` 后端任务 projection/订阅/恢复并删除 Electron 内存任务 owner → `H3` Daily Topic DAG 和图文/视频兄弟分支 → `H4` 视频 Project/Revision/可信素材/播放器/声音/renderer/QA → `H5` entity-first 和 schema 单 owner → `H6` Cron enqueue + Provider/effect Activity/outbox → `H7` 最小 toolset、trace/eval/replay 和旧 prompt 编排删除。H0 逐组裁决见 [`HARNESS_ARCHITECTURE.md`](./HARNESS_ARCHITECTURE.md#81-h0-脏工作树裁决)。
@@ -110,7 +121,7 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 4. 已完成用户素材优先的 Provider 中立候选、Pexels 官方 API 适配、来源/作者/许可证快照、显式版权审查后下载和稳定 Provider 身份去重；API Key 不进入候选、回执或业务库。
 5. 已完成 TTS `prepared → approved → running → completed/failed` 状态机，复用用户配置的 Hermes TTS Provider，真实输出进入声音素材及脚本哈希回执；授权 BGM 与旁白已通过实际 FFmpeg 混音和 48kHz 音轨 QA。用户已明确要求火山 TTS 常驻，Desktop 独立运行时已持久化 `marketing.video.auto_voiceover=true`，只对视频旁白自动执行；素材付费生成仍禁用，声音调用继续复用脚本哈希避免重复计费。
 6. Electron 视频工作台已按真实 production 投影展示项目、镜头、素材授权、横竖/方屏及自定义画幅、执行器、时间线、声音/字幕轨、渲染状态、最终视频和 Render Receipt；确认成片或提出局部修改均写回原生审核 owner，修改继续生成不可变新版本。Electron 不拥有生产状态或执行。
-7. 自动化纵切完成，进入 `PUBLISH-01 → METRIC-01 → LEARNING-UI-01 → DELIVERY-01 → E2E-01`。
+7. 自动化纵切完成，进入 `PUBLISH-01 → METRIC-01 → SYSTEM-LEARNING-01 → DELIVERY-01 → E2E-01`。
 
 完成口径：账号上下文 → 有授权来源的素材与声音 → 实际 EDL/渲染 → 可恢复版本 → 人工审片入口；最终真人认可仍在 `E2E-01` 统一验收。
 
@@ -118,9 +129,9 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 
 - **审计纠错。** 上一版把未来 AGI 的人类建模底座收窄成 Marketing Preflight 的心理学覆盖因子，是架构错误；`human-projection-model-v0.3` 不能代表独立人类模型，三作品/两快照门槛也只属于市场知识启发式，不能自动晋升为普遍人性规律。
 - **独立 owner。** 新增 `agent/human_observer/` 和独立声明式 schema：不可变原始观察、时间图谱、版本理论、候选解释、跨事件假设、事前封存预测、事后结果、模型修订与来源摄取各自分表。Marketing 通过一条 system-only connector 单向贡献 Receipt，不能拥有或修改核心。
-- **理论与存在可修订。** 马斯洛、荣格、Le Bon、社会认同、去个体化、规范涌现、信息级联和存在策略均为带来源、假设和反证条件的竞争 lens；Le Bon 明确是历史争议视角。“存在”只是一版 `fixed_axiom=false`、`unvalidated_seed` 的模型修订，后续可被替换、争议或拒绝。
+- **理论与存在分级。** 马斯洛、荣格、Le Bon、社会认同、去个体化、规范涌现、信息级联和具体存在策略均为带来源、假设和反证条件的竞争 lens；Le Bon 明确是历史争议视角。“人是主体、不能被模型完全还原”属于伦理/产品公理，具体存在策略仍是 `fixed_axiom=false`、`unvalidated_seed` 的模型修订，后续可被替换、争议或拒绝。
 - **Preflight 解耦。** `content-production-preflight-v0.8` 只接受显式 `human-observer-read-projection-v1` 作为只读上下文；不扫描 Marketing audience 字段，不产生覆盖度、置信惩罚、加分、扣分或缺失警告。Marketing 兼容结构改名 `marketing-human-projection-adapter-v0.4` 并声明 `source_of_human_truth=false`。
-- **静默权限。** `SystemHumanObserver` 不注册 Gateway RPC、Tool 或 UI；`HumanObserverReader` 没有写方法。用户和对话不能改观察、理论、候选或模型版本；数据主体的同意、撤回、删除和保留期权利继续保留。
+- **静默权限。** Human Observer writer 已私有化且要求 `HUMAN_RESEARCH` 系统能力，不注册 Gateway RPC、Tool 或 UI；公共包只暴露没有写方法的 `HumanObserverReader` 和系统维护 runner。用户和对话不能改观察、理论、候选或模型版本；数据主体的同意、撤回、删除和保留期权利继续保留。
 - **迁移与验证。** 真实 `state.db` 已在一致性备份 `state.db.pre-human-observer-v1.20260719.bak` 后从 v24 迁移至 v25，`integrity_check=ok`。真实库当前为 8 个理论 lens、1 个可修订 seed、0 条观察、0 条解释、0 次摄取；零数据证明系统没有伪造学习。Human Core + Marketing + Cron + SessionDB 全量相关回归 `514 passed, 1 skipped`，定向 `20/20`，Ruff、Python compile、`git diff --check` 通过。架构基线见 [`../../human-observer/ARCHITECTURE.md`](../../human-observer/ARCHITECTURE.md)。当前只能宣称研究数据底座完成，不能宣称系统已经学会人类。
 
 ### ARCH-01 数据飞轮与学习闭环收口（本地底层完成，部署项后置）
@@ -224,7 +235,7 @@ LOOP-02/03/04 的本地闭环已收口：`cron/product_tasks.py` 只提供 Herme
 2. `FACELESS-01`：Video IR/EDL、真实渲染、自动媒体 QA、人工审片 UI、Provider 素材与批准式 TTS/BGM 自动化已完成；真实在线 Provider 和真人认可留到 `E2E-01`。
 3. `PUBLISH-01`：发布确认 UI、一个真实 Provider 或可靠人工回执、stable ID/URL 反查和 unknown 恢复。
 4. `METRIC-01`：把作品级真实指标接入发布 action 的 checkpoint；账号汇总指标不能冒充单篇回收。
-5. `LEARNING-UI-01`：候选证据、接受/拒绝、最终 Skill/策略 diff 与二次确认。
+5. `SYSTEM-LEARNING-01`：系统静默核验候选证据、冲突、时效、回放、投影与淘汰；不建设候选治理 UI。
 6. `DELIVERY-01`：签名、公证、断网首启、升级回滚和干净机安装。
 7. `E2E-01`：最后统一跑自然对话 → 内容 → 审核 → 发布/回执 → 跨天指标 → Retro → 学习投影全链路。
 
@@ -253,10 +264,11 @@ LOOP-02/03/04 的本地闭环已收口：`cron/product_tasks.py` 只提供 Herme
 - 当前账号卡汇总仅用于诊断，不能写入某篇作品的 1h/6h/24h/3d/7d checkpoint。
 - 未知字段保持空值并暴露 data gap；分页或时间窗不完整时不得推导总量。
 
-### LEARNING-UI-01 候选治理
+### SYSTEM-LEARNING-01 静默学习治理
 
-- Electron 展示 Retro、支持/反例、候选类型和最终 diff，只收集接受、拒绝、理由与二次确认。
-- 单次结果不得自动改策略、权重、Account KB 或 Skill。
+- Electron 不读取学习候选，也不收集接受/拒绝。用户对自己偏好、身份、IP 方向和外部动作的确认走各自 owner，不进入知识真值投票。
+- 单次结果只能生成 pending candidate；必须由系统证据、冲突、时效、最小样本与历史回放门禁决定等待、淘汰或版本化投影。
+- 用户指出客观结论可能有误时，系统把陈述作为新证词或反证线索重新取证，不直接覆盖事实，也不要求用户审理候选。
 
 ### FLYWHEEL-02 中央服务工程化
 
@@ -288,9 +300,9 @@ LOOP-02/03/04 的本地闭环已收口：`cron/product_tasks.py` 只提供 Herme
 - 权重候选必须有至少三个支持样本并通过历史回放。
 - 单次 Retro 先生成 pending candidate；后台系统再核验不可变 Receipt/Evidence。真实复盘自动进入 Account KB；权重必须至少三条支持样本并通过历史支持度、反例比例与伤害回放，失败自动淘汰，样本不足继续等待。
 - 已打通 `memory → Account KB` 与 `weight → 历史回放 → versioned account influence calibration`；校准按账号隔离、幂等、可被后续 Preflight 与指标复盘读取，单次结果不能绕过门禁。
-- Gateway 候选列表只读；原显式决策 RPC 统一返回 4035。Electron、用户和对话都不能接受、拒绝、修改或恢复学习候选。
+- Gateway 候选列表与显式决策 RPC 已删除，调用统一返回 unknown method。Electron、用户和对话都不能读取内部候选队列，也不能接受、拒绝、修改或恢复学习候选。
 - 用户稳定偏好继续由 Hermes 原生 USER/MEMORY owner 管理，不把账号发布结果污染成全局个人记忆。
-- 发布恢复 Skill 候选不属于本知识真值闭环，也不会由用户/对话晋级；当前只保留至少三组 `publish_unknown → 作品列表反查 → verified publish` 双回执的审计候选，不自动改运行 Skill。若未来纳入系统自升级，必须另建签名制品、回滚与沙箱验证门，不能复用知识候选的晋级权限。
+- 发布恢复 Skill 候选不属于客观知识真值，但仍属于系统程序性学习：至少三组不同 action 的 `publish_unknown → 作品列表反查 → verified publish` 双回执，还必须通过平台/Provider/内容类型作用域、有限步骤、重复副作用保护和确定性模板校验，才会由系统能力创建一次；重放只核对同内容并幂等返回。用户、对话和普通 Skill 写入口均不能替它晋级。
 - 学习候选无需治理 UI；如未来展示，只允许显示来源、状态、门禁结果和版本链，不提供修改动作。
 
 ### LOOP-05 真人闭环
@@ -311,7 +323,7 @@ LOOP-02/03/04 的本地闭环已收口：`cron/product_tasks.py` 只提供 Herme
 
 - 直接改造 Hermes `apps/desktop` 原生 Shell，没有新建第二套 Electron 前端，也没有增加 UI 适配服务。
 - 一级导航改为工作台、新对话、内容工厂、草稿箱、素材库、账号管理和托管；内容工厂下固定图文创作与视频创作两个子入口。Skills、MCP、消息通道、Cron 等仍由 Hermes 原生 owner 管理，但不再以开发者概念占据用户一级入口。
-- 工作台读取 `AccountContextRepository`、账号平台统计、内容资产和 learning candidate；只展示真实快照，缺数据时明确等待回执，不生成装饰性假曲线。
+- 工作台读取 `AccountContextRepository`、账号平台统计和内容资产；只展示真实经营快照，缺数据时明确等待回执，不生成装饰性假曲线，也不暴露内部学习候选队列。
 - 内容工厂首页只负责选择创作方式和查看最近内容；图文审核与视频生产进入独立原生路由。视频页使用同一张连续导演工作台完成 `设定 → 分镜 → 动态 → 剪辑 → 成片`，左侧对象/镜头、中央主预览与当前目标自然语言修改框、右侧角色/场景/道具/声音/素材职责固定，剪辑和成片阶段在中央展开多轨时间线。纯素材视频复用同一套工作台；高阶视频已迁出，不保留无法执行的假入口。
 - 素材库把 Hermes 既有统一资产 owner 投影为本地素材与云端素材两栏。本地素材支持 Electron 原生文件/文件夹选择和拖入，只有显式版权确认后才由 Gateway 交给 `MediaAssetRepository` 复制入受控库；账号/全局作用域、SHA-256 去重、来源授权、引用删除保护和成片回执继承均有产品说明，原始绝对路径不进入业务投影。火山云端素材当前保持诚实空状态，未接 Provider、未放假数据、不会产生调用费用。
 - 发布 action、稳定作品身份、unknown 恢复和指标回执从内容工厂移到总工作台；视频成片必须先在导演工作台完整审片并写入原生审核 owner，之后才由 Agent 准备发布。Electron 只展示状态和收集意图，不执行平台动作。

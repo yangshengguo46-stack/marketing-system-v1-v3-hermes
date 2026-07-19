@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from agent.epistemic_contract import (
+    EpistemicClass,
+    SystemAuthority,
+    require_system_authority,
+)
 from hermes_constants import get_hermes_home
 
 from .theories import BUILTIN_THEORIES
@@ -139,10 +144,17 @@ class HumanObserverReader(_Storage):
         }
 
 
-class SystemHumanObserver(HumanObserverReader):
-    """The only in-process write owner; intentionally absent from RPC/tool registries."""
+class _HumanObserverWriter(HumanObserverReader):
+    """Capability-gated writer; absent from package, RPC, tool, and UI APIs."""
 
-    def __init__(self, db_path: str | Path | None = None):
+    def __init__(
+        self,
+        db_path: str | Path | None = None,
+        *,
+        authority: SystemAuthority,
+    ):
+        require_system_authority(authority, EpistemicClass.HUMAN_RESEARCH)
+        self._authority = authority
         _Storage.__init__(self, db_path, initialize=True)
         self._seed_registry()
 

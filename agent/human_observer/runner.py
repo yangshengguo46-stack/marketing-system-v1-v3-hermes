@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from agent.epistemic_contract import _issue_system_authority
+
 
 def run_human_observer_maintenance(*, db_path: str | Path | None = None) -> dict[str, Any]:
     if db_path is None:
@@ -13,7 +15,8 @@ def run_human_observer_maintenance(*, db_path: str | Path | None = None) -> dict
         db_path = MarketingDataPaths.from_env().agent_db
     from .marketing_connector import MarketingReceiptConnector
 
-    result = MarketingReceiptConnector(db_path).run()
+    authority = _issue_system_authority("human_observer_maintenance")
+    result = MarketingReceiptConnector(db_path, authority=authority).run()
     return {
         "version": "human-observer-maintenance-v1",
         "connectors": {"marketing": result},

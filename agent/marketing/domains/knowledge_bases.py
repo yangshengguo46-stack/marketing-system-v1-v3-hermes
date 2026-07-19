@@ -9,6 +9,11 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from agent.epistemic_contract import (
+    EpistemicClass,
+    SystemAuthority,
+    require_system_authority,
+)
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.article_drafts import ARTICLE_STYLEBOOKS
 from agent.marketing.domains.evidence import EvidenceRepository
@@ -160,7 +165,9 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
         valid_to: str | None = None,
         confidence: float = 0.7,
         supersedes_entry_ids: list[str] | None = None,
+        authority: SystemAuthority | None = None,
     ) -> dict[str, Any]:
+        require_system_authority(authority, EpistemicClass.DERIVED_KNOWLEDGE)
         if knowledge_base == "account":
             raise ValueError("account knowledge must come from governed receipt learning")
         verified = EvidenceRepository(self.paths).require_verified(
@@ -211,7 +218,7 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
         supersedes_entry_ids: list[str] | None = None,
         source_key: str | None = None,
     ) -> dict[str, Any]:
-        """Create a reviewable candidate; never write model interpretation as truth."""
+        """Create a system-evaluated candidate; never write interpretation as truth."""
 
         base = _base(knowledge_base)
         if base not in {"platform", "market"}:
@@ -241,7 +248,7 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
             "supersedes_entry_ids": list(dict.fromkeys(supersedes_entry_ids or []))[:100],
             "guardrail": (
                 "Pending only. Source integrity is verified, but the claim enters knowledge "
-                "only after explicit review and remains freshness-bounded."
+                "only after system evidence/conflict gates and remains freshness-bounded."
             ),
         }
         if not proposal["topic"] or not proposal["version"]:
@@ -275,8 +282,15 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
             confidence=bounded_confidence,
         )
 
-    def project_evidence_candidate(self, candidate_id: str) -> dict[str, Any]:
+    def project_evidence_candidate(
+        self,
+        candidate_id: str,
+        *,
+        authority: SystemAuthority | None = None,
+    ) -> dict[str, Any]:
         """Idempotently recover projection of an already accepted candidate."""
+
+        require_system_authority(authority, EpistemicClass.DERIVED_KNOWLEDGE)
 
         from agent.marketing.intelligence.store import OperatingLoopRepository
 
@@ -301,6 +315,7 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
             valid_to=str(proposal.get("valid_to") or "") or None,
             confidence=float(candidate.get("confidence") or 0),
             supersedes_entry_ids=proposal.get("supersedes_entry_ids") or [],
+            authority=authority,
         )
 
     def get_entry(self, entry_id: str) -> dict[str, Any]:
@@ -441,7 +456,9 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
         account_id: str,
         candidate_id: str,
         topic: str | None = None,
+        authority: SystemAuthority | None = None,
     ) -> dict[str, Any]:
+        require_system_authority(authority, EpistemicClass.DERIVED_KNOWLEDGE)
         with self._connection() as db:
             row = db.execute(
                 """SELECT * FROM marketing_learning_candidates

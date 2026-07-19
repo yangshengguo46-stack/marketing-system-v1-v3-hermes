@@ -45,10 +45,6 @@ describe('Marketing OS workbench flow', () => {
         } as T
       }
 
-      if (method === 'marketing.learning.candidates.list') {
-        return { total: 0 } as T
-      }
-
       if (method === 'marketing.publish.actions.list') {
         return { actions: [] } as T
       }
@@ -117,10 +113,6 @@ describe('Marketing OS workbench flow', () => {
 
       if (method === 'marketing.content.assets.list') {
         return { assets: [] } as T
-      }
-
-      if (method === 'marketing.learning.candidates.list') {
-        return { total: 0 } as T
       }
 
       if (method === 'marketing.publish.actions.list') {

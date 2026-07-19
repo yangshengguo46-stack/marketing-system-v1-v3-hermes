@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hermes_state
+import pytest
 
 from agent.marketing.domains import AccountLifecycleRepository
 from agent.marketing.intelligence import OperatingLoopRepository
@@ -38,7 +39,7 @@ def _request(method: str, params: dict, *, request_id: str) -> dict:
     )
 
 
-def test_gateway_lists_learning_but_never_allows_user_or_conversation_decisions(
+def test_gateway_exposes_no_learning_candidate_read_or_decision_surface(
     tmp_path, monkeypatch
 ):
     state_path = tmp_path / "state.db"
@@ -71,6 +72,13 @@ def test_gateway_lists_learning_but_never_allows_user_or_conversation_decisions(
         )
         weight_id = weight["weight_candidate_id"]
 
+        with pytest.raises(PermissionError, match="native system authority"):
+            loop.decide_learning_candidate(
+                weight_id,
+                status="accepted",
+                reason="a direct caller must not govern system learning",
+            )
+
         listed = _request(
             "marketing.learning.candidates.list",
             {"account_id": "acct-1", "candidate_type": "weight"},
@@ -98,10 +106,9 @@ def test_gateway_lists_learning_but_never_allows_user_or_conversation_decisions(
             request_id="confirmed-attempt",
         )
 
-        assert listed["result"]["total"] == 1
-        assert listed["result"]["candidates"][0]["id"] == weight_id
-        assert refused["error"]["code"] == 4035
-        assert confirmed_attempt["error"]["code"] == 4035
-        assert "maintained silently" in confirmed_attempt["error"]["message"]
+        assert listed["error"]["code"] == -32601
+        assert refused["error"]["code"] == -32601
+        assert confirmed_attempt["error"]["code"] == -32601
+        assert loop.get_learning_candidate(weight_id)["status"] == "pending"
     finally:
         db.close()

@@ -5,11 +5,10 @@ Marketing OS may contribute verified observations and consume read-only
 projections, but they do not own the human model.
 """
 
-from .repository import HumanObserverReader, SystemHumanObserver
+from .repository import HumanObserverReader
 from .runner import run_human_observer_maintenance
 
 __all__ = [
     "HumanObserverReader",
-    "SystemHumanObserver",
     "run_human_observer_maintenance",
 ]

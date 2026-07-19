@@ -32,7 +32,6 @@ _OPERATION_KINDS = frozenset({
     "content.topic.start",
     "content.resume",
     "content.revise",
-    "learning.review",
     "materials.cloud.status",
     "video.asset.select",
     "video.autopilot",
@@ -263,7 +262,7 @@ def _operation_copy(operation: dict[str, Any]) -> tuple[str, str, str]:
         return (
             "排出今天的经营优先级",
             "今天的经营优先级",
-            "读取当前经营主体、全部相关平台账号、正在推进的内容、待确认学习和真实发布回执。"
+            "读取当前经营主体、全部相关平台账号、正在推进的内容、系统学习投影和真实发布回执。"
             "如果最值得推进的是新选题，必须先用 marketing_plan_content_production 为这个确切选题和全部相关平台"
             "建立计划并完成预演；只有预演未阻断时才能称为推荐，回复中必须给出 plan_id、preflight id、"
             "阻断项、警告和逐平台判断。然后立即推进无需额外授权的下一步；高风险动作仍须单独确认。",
@@ -283,12 +282,6 @@ def _operation_copy(operation: dict[str, Any]) -> tuple[str, str, str]:
             "按 target_id 读取原生内容资产、当前版本、证据包和质量门。若当前版本已经人工确认，必须为资产覆盖的每个目标平台"
             "逐一调用 marketing_prepare_publish，只建立持久化发布审批点并立即停下；不得调用真实发布 effect，也不要再询问已经由"
             " target_platforms 明确的平台。若最新预演不允许发布准备，原样报告阻断原因，不重建对象、不覆盖已确认版本。",
-        )
-    if kind == "learning.review":
-        return (
-            "审阅待确认的策略学习",
-            "策略学习审阅",
-            "读取全部待确认学习候选，逐条展示来源证据、可能影响、风险和建议。未经用户明确选择，不得改变账号长期策略。",
         )
     if kind == "account.model.review":
         return (

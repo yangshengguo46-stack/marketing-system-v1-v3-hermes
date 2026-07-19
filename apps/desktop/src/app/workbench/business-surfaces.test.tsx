@@ -33,10 +33,6 @@ describe('Marketing OS business surfaces', () => {
       result = { assets: [] }
     }
 
-    if (method === 'marketing.learning.candidates.list') {
-      result = { candidates: [], total: 0 }
-    }
-
     return result as T
   }
 
@@ -115,10 +111,6 @@ describe('Marketing OS business surfaces', () => {
 
       if (method === 'marketing.accounts.platforms') {
         return { platforms: [], total: 0 } as T
-      }
-
-      if (method === 'marketing.learning.candidates.list') {
-        return { candidates: [], total: 0 } as T
       }
 
       return {} as T

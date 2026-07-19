@@ -31,7 +31,8 @@ from agent.marketing.intelligence.learning_governance import (
 )
 from agent.marketing.intelligence.memory_classification import classify_memory
 from agent.marketing.intelligence.preflight_decision import build_preflight_decision
-from agent.marketing.learning import AccountLearningGovernance
+from agent.epistemic_contract import _issue_system_authority
+from agent.marketing.learning import SystemLearningProjector
 from agent.marketing.metric_loop import MetricLoopRunner
 from agent.marketing.providers.metrics import (
     clear_metric_providers,
@@ -480,13 +481,14 @@ def test_replay_approved_weight_requires_second_review_then_versions_account_cal
     weight_id = weight_result["weight_candidate_id"]
 
     with pytest.raises(ValueError, match="require replay approval"):
-        AccountLearningGovernance(paths).accept_and_project(
+        _system_projector(paths).accept_and_project(
             weight_id, reason="must not bypass replay"
         )
 
     replayed = decide_weight_candidate_with_replay(
         loop,
         weight_id,
+        authority=_issue_system_authority("test_marketing_operating_loop"),
         decision="accepted",
         reason="three consistent real-result retrospectives",
     )
@@ -497,7 +499,7 @@ def test_replay_approved_weight_requires_second_review_then_versions_account_cal
         user_id="default", account_id="acct-1"
     ) is None
 
-    projected = AccountLearningGovernance(paths).accept_and_project(
+    projected = _system_projector(paths).accept_and_project(
         strategy_id,
         reason="reviewed bounded retention adjustment",
     )
@@ -519,7 +521,7 @@ def test_replay_approved_weight_requires_second_review_then_versions_account_cal
         user_id="default", account_id="acct-other"
     ) is None
 
-    replay_projection = AccountLearningGovernance(paths).accept_and_project(
+    replay_projection = _system_projector(paths).accept_and_project(
         strategy_id,
         reason="idempotent repeated action",
     )
@@ -774,7 +776,7 @@ def test_three_verified_unknown_recoveries_can_become_one_native_skill(
     assert len(candidate["receipt_refs"]) == 6
     assert not (hermes_home / "skills").exists()
 
-    projected = AccountLearningGovernance(paths).accept_and_project(
+    projected = _system_projector(paths).accept_and_project(
         candidate["id"], reason="reviewed three duplicate-safe recoveries"
     )
     skill_name = candidate["proposal"]["skill_name"]
@@ -783,7 +785,7 @@ def test_three_verified_unknown_recoveries_can_become_one_native_skill(
     assert skill_file.exists()
     assert "Never retry an unknown external side effect" in skill_file.read_text()
 
-    replay = AccountLearningGovernance(paths).accept_and_project(
+    replay = _system_projector(paths).accept_and_project(
         candidate["id"], reason="idempotent repeated confirmation"
     )
     assert replay["skill_projection"]["already_projected"] is True
@@ -941,7 +943,7 @@ def test_metric_checkpoint_becomes_receipt_pending_learning_and_governed_account
         assert knowledge.retrieve(
             knowledge_base="account", user_id="default", account_id="acct-1"
         )["entries"] == []
-        projected = AccountLearningGovernance(paths).accept_and_project(
+        projected = _system_projector(paths).accept_and_project(
             candidate["id"], reason="reviewed real creator-center receipt"
         )
         assert projected["candidate"]["status"] == "accepted"
@@ -1254,3 +1256,8 @@ def test_publish_effect_tools_are_hidden_until_real_provider_registers():
     assert "marketing_publish_query" not in before
     assert "marketing_effect_publish" in after
     assert "marketing_publish_query" in after
+def _system_projector(paths):
+    return SystemLearningProjector(
+        paths,
+        authority=_issue_system_authority("test_marketing_operating_loop"),
+    )

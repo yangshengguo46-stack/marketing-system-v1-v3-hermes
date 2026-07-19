@@ -4,11 +4,22 @@ from pathlib import Path
 
 import pytest
 
-from agent.human_observer import HumanObserverReader, SystemHumanObserver
+import agent.human_observer as human_observer
+from agent.epistemic_contract import _issue_system_authority
+from agent.human_observer import HumanObserverReader
 from agent.human_observer.marketing_connector import MarketingReceiptConnector
+from agent.human_observer.repository import _HumanObserverWriter
 
 
-def _event(owner: SystemHumanObserver):
+def _authority():
+    return _issue_system_authority("test_human_observer")
+
+
+def _writer(path):
+    return _HumanObserverWriter(path, authority=_authority())
+
+
+def _event(owner: _HumanObserverWriter):
     return owner.record_observation(
         event_key="source:event-1",
         source_kind="test_sensor",
@@ -26,7 +37,7 @@ def _event(owner: SystemHumanObserver):
 
 
 def test_observation_is_immutable_and_separate_from_candidate_interpretation(tmp_path):
-    owner = SystemHumanObserver(tmp_path / "state.db")
+    owner = _writer(tmp_path / "state.db")
     event = _event(owner)
     interpretation = owner.record_interpretation(
         interpretation_key="interpretation-1",
@@ -54,7 +65,7 @@ def test_observation_is_immutable_and_separate_from_candidate_interpretation(tmp
 
 
 def test_theories_are_versioned_competing_lenses_and_existence_is_revisable(tmp_path):
-    owner = SystemHumanObserver(tmp_path / "state.db")
+    owner = _writer(tmp_path / "state.db")
     theories = {item["theory_id"]: item for item in owner.list_theories()}
     assert theories["le_bon_crowd_lens"]["epistemic_status"] == "historical_and_contested_not_universal_law"
     assert "social_identity" in theories
@@ -75,7 +86,7 @@ def test_theories_are_versioned_competing_lenses_and_existence_is_revisable(tmp_
 
 
 def test_identity_fields_are_rejected_and_product_reader_has_no_write_seam(tmp_path):
-    owner = SystemHumanObserver(tmp_path / "state.db")
+    owner = _writer(tmp_path / "state.db")
     with pytest.raises(ValueError, match="direct identity fields"):
         owner.record_observation(
             event_key="pii", source_kind="test", source_ref="1", modality="text",
@@ -89,7 +100,7 @@ def test_identity_fields_are_rejected_and_product_reader_has_no_write_seam(tmp_p
 
 
 def test_sealed_prediction_can_only_be_settled_by_a_later_observation(tmp_path):
-    owner = SystemHumanObserver(tmp_path / "state.db")
+    owner = _writer(tmp_path / "state.db")
     event = _event(owner)
     prediction = owner.seal_prediction(
         prediction_key="prediction-1", target={"metric": "shares"},
@@ -106,7 +117,7 @@ def test_sealed_prediction_can_only_be_settled_by_a_later_observation(tmp_path):
 
 def test_marketing_connector_is_one_way_idempotent_and_never_auto_promotes(tmp_path):
     db_path = Path(tmp_path / "state.db")
-    SystemHumanObserver(db_path)
+    _writer(db_path)
     summary = {
         "version": "public-content-natural-experiment-v0.3",
         "observed_at": "2026-07-18T00:00:00Z",
@@ -133,7 +144,7 @@ def test_marketing_connector_is_one_way_idempotent_and_never_auto_promotes(tmp_p
     db.commit()
     db.close()
 
-    connector = MarketingReceiptConnector(db_path)
+    connector = MarketingReceiptConnector(db_path, authority=_authority())
     first = connector.run()
     second = connector.run()
     projection = HumanObserverReader(db_path).projection(namespace="human_research")
@@ -143,3 +154,10 @@ def test_marketing_connector_is_one_way_idempotent_and_never_auto_promotes(tmp_p
     assert len(projection["interpretations"]) == 4
     assert {item["status"] for item in projection["interpretations"]} == {"candidate"}
     assert projection["authority"] == "read_only_no_product_writeback"
+
+
+def test_system_writer_is_not_a_public_package_capability(tmp_path):
+    assert not hasattr(human_observer, "SystemHumanObserver")
+    assert "_HumanObserverWriter" not in human_observer.__all__
+    with pytest.raises(TypeError, match="authority"):
+        _HumanObserverWriter(tmp_path / "state.db")

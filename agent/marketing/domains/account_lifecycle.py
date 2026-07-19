@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from agent.epistemic_contract import EpistemicClass, require_user_confirmation
 from agent.marketing.domains.storage import MarketingDomainRepository
 from agent.marketing.domains.human_model import (
     build_human_projection_model,
@@ -208,8 +209,10 @@ class AccountLifecycleRepository(MarketingDomainRepository):
         hypothesis_id: str,
         confirmed_by_user: bool,
     ) -> dict[str, Any]:
-        if confirmed_by_user is not True:
-            raise ValueError("explicit user confirmation is required")
+        require_user_confirmation(
+            EpistemicClass.STRATEGIC_CHOICE,
+            confirmed_by_user=confirmed_by_user,
+        )
         with self._transaction() as db:
             project = _require_active_project(
                 db, user_id=user_id, account_id=account_id, project_id=project_id

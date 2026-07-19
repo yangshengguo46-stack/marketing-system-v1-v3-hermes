@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+from agent.epistemic_contract import _issue_system_authority
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.knowledge_bases import KnowledgeBaseRepository
 from hermes_state import SessionDB
@@ -99,7 +100,10 @@ def test_account_knowledge_requires_accepted_learning_and_real_receipt(tmp_path)
         db.close()
 
     entry = repository.promote_account_learning(
-        user_id="default", account_id="acct-1", candidate_id="candidate-1"
+        user_id="default",
+        account_id="acct-1",
+        candidate_id="candidate-1",
+        authority=_issue_system_authority("test_knowledge_bases"),
     )
 
     assert entry["knowledge_base"] == "account"
