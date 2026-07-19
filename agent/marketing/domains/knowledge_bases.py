@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from agent.marketing.data_paths import MarketingDataPaths
@@ -24,6 +24,18 @@ TRUSTED_SOURCE_KINDS = {
 }
 FORBIDDEN_SOURCE_KINDS = {"user", "agent", "conversation", "model_inference"}
 BOOTSTRAP_MARKER = "marketing_four_knowledge_bases_20260712_v1"
+
+# A missing ``valid_to`` is not permission for volatile knowledge to live
+# forever.  Stable content principles and receipt-backed account learning are
+# intentionally excluded; platform rules and market observations must be
+# refreshed from evidence or a newly signed aggregate.
+FRESHNESS_DAYS: dict[tuple[str, str], int] = {
+    ("platform", "builtin_curated"): 180,
+    ("platform", "verified_evidence"): 90,
+    ("platform", "signed_aggregate"): 120,
+    ("market", "verified_evidence"): 45,
+    ("market", "signed_aggregate"): 60,
+}
 
 
 CONTENT_PRINCIPLES: tuple[dict[str, Any], ...] = (
@@ -147,6 +159,7 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
         valid_from: str | None = None,
         valid_to: str | None = None,
         confidence: float = 0.7,
+        supersedes_entry_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         if knowledge_base == "account":
             raise ValueError("account knowledge must come from governed receipt learning")
@@ -156,7 +169,7 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
             evidence_ids=evidence_refs,
             require_any=True,
         )
-        return self._upsert(
+        entry = self._upsert(
             knowledge_base=knowledge_base,
             user_id="default",
             account_id=None,
@@ -173,6 +186,253 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
             valid_from=valid_from or _now(),
             valid_to=valid_to,
         )
+        self._supersede_entries(
+            entry=entry,
+            entry_ids=supersedes_entry_ids or [],
+        )
+        return self.get_entry(entry["id"])
+
+    def propose_evidence_knowledge(
+        self,
+        *,
+        knowledge_base: str,
+        user_id: str,
+        account_id: str,
+        topic: str,
+        statement: dict[str, Any],
+        evidence_refs: list[str],
+        platform: str | None = None,
+        region: str = "cn",
+        content_kind: str = "",
+        version: str,
+        valid_from: str | None = None,
+        valid_to: str | None = None,
+        confidence: float = 0.7,
+        supersedes_entry_ids: list[str] | None = None,
+        source_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a reviewable candidate; never write model interpretation as truth."""
+
+        base = _base(knowledge_base)
+        if base not in {"platform", "market"}:
+            raise ValueError("evidence candidates may target only platform or market knowledge")
+        verified = EvidenceRepository(self.paths).require_verified(
+            user_id=user_id,
+            account_id=account_id,
+            evidence_ids=evidence_refs,
+            require_any=True,
+        )
+        if base == "platform" and not str(platform or "").strip():
+            raise ValueError("platform knowledge candidate requires platform")
+        if not isinstance(statement, dict) or not statement:
+            raise ValueError("knowledge candidate requires a structured statement")
+        bounded_confidence = max(0.0, min(0.85, float(confidence)))
+        proposal = {
+            "kind": "evidence_knowledge_candidate",
+            "knowledge_base": base,
+            "topic": str(topic or "").strip(),
+            "statement": statement,
+            "platform": str(platform or "").strip() or None,
+            "region": str(region or "")[:40],
+            "content_kind": str(content_kind or "")[:80],
+            "version": str(version or "")[:100],
+            "valid_from": valid_from or _now(),
+            "valid_to": valid_to,
+            "supersedes_entry_ids": list(dict.fromkeys(supersedes_entry_ids or []))[:100],
+            "guardrail": (
+                "Pending only. Source integrity is verified, but the claim enters knowledge "
+                "only after explicit review and remains freshness-bounded."
+            ),
+        }
+        if not proposal["topic"] or not proposal["version"]:
+            raise ValueError("knowledge candidate requires topic and version")
+        digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "base": base,
+                    "account": account_id,
+                    "platform": proposal["platform"],
+                    "topic": proposal["topic"],
+                    "statement": statement,
+                    "evidence": [item["id"] for item in verified],
+                    "version": proposal["version"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()[:28]
+        from agent.marketing.intelligence.store import OperatingLoopRepository
+
+        return OperatingLoopRepository(self.paths).create_learning_candidate(
+            source_key=source_key or f"evidence-knowledge:{digest}",
+            candidate_type="memory",
+            user_id=user_id,
+            account_id=account_id,
+            platform=proposal["platform"],
+            evidence_refs=[item["id"] for item in verified],
+            proposal=proposal,
+            confidence=bounded_confidence,
+        )
+
+    def project_evidence_candidate(self, candidate_id: str) -> dict[str, Any]:
+        """Idempotently recover projection of an already accepted candidate."""
+
+        from agent.marketing.intelligence.store import OperatingLoopRepository
+
+        candidate = OperatingLoopRepository(self.paths).get_learning_candidate(candidate_id)
+        proposal = candidate.get("proposal") or {}
+        if candidate.get("status") != "accepted":
+            raise ValueError("only accepted evidence knowledge can be projected")
+        if proposal.get("kind") != "evidence_knowledge_candidate":
+            raise ValueError("candidate is not evidence knowledge")
+        return self.add_evidence_knowledge(
+            knowledge_base=str(proposal.get("knowledge_base") or ""),
+            user_id=str(candidate.get("user_id") or "default"),
+            account_id=str(candidate.get("account_id") or ""),
+            topic=str(proposal.get("topic") or ""),
+            statement=proposal.get("statement") or {},
+            evidence_refs=candidate.get("evidence_refs") or [],
+            platform=str(proposal.get("platform") or "") or None,
+            region=str(proposal.get("region") or ""),
+            content_kind=str(proposal.get("content_kind") or ""),
+            version=str(proposal.get("version") or ""),
+            valid_from=str(proposal.get("valid_from") or candidate.get("decided_at") or _now()),
+            valid_to=str(proposal.get("valid_to") or "") or None,
+            confidence=float(candidate.get("confidence") or 0),
+            supersedes_entry_ids=proposal.get("supersedes_entry_ids") or [],
+        )
+
+    def get_entry(self, entry_id: str) -> dict[str, Any]:
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT * FROM marketing_knowledge_entries WHERE id=?", (entry_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError("knowledge entry not found")
+        return _record(row)
+
+    def audit_freshness_and_conflicts(self, *, as_of: str | None = None) -> dict[str, Any]:
+        """Remove stale volatile claims from retrieval and quarantine explicit conflicts."""
+
+        now = _parse_time(as_of or _now())
+        stale: list[str] = []
+        calibrated: list[str] = []
+        conflicts: list[dict[str, Any]] = []
+        with self._transaction() as db:
+            rows = db.execute(
+                """SELECT * FROM marketing_knowledge_entries
+                WHERE status='active' ORDER BY valid_from,id"""
+            ).fetchall()
+            active: list[dict[str, Any]] = []
+            for row in rows:
+                value = _record(row)
+                explicit_end = _optional_time(value.get("valid_to"))
+                ttl_days = FRESHNESS_DAYS.get(
+                    (value["knowledge_base"], value["source_kind"])
+                )
+                inferred_end = (
+                    _parse_time(value["valid_from"]) + timedelta(days=ttl_days)
+                    if ttl_days is not None
+                    else None
+                )
+                expires_at = explicit_end or inferred_end
+                if explicit_end is None and inferred_end is not None:
+                    db.execute(
+                        """UPDATE marketing_knowledge_entries
+                        SET valid_to=?,updated_at=? WHERE id=? AND status='active'""",
+                        (inferred_end.isoformat(), now.isoformat(), value["id"]),
+                    )
+                    value["valid_to"] = inferred_end.isoformat()
+                    calibrated.append(value["id"])
+                if expires_at is not None and expires_at <= now:
+                    db.execute(
+                        """UPDATE marketing_knowledge_entries
+                        SET status='stale',valid_to=COALESCE(NULLIF(valid_to,''),?),updated_at=?
+                        WHERE id=? AND status='active'""",
+                        (expires_at.isoformat(), now.isoformat(), value["id"]),
+                    )
+                    stale.append(value["id"])
+                else:
+                    active.append(value)
+
+            claims: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+            for value in active:
+                claim_key = str((value.get("statement") or {}).get("claim_key") or "").strip()
+                if not claim_key:
+                    continue
+                key = (
+                    value["knowledge_base"],
+                    value["user_id"],
+                    str(value.get("account_id") or ""),
+                    str(value.get("platform") or ""),
+                    value["region"],
+                    value["content_kind"],
+                    value["topic"],
+                    claim_key,
+                )
+                claims.setdefault(key, []).append(value)
+            for key, entries in claims.items():
+                values = {
+                    json.dumps(
+                        (entry.get("statement") or {}).get("claim_value"),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    for entry in entries
+                }
+                if len(values) <= 1:
+                    continue
+                ids = [entry["id"] for entry in entries]
+                db.executemany(
+                    """UPDATE marketing_knowledge_entries
+                    SET status='conflicted',updated_at=? WHERE id=? AND status='active'""",
+                    [(now.isoformat(), entry_id) for entry_id in ids],
+                )
+                conflicts.append({"claim_key": key[-1], "entry_ids": ids})
+        return {
+            "as_of": now.isoformat(),
+            "freshness_calibrated_entry_ids": calibrated,
+            "stale_entry_ids": stale,
+            "conflicts": conflicts,
+        }
+
+    def _supersede_entries(
+        self, *, entry: dict[str, Any], entry_ids: list[str]
+    ) -> None:
+        ids = list(dict.fromkeys(str(item or "").strip() for item in entry_ids if item))
+        if not ids:
+            return
+        now = _now()
+        with self._transaction() as db:
+            placeholders = ",".join("?" for _ in ids)
+            rows = db.execute(
+                f"""SELECT id,knowledge_base,IFNULL(platform,'') AS platform,topic
+                FROM marketing_knowledge_entries WHERE id IN ({placeholders})""",
+                ids,
+            ).fetchall()
+            if {row["id"] for row in rows} != set(ids):
+                raise ValueError("superseded knowledge entry is missing")
+            for row in rows:
+                if (
+                    row["knowledge_base"] != entry["knowledge_base"]
+                    or row["platform"] != str(entry.get("platform") or "")
+                    or row["topic"] != entry["topic"]
+                ):
+                    raise ValueError("superseded knowledge must share base, platform and topic")
+            db.executemany(
+                """UPDATE marketing_knowledge_entries
+                SET status='superseded',valid_to=COALESCE(NULLIF(valid_to,''),?),updated_at=?
+                WHERE id=? AND id!=?""",
+                [(entry["valid_from"], now, entry_id, entry["id"]) for entry_id in ids],
+            )
+            previous = next((entry_id for entry_id in ids if entry_id != entry["id"]), None)
+            if previous:
+                db.execute(
+                    "UPDATE marketing_knowledge_entries SET supersedes_id=? WHERE id=?",
+                    (previous, entry["id"]),
+                )
 
     def promote_account_learning(
         self,
@@ -387,6 +647,11 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
             json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()[:28]
         now = _now()
+        effective_valid_to = valid_to or _default_valid_to(
+            knowledge_base=base,
+            source_kind=source,
+            valid_from=valid_from,
+        )
         with self._transaction() as db:
             previous = None
             if source in {"builtin_curated", "signed_aggregate"}:
@@ -437,7 +702,7 @@ class KnowledgeBaseRepository(MarketingDomainRepository):
                     max(0.0, min(1.0, float(confidence))),
                     str(version or "")[:100],
                     valid_from,
-                    valid_to,
+                    effective_valid_to,
                     now,
                     now,
                 ),
@@ -473,3 +738,28 @@ def _record(row: Any) -> dict[str, Any]:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_time(value: Any) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid knowledge timestamp: {value}") from exc
+    return (
+        parsed.replace(tzinfo=timezone.utc)
+        if parsed.tzinfo is None
+        else parsed.astimezone(timezone.utc)
+    )
+
+
+def _optional_time(value: Any) -> datetime | None:
+    return None if value in (None, "") else _parse_time(value)
+
+
+def _default_valid_to(
+    *, knowledge_base: str, source_kind: str, valid_from: str
+) -> str | None:
+    ttl_days = FRESHNESS_DAYS.get((knowledge_base, source_kind))
+    if ttl_days is None:
+        return None
+    return (_parse_time(valid_from) + timedelta(days=ttl_days)).isoformat()

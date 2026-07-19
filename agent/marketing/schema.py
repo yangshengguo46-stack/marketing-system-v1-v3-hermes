@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS audience_hypotheses (
     existence_strategy_hypotheses_json TEXT NOT NULL DEFAULT '[]',
     need_projection_hypotheses_json TEXT NOT NULL DEFAULT '[]',
     cognitive_projection_hypotheses_json TEXT NOT NULL DEFAULT '[]',
+    collective_projection_hypotheses_json TEXT NOT NULL DEFAULT '[]',
     exclusions_json TEXT NOT NULL DEFAULT '[]',
     data_gaps_json TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'draft',

@@ -11,6 +11,7 @@ from typing import Any
 from agent.marketing.domains.storage import MarketingDomainRepository
 from agent.marketing.domains.human_model import (
     build_human_projection_model,
+    normalize_collective_projection_hypotheses,
     normalize_cognitive_projection_hypotheses,
     normalize_existence_strategy_hypotheses,
     normalize_need_projection_hypotheses,
@@ -90,6 +91,7 @@ class AccountLifecycleRepository(MarketingDomainRepository):
         existence_strategy_hypotheses: list[Any] | None = None,
         need_projection_hypotheses: list[Any] | None = None,
         cognitive_projection_hypotheses: list[Any] | None = None,
+        collective_projection_hypotheses: list[Any] | None = None,
         existence_hypotheses: list[Any] | None = None,
         cognitive_style_hypotheses: list[Any] | None = None,
         exclusions: list[Any] | None = None,
@@ -132,6 +134,12 @@ class AccountLifecycleRepository(MarketingDomainRepository):
                 ),
                 field="cognitive_projection_hypotheses",
             ),
+            "collective_projection_hypotheses_json": _bounded_list(
+                normalize_collective_projection_hypotheses(
+                    collective_projection_hypotheses
+                ),
+                field="collective_projection_hypotheses",
+            ),
             "exclusions_json": _bounded_list(exclusions or [], field="exclusions"),
             "data_gaps_json": _bounded_list(data_gaps or [], field="data_gaps"),
         }
@@ -159,8 +167,8 @@ class AccountLifecycleRepository(MarketingDomainRepository):
                  scenarios_json,jobs_json,current_alternatives_json,trust_barriers_json,
                  desired_outcomes_json,behavior_signals_json,existence_strategy_hypotheses_json,
                  need_projection_hypotheses_json,cognitive_projection_hypotheses_json,
-                 exclusions_json,data_gaps_json,status,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?)""",
+                 collective_projection_hypotheses_json,exclusions_json,data_gaps_json,status,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?)""",
                 (
                     hypothesis_id,
                     project_id,
@@ -179,6 +187,7 @@ class AccountLifecycleRepository(MarketingDomainRepository):
                     payload["existence_strategy_hypotheses_json"],
                     payload["need_projection_hypotheses_json"],
                     payload["cognitive_projection_hypotheses_json"],
+                    payload["collective_projection_hypotheses_json"],
                     payload["exclusions_json"],
                     payload["data_gaps_json"],
                     _now(),
@@ -305,10 +314,12 @@ def _hypothesis_record(row: sqlite3.Row, *, operation: str) -> dict[str, Any]:
     strategies = json.loads(value.pop("existence_strategy_hypotheses_json", "[]"))
     needs = json.loads(value.pop("need_projection_hypotheses_json", "[]"))
     cognition = json.loads(value.pop("cognitive_projection_hypotheses_json", "[]"))
+    collective = json.loads(value.pop("collective_projection_hypotheses_json", "[]"))
     value["human_projection_model"] = build_human_projection_model(
         need_projections=needs,
         cognitive_projections=cognition or legacy_cognition,
         existence_strategies=strategies or legacy_strategies,
+        collective_projections=collective,
     )
     value["operation"] = operation
     return value

@@ -88,7 +88,7 @@ def test_social_reaction_simulation_is_anonymous_and_replayable():
         evidence_refs=["evidence_one"],
     )
 
-    assert result["version"] == "social-reaction-simulation-v0.2"
+    assert result["version"] == "social-reaction-simulation-v0.3"
     assert result["status"] == "audience_hypothesis_backed"
     assert result["scope"] == "anonymous_cohort_scenarios_not_individual_prediction"
     assert result["simulation_id"].startswith("srs_")
@@ -166,6 +166,7 @@ def test_social_reaction_retro_compares_only_anonymous_clusters():
                     "need_projection": "safety",
                     "cognitive_projection": "Ni",
                     "existence_strategy": "preserve",
+                    "collective_mechanism": "emotional_contagion",
                     "theme": "岗位替代焦虑",
                     "count": 3,
                 }
@@ -199,6 +200,9 @@ def test_social_reaction_retro_compares_only_anonymous_clusters():
         "safety": 1.0,
         "self_actualization": 0.0,
     }
+    assert projection["dimensions"]["collective_mechanism"][
+        "unexpected_cluster_counts"
+    ] == {"emotional_contagion": 3}
 
 
 def test_social_reaction_observation_rejects_raw_comments():

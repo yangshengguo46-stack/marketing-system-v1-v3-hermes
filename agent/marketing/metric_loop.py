@@ -29,6 +29,10 @@ from agent.marketing.intelligence.learning_governance import (
 from agent.marketing.intelligence.metric_labels import build_metric_labels
 from agent.marketing.intelligence.store import OperatingLoopRepository
 from agent.marketing.providers.metrics import get_metric_provider
+from agent.marketing.providers.owned_browser_metrics import (
+    SUPPORTED_OWNED_METRIC_PLATFORMS,
+    collect_owned_browser_metrics,
+)
 
 
 METRIC_LOOP_VERSION = "metric-receipt-loop-v0.1"
@@ -162,8 +166,14 @@ class MetricLoopRunner:
                 continue
             action = self.publishing.get_action(checkpoint["publish_action_id"])
             try:
-                provider = get_metric_provider(action["provider"])
-                result = provider.collect_metrics(action, checkpoint)
+                try:
+                    provider = get_metric_provider(action["provider"])
+                except KeyError:
+                    result = collect_owned_browser_metrics(
+                        self.paths, action, checkpoint
+                    )
+                else:
+                    result = provider.collect_metrics(action, checkpoint)
                 state = str((result or {}).get("state") or "").strip().lower()
                 if state == "observed":
                     raw_metrics = result.get("metrics")
@@ -373,6 +383,11 @@ class MetricLoopRunner:
             )
         return reconciled
 
+    def reconcile_observed(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Recover already observed checkpoints even when no collector is online."""
+
+        return self._reconcile_observed(limit=limit)
+
 
 def run_due_metric_checkpoints(
     *,
@@ -383,3 +398,26 @@ def run_due_metric_checkpoints(
     """Callable entrypoint for the native Hermes Cron owner."""
 
     return MetricLoopRunner(paths).run_due(as_of=as_of, limit=limit)
+
+
+def reconcile_observed_metric_checkpoints(
+    *, paths: MarketingDataPaths | None = None, limit: int = 100
+) -> dict[str, Any]:
+    reconciled = MetricLoopRunner(paths).reconcile_observed(limit=limit)
+    return {"version": METRIC_LOOP_VERSION, "reconciled": reconciled}
+
+
+def has_due_metric_collection_support(
+    *, paths: MarketingDataPaths | None = None, as_of: str | None = None
+) -> bool:
+    """Tell Cron whether a due checkpoint has a registered or owned-browser collector."""
+
+    from agent.marketing.providers.metrics import has_metric_provider
+
+    runner = MetricLoopRunner(paths)
+    now = as_of or _iso(_now())
+    for checkpoint in runner.publishing.list_due_metric_checkpoints(as_of=now, limit=500):
+        action = runner.publishing.get_action(checkpoint["publish_action_id"])
+        if has_metric_provider(action.get("provider")) or action.get("platform") in SUPPORTED_OWNED_METRIC_PLATFORMS:
+            return True
+    return False

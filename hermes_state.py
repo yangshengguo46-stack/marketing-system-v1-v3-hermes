@@ -33,6 +33,7 @@ from agent.marketing.schema import (
     PROSPECT_SCOPE_COLUMNS,
 )
 from agent.harness.schema import HARNESS_SCHEMA_SQL
+from agent.human_observer.schema import HUMAN_OBSERVER_SCHEMA_SQL
 from hermes_constants import get_hermes_home
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
@@ -145,7 +146,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 25
 
 # ---------------------------------------------------------------------------
 # WAL-compatibility fallback
@@ -772,6 +773,7 @@ CREATE INDEX IF NOT EXISTS idx_marketing_accounts_user_platform
 
 SCHEMA_SQL += MARKETING_DOMAIN_SCHEMA_SQL
 SCHEMA_SQL += HARNESS_SCHEMA_SQL
+SCHEMA_SQL += HUMAN_OBSERVER_SCHEMA_SQL
 
 # Indexes that reference columns added in later schema versions must be
 # created AFTER _reconcile_columns() has had a chance to ADD them on

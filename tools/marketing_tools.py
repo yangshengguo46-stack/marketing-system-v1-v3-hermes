@@ -499,6 +499,22 @@ INTERPRET_PUBLIC_CONTENT_SCHEMA = {
                                                 "unknown",
                                             ],
                                         },
+                                        "collective_mechanism": {
+                                            "type": "string",
+                                            "enum": [
+                                                "identity_convergence",
+                                                "emotional_contagion",
+                                                "normative_pressure",
+                                                "suggestibility",
+                                                "deindividuation",
+                                                "polarization",
+                                                "imitation",
+                                                "authority_transfer",
+                                                "rumor_cascade",
+                                                "collective_effervescence",
+                                                "unknown",
+                                            ],
+                                        },
                                         "existence_strategy": {
                                             "type": "string",
                                             "enum": [
@@ -520,6 +536,7 @@ INTERPRET_PUBLIC_CONTENT_SCHEMA = {
                                         "stance",
                                         "need_projection",
                                         "cognitive_projection",
+                                        "collective_mechanism",
                                         "existence_strategy",
                                         "themes",
                                         "count",
@@ -659,6 +676,26 @@ REACTION_SCENARIOS_SCHEMA = {
                 "enum": ["Se", "Si", "Ne", "Ni", "Te", "Ti", "Fe", "Fi", "unknown"],
                 "description": "Jungian information-processing hypothesis, not a permanent type.",
             },
+            "collective_mechanism": {
+                "type": "string",
+                "enum": [
+                    "identity_convergence",
+                    "emotional_contagion",
+                    "normative_pressure",
+                    "suggestibility",
+                    "deindividuation",
+                    "polarization",
+                    "imitation",
+                    "authority_transfer",
+                    "rumor_cascade",
+                    "collective_effervescence",
+                    "unknown",
+                ],
+                "description": (
+                    "Falsifiable anonymous crowd-field mechanism hypothesis; never an "
+                    "individual motive or universal psychological law."
+                ),
+            },
             "existence_strategy": {
                 "type": "string",
                 "enum": ["preserve", "confirm", "expand", "continue", "unknown"],
@@ -698,6 +735,7 @@ REACTION_SCENARIOS_SCHEMA = {
             "stance",
             "need_projection",
             "cognitive_projection",
+            "collective_mechanism",
             "existence_strategy",
             "likelihood_band",
             "trigger",

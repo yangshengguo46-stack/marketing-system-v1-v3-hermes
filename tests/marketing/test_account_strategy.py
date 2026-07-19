@@ -462,6 +462,7 @@ def test_sessiondb_reconciles_old_lifecycle_and_benchmark_tables(tmp_path):
         "existence_strategy_hypotheses_json",
         "need_projection_hypotheses_json",
         "cognitive_projection_hypotheses_json",
+        "collective_projection_hypotheses_json",
     } <= audience_columns
     assert "idx_benchmark_account_scope" in indexes
     assert "experiment_id" in plan_columns
@@ -513,8 +514,56 @@ def test_human_projection_model_relabels_legacy_direction_as_strategy():
         ],
     )
 
-    assert model["existence_ontology"]["role"] == "ontological_root_not_measured_variable"
+    assert model["existence_ontology"]["role"] == "marketing_projection_adapter_not_core_truth"
+    assert model["existence_ontology"]["fixed_axiom"] is False
     strategy_hypothesis = model["existence_strategy_hypotheses"][0]
     assert strategy_hypothesis["strategy"] == "preserve"
     assert "direction" not in strategy_hypothesis
     assert model["cognitive_projection_hypotheses"][0]["dimension"] == "Si"
+
+
+def test_human_projection_model_bounds_jung_and_collective_mechanisms():
+    model = build_human_projection_model(
+        cognitive_projections=[
+            {
+                "framework": "jungian_functions",
+                "dimension": "fi",
+                "hypothesis": "当前内容更常以价值一致性组织判断",
+                "confidence": 0.4,
+            }
+        ],
+        collective_projections=[
+            {
+                "lens": "social_identity",
+                "mechanism": "identity_convergence",
+                "cohort": "匿名目标受众群",
+                "hypothesis": "共享身份线索可能提高群体内表达趋同",
+                "observable_signals": ["匿名评论主题在身份线索后集中"],
+                "disconfirming_signals": ["跨样本主题分布没有变化"],
+                "confidence": 0.35,
+            }
+        ],
+    )
+
+    assert model["version"] == "marketing-human-projection-adapter-v0.4"
+    assert model["cognitive_projection_hypotheses"][0]["dimension"] == "Fi"
+    collective = model["collective_projection_hypotheses"][0]
+    assert collective["mechanism"] == "identity_convergence"
+    assert model["observer_contract"]["conversation_mutable"] is False
+
+    with pytest.raises(ValueError, match="unsupported Jungian function"):
+        build_human_projection_model(
+            cognitive_projections=[
+                {
+                    "framework": "jungian_eight_functions",
+                    "dimension": "INTJ",
+                    "hypothesis": "fixed type",
+                }
+            ]
+        )
+    with pytest.raises(ValueError, match="unsupported collective mechanism"):
+        build_human_projection_model(
+            collective_projections=[
+                {"lens": "le_bon_historical_lens", "mechanism": "mind_reading"}
+            ]
+        )

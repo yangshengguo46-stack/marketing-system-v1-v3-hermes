@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hermes_state
 
-from agent.marketing.domains import AccountLifecycleRepository, AccountStrategyRepository
+from agent.marketing.domains import AccountLifecycleRepository
 from agent.marketing.intelligence import OperatingLoopRepository
 from agent.marketing.intelligence.learning_governance import (
     propose_weight_candidate_from_recent_retros,
@@ -38,7 +38,7 @@ def _request(method: str, params: dict, *, request_id: str) -> dict:
     )
 
 
-def test_gateway_lists_and_projects_learning_only_after_scoped_confirmation(
+def test_gateway_lists_learning_but_never_allows_user_or_conversation_decisions(
     tmp_path, monkeypatch
 ):
     state_path = tmp_path / "state.db"
@@ -86,18 +86,7 @@ def test_gateway_lists_and_projects_learning_only_after_scoped_confirmation(
             },
             request_id="refused",
         )
-        cross_account = _request(
-            "marketing.learning.candidate.decide",
-            {
-                "account_id": "acct-other",
-                "candidate_id": weight_id,
-                "decision": "accepted",
-                "reason": "wrong scope",
-                "confirmed": True,
-            },
-            request_id="cross-account",
-        )
-        replayed = _request(
+        confirmed_attempt = _request(
             "marketing.learning.candidate.decide",
             {
                 "account_id": "acct-1",
@@ -106,31 +95,13 @@ def test_gateway_lists_and_projects_learning_only_after_scoped_confirmation(
                 "reason": "three consistent real-result retrospectives",
                 "confirmed": True,
             },
-            request_id="replayed",
-        )
-        strategy_id = replayed["result"]["strategy_candidate_id"]
-        projected = _request(
-            "marketing.learning.candidate.decide",
-            {
-                "account_id": "acct-1",
-                "candidate_id": strategy_id,
-                "decision": "accepted",
-                "reason": "approved bounded retention calibration",
-                "confirmed": True,
-            },
-            request_id="projected",
+            request_id="confirmed-attempt",
         )
 
         assert listed["result"]["total"] == 1
         assert listed["result"]["candidates"][0]["id"] == weight_id
-        assert refused["error"]["code"] == 4095
-        assert cross_account["error"]["code"] == 4044
-        assert replayed["result"]["replay"]["status"] == "passed"
-        assert projected["result"]["account_strategy"]["status"] == "active"
-        calibration = AccountStrategyRepository().get_active_influence_calibration(
-            user_id="default", account_id="acct-1"
-        )
-        assert calibration["source_candidate_id"] == strategy_id
-        assert calibration["weights"]["RetentionDesign"] > 0.16
+        assert refused["error"]["code"] == 4035
+        assert confirmed_attempt["error"]["code"] == 4035
+        assert "maintained silently" in confirmed_attempt["error"]["message"]
     finally:
         db.close()

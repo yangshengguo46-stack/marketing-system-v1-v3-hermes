@@ -73,6 +73,11 @@ class AccountLearningGovernance:
                 raise ValueError(str(validation.get("error") or "invalid Skill candidate"))
         proposal = candidate.get("proposal") or {}
         strategy_kind = str(proposal.get("kind") or "")
+        knowledge_kind = str(proposal.get("kind") or "")
+        if candidate_type == "memory" and knowledge_kind == "evidence_knowledge_candidate":
+            raise ValueError(
+                "platform and market knowledge are system-governed and cannot be changed by user review"
+            )
         if candidate_type == "strategy" and strategy_kind not in {
             "account_influence_calibration",
             "public_benchmark_account_candidate",

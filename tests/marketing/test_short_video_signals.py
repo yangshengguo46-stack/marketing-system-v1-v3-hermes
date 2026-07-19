@@ -131,7 +131,36 @@ def test_video_preflight_treats_bgm_as_first_class_signal():
     assert without_sound["scores"]["sound_fit"] == 0
     assert with_sound["scores"]["sound_fit"] == 0.92
     assert with_sound["scores"]["overall"] > without_sound["scores"]["overall"]
-    assert with_sound["formula_version"] == "content-production-preflight-v0.6"
+    assert with_sound["formula_version"] == "content-production-preflight-v0.8"
+
+
+def test_preflight_human_observer_projection_is_read_only_and_score_neutral():
+    base = {
+        "objective": "解释群体决策",
+        "kind": "article_soft",
+        "platforms": ["wechat_official"],
+        "audience_context": {"target_audience": "创业者"},
+        "evidence": [{"url": "https://example.com/source"}],
+    }
+    without_projection = build_content_production_preflight(base)
+    with_projection = build_content_production_preflight(
+        {
+            **base,
+            "human_observer_projection": {
+                "contract": "human-observer-read-projection-v1",
+                "namespace": "human_research",
+                "interpretations": [{"id": "humanint-1"}],
+                "model_revisions": [{"id": "modelrev-1"}],
+            },
+        }
+    )
+
+    assert without_projection["human_observer_context"] is None
+    assert with_projection["human_observer_context"]["interpretation_count"] == 1
+    assert with_projection["human_observer_context"]["authority"] == (
+        "read_only_no_score_or_writeback"
+    )
+    assert with_projection["scores"] == without_projection["scores"]
 
 
 def test_playwright_post_tool_seam_persists_verified_sound_signal(tmp_path, monkeypatch):

@@ -23,7 +23,7 @@ from agent.marketing.intelligence.store import OperatingLoopRepository
 
 
 PUBLIC_CONTENT_SCHEMA = "marketing_public_content_observation.v1"
-PUBLIC_CONTENT_MODEL_VERSION = "public-content-natural-experiment-v0.2"
+PUBLIC_CONTENT_MODEL_VERSION = "public-content-natural-experiment-v0.3"
 PUBLIC_PLATFORMS = {
     "bilibili",
     "douyin",
@@ -56,6 +56,11 @@ NEED_PROJECTIONS = {
     "unknown",
 }
 COGNITIVE_PROJECTIONS = {"Se", "Si", "Ne", "Ni", "Te", "Ti", "Fe", "Fi", "unknown"}
+COLLECTIVE_MECHANISMS = {
+    "identity_convergence", "emotional_contagion", "normative_pressure",
+    "suggestibility", "deindividuation", "polarization", "imitation",
+    "authority_transfer", "rumor_cascade", "collective_effervescence", "unknown",
+}
 METRIC_KEYS = {
     "comments",
     "danmaku",
@@ -503,6 +508,7 @@ def _model_observation(value: Any) -> dict[str, Any]:
             "need_projection",
             "cognitive_projection",
             "existence_strategy",
+            "collective_mechanism",
             "observable_reaction",
         ],
         "content_features": features,
@@ -538,6 +544,11 @@ def _reaction(value: Any) -> dict[str, Any]:
             EXISTENCE_STRATEGIES,
             field="existence_strategy",
         )
+        collective_mechanism = _enum(
+            raw.get("collective_mechanism") or "unknown",
+            COLLECTIVE_MECHANISMS,
+            field="collective_mechanism",
+        )
         cohort = _text(raw.get("cohort"), field="cohort", limit=200, required=True)
         themes = _strings(raw.get("themes"), field="themes", maximum=8, required=True)
         count = raw.get("count")
@@ -551,6 +562,7 @@ def _reaction(value: Any) -> dict[str, Any]:
                 "need_projection": need_projection,
                 "cognitive_projection": cognitive_projection,
                 "existence_strategy": existence_strategy,
+                "collective_mechanism": collective_mechanism,
                 "themes": themes,
                 "count": count,
             }

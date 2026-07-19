@@ -25,7 +25,7 @@ from .influence_score import build_influence_score
 from .preflight_decision import build_preflight_decision
 
 
-CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.6"
+CONTENT_PREFLIGHT_VERSION = "content-production-preflight-v0.8"
 
 
 def _text(value: Any) -> str:
@@ -94,6 +94,27 @@ def _memory_signal(params: dict[str, Any]) -> float:
     return _clamp(min(0.75, 0.18 * len(memories)))
 
 
+def _human_observer_context(params: dict[str, Any]) -> dict[str, Any] | None:
+    """Accept an explicit core projection as read-only research context.
+
+    Marketing-owned audience fields are deliberately not searched.  Human
+    Observation is an upstream research system, not a hidden scoring feature.
+    """
+
+    value = params.get("human_observer_projection")
+    if not isinstance(value, dict):
+        return None
+    if value.get("contract") != "human-observer-read-projection-v1":
+        return None
+    return {
+        "contract": value["contract"],
+        "namespace": _text(value.get("namespace")),
+        "interpretation_count": len(value.get("interpretations") or []),
+        "model_revision_count": len(value.get("model_revisions") or []),
+        "authority": "read_only_no_score_or_writeback",
+    }
+
+
 def _platform_fit(plan: dict[str, Any]) -> float:
     platforms = plan.get("target_platforms") or []
     if not platforms:
@@ -147,6 +168,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         + min(0.2, knowledge_counts.get("market", 0) * 0.05)
         + min(0.15, knowledge_counts.get("content", 0) * 0.03)
     )
+    human_observer_context = _human_observer_context(params)
 
     audience_fit = 0.78 if has_audience else 0.34
     evidence_strength = _clamp(0.28 + min(0.45, 0.15 * url_evidence))
@@ -227,7 +249,6 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
     for platform, assessment in platform_assessments.items():
         if str(assessment.get("guidance_status") or "").startswith("generic_"):
             warnings.append(f"platform_guidance_unverified:{platform}")
-
     influence_score = build_influence_score({
         "preflight_scores": scores,
         "content_score": params.get("content_score") if isinstance(params.get("content_score"), dict) else {},
@@ -269,6 +290,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
         "preflight_decision": preflight_decision,
         "decision": decision,
         "platform_assessments": platform_assessments,
+        "human_observer_context": human_observer_context,
         "input": {
             "objective": plan["objective"],
             "kind": kind,
@@ -304,6 +326,7 @@ def build_content_production_preflight(params: dict[str, Any] | None = None) -> 
                 "cost_safety",
                 "sound_fit_for_short_video",
                 "governed_knowledge_support",
+                "read_only_human_observer_context_without_score_effect",
                 "content_lane_go_no_go",
             ],
             "external_product": "video-studio",

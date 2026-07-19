@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 
-REACTION_SIMULATION_VERSION = "social-reaction-simulation-v0.2"
+REACTION_SIMULATION_VERSION = "social-reaction-simulation-v0.3"
 
 VALID_STANCES = {
     "supportive",
@@ -36,6 +36,19 @@ VALID_NEED_PROJECTIONS = {
     "unknown",
 }
 VALID_COGNITIVE_PROJECTIONS = {"Se", "Si", "Ne", "Ni", "Te", "Ti", "Fe", "Fi", "unknown"}
+VALID_COLLECTIVE_MECHANISMS = {
+    "identity_convergence",
+    "emotional_contagion",
+    "normative_pressure",
+    "suggestibility",
+    "deindividuation",
+    "polarization",
+    "imitation",
+    "authority_transfer",
+    "rumor_cascade",
+    "collective_effervescence",
+    "unknown",
+}
 VALID_LIKELIHOOD_BANDS = {"low", "medium", "high", "unknown"}
 VALID_COHORT_RELATIONS = {"target", "adjacent", "opposed", "off_target", "unknown"}
 
@@ -203,6 +216,11 @@ def normalize_social_reaction_observation(
                     VALID_COGNITIVE_PROJECTIONS,
                     field="cognitive_projection",
                 ),
+                "collective_mechanism": _enum(
+                    item.get("collective_mechanism") or "unknown",
+                    VALID_COLLECTIVE_MECHANISMS,
+                    field="collective_mechanism",
+                ),
                 "existence_strategy": _enum(
                     item.get("existence_strategy")
                     or item.get("existence_direction")
@@ -226,7 +244,7 @@ def normalize_social_reaction_observation(
     _reject_identity_text(question_patterns, field="question_patterns")
     _reject_identity_text(objection_patterns, field="objection_patterns")
     return {
-        "version": "social-reaction-observation-v0.2",
+        "version": "social-reaction-observation-v0.3",
         "aggregation": "anonymous_clusters_only",
         "sample_size": sample_size,
         "scenario_matches": matches,
@@ -301,6 +319,7 @@ def _projection_chain_retro(
         ("need_projection", None),
         ("cognitive_projection", None),
         ("existence_strategy", "existence_direction"),
+        ("collective_mechanism", None),
     )
     compared: dict[str, Any] = {}
     for field, legacy_field in dimensions:
@@ -356,6 +375,7 @@ def _projection_chain_retro(
             "need_projection",
             "cognitive_projection",
             "existence_strategy",
+            "collective_mechanism",
             "observable_reaction",
         ],
         "dimensions": compared,
@@ -399,6 +419,11 @@ def _normalize_scenario(
         value.get("existence_strategy") or value.get("existence_direction") or "unknown",
         VALID_EXISTENCE_STRATEGIES,
         field="existence_strategy",
+    )
+    collective_mechanism = _enum(
+        value.get("collective_mechanism") or "unknown",
+        VALID_COLLECTIVE_MECHANISMS,
+        field="collective_mechanism",
     )
     likelihood_band = _enum(
         value.get("likelihood_band") or "unknown",
@@ -465,6 +490,7 @@ def _normalize_scenario(
         "need_projection": need_projection,
         "cognitive_projection": cognitive_projection,
         "existence_strategy": existence_strategy,
+        "collective_mechanism": collective_mechanism,
         "likelihood_band": likelihood_band,
         "trigger": trigger,
         "rationale": rationale,
@@ -526,6 +552,7 @@ def _retro_contract() -> dict[str, Any]:
             "observed_comment_theme_clusters",
             "question_and_objection_patterns",
             "target_vs_off_target_audience_signals",
+            "anonymous_collective_mechanism_clusters",
         ],
         "calibration_rule": (
             "只比较聚合主题、立场和匿名群体信号；"

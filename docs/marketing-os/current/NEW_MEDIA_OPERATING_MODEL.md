@@ -53,7 +53,7 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 
 人口属性只是描述，不足以指导内容。核心字段是任务、痛点、触发场景、现有替代方案、信任障碍、期望结果、可观察行为信号、排除人群和数据缺口。
 
-“存在”是哲学上的本体前提，不是一个可以从评论或点击中直接测量、分类或打分的变量。工程模型只能观察它投影到物理与社会世界后的行为，机制链固定为：
+“存在”不是 Marketing OS 可以写死的哲学真理，也不是可以从评论或点击中直接测量、分类或打分的变量。Marketing 只保存用于经营研究的兼容投影；独立 Human Observation Core 把“存在策略”注册为可被反证、替换或拒绝的研究 seed。当前产品观察链为：
 
 ```text
 存在本体
@@ -62,7 +62,9 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 → 认知投影（荣格八维：信息如何被感知与判断）
 → 存在策略
 → 可观察行为
-→ 社会与平台反馈
+→ 匿名群体机制投影
+→ 平台分配
+→ 延迟结果与跨天校准
 ```
 
 四种枚举因此命名为“存在策略”，而不是“存在方向”：
@@ -72,9 +74,9 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 - `expand`：扩展能力、资源、自由和影响力。
 - `continue`：延续作品、事业、关系、意义或长期影响。
 
-马斯洛需求层次描述“存在当前通过行为解决什么缺口或实现什么成长”，荣格八维描述“存在通过什么信息加工路径理解并回应环境”。两者都是投影层的可证伪软假设，不是存在本身，也不是对真人内心的直接读取。荣格维度不得成为永久人格标签、心理诊断或知识库事实。
+马斯洛需求层次描述“存在当前通过行为解决什么缺口或实现什么成长”，荣格八维描述“存在通过什么信息加工路径理解并回应环境”。两者都是投影层的可证伪软假设，不是存在本身，也不是对真人内心的直接读取。荣格层只接受 `Se/Si/Ne/Ni/Te/Ti/Fe/Fi/unknown`，不得使用 MBTI 类型、永久人格标签或心理诊断。
 
-当前原生合同同时作用于创作者和行为受众：`human_projection_model` 固化不可测量的 `existence_ontology`，`need_projection_hypotheses` 保存马斯洛需求投影，`cognitive_projection_hypotheses` 保存荣格等认知投影，`existence_strategy_hypotheses` 保存策略、语境、可观察信号、依据、反证与数据缺口。投影假设置信度上限为 `0.7`；诊断字段、永久类型和把存在当测量值的写法均被拒绝。旧 `existence_hypotheses/cognitive_style_hypotheses` 只作为 v0.1 读取兼容并在读取时升级，不再是新写入合同。
+当前 `marketing-human-projection-adapter-v0.4` 同时作用于创作者和行为受众，但只属于 Marketing 兼容层：`need_projection_hypotheses`、`cognitive_projection_hypotheses`、`existence_strategy_hypotheses` 与 `collective_projection_hypotheses` 都是候选解释，不是 Human Observation Core 的真相。群体层允许社会认同、去个体化、规范涌现、模仿、极化、权威转移与信息级联等竞争解释；`乌合之众` 只作为历史视角。所有投影都必须保存语境、可观察信号、依据、反证与数据缺口，置信度上限为 `0.7`，并且不能影响 Preflight 内容分。
 
 ### 4. 对标经营图谱
 
@@ -98,7 +100,7 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 
 浏览器 owner 只采集公开作品、创作者公开身份、内容快照和聚合指标；不保存评论者身份与逐条原话。Hermes 用与自有作品相同的内容特征、匿名人群、立场、需求投影、认知投影、存在策略、提问/反对模式和反证信号解释样本，并生成 Receipt 与 pending learning candidate。
 
-公域结果只能说明相关性。创作者历史、平台分发、发布时间、投流、粉丝基础和不可见流量都是潜在混杂变量。单条爆款不能直接改写内容规律或对标图谱；新创作者先进入对标候选，已有对标的新观察也必须经用户接受后才写入图谱。
+公域结果只能说明相关性。创作者历史、平台分发、发布时间、投流、粉丝基础和不可见流量都是潜在混杂变量。单条爆款不能直接改写内容规律或对标图谱；新创作者先进入对标候选，已有对标的新观察也必须通过系统的重复样本、来源、时效、冲突和历史回放门禁。用户与对话不能决定系统学习结论。
 
 ```text
 公开作品页
@@ -108,7 +110,7 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 → public natural-experiment Receipt
 → 内容模型 learning candidate
 → 对标新增/修正 strategy candidate
-→ 用户治理后进入账号知识或对标图谱
+→ 系统静默门禁晋级、等待或淘汰
 ```
 
 ### 5. 版本化定位
@@ -133,14 +135,14 @@ Preflight 输入、内容 feature snapshot 等历史不可变 JSON 保留行动�
 
 - 评论人群及其与目标受众的关系；
 - 支持、经验分享、提问、质疑、反对、行动请求或误入等立场；
-- 马斯洛需求投影、荣格认知投影与 `preserve / confirm / expand / continue / unknown` 存在策略；
+- 马斯洛需求投影、荣格八维投影、`preserve / confirm / expand / continue / unknown` 存在策略和匿名群体机制；
 - 内容触发点、推理依据和宽泛可能性；
 - 可能评论主题和明确标注的合成评论样例；
 - 回复机会、风险、证据依据和反证信号。
 
 系统不预测具体个人，也不输出未经校准的精确概率。发布后 Provider 只能提交匿名聚合观察：预测场景命中数、意外立场/主题簇、问题模式、反对模式和数据缺口。昵称、头像、主页、联系方式和逐条评论不得进入学习候选。Retro 比较命中、漏判和意外反应，但不能从评论相关性直接宣布心理或社会因果。
 
-Retro 以 `need_projection → cognitive_projection → existence_strategy → observable_reaction` 机制链按匿名聚类对账，分别记录预测场景数、命中场景数、意外聚类数、观察评论数和覆盖率。命中只能校准整条投影假设，不能证明读懂了某个真人的需求、认知过程或“存在”。每次指标结算还生成分层因果反思：事实观察、预测误差、是否绑定预注册实验、反事实是否可识别、可能混杂因素和下一步所需证据。单作品的反事实状态必须是 `unavailable`。
+Retro 以 `need_projection → cognitive_projection → existence_strategy → collective_mechanism → observable_reaction` 机制链按匿名聚类对账，分别记录预测场景数、命中场景数、意外聚类数、观察评论数和覆盖率。命中只能校准整条投影假设，不能证明读懂了某个真人的需求、认知过程或“存在”。每次指标结算还生成分层因果反思：事实观察、预测误差、是否绑定预注册实验、反事实是否可识别、可能混杂因素和下一步所需证据。单作品的反事实状态必须是 `unavailable`。
 
 原生链路固定为：
 

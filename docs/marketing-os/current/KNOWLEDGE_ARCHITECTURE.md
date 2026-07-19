@@ -12,9 +12,19 @@
 → Preflight 预演
 → Action / Publish
 → Receipt / Metrics
-→ Retro / Candidate / Governance
+→ Retro / Candidate / System Governance
 → 账号知识更新 + 匿名产品知识飞轮
 ```
+
+这条闭环是后台基础设施，不是用户可配置功能。用户与对话只能读取当前有效知识及来源，不能创建、接受、拒绝、改写或恢复候选；系统按固定的来源、重复样本、时效、冲突、历史回放与伤害门禁静默晋级、降级、替换或淘汰。
+
+## Human Observation Core 是上游研究系统
+
+四库不再拥有“人类模型”。独立 `agent/human_observer/` 保存带权利合同的不可变原始观察、时间图谱、版本理论、竞争解释、封存预测、结果和模型修订；Marketing Receipt 只经后台单向 connector 贡献观察，四库和 Preflight 只能读取投影，不能回写或决定模型版本。
+
+群体机制只允许 `identity_convergence / emotional_contagion / normative_pressure / suggestibility / deindividuation / polarization / imitation / authority_transfer / rumor_cascade / collective_effervescence / unknown`。`乌合之众` 是历史解释镜片，不是系统真理；它必须与社会认同、去个体化、规范涌现和信息级联等解释竞争，并保留反证、置信上限与数据缺口。
+
+该内核由 Cron 和 system-only owner 静默驱动。用户和对话不能创建、修改、接受、拒绝或恢复其学习结论；单样本不能升级成人性规律，个人身份、逐条评论、永久人格类型和临床诊断永远不能进入。完整边界见 [`../../human-observer/ARCHITECTURE.md`](../../human-observer/ARCHITECTURE.md)。
 
 ## 四类知识不能混
 
@@ -41,7 +51,7 @@
 回答“这个账号过去发生了什么、哪些模式被多次验证”。包括账号受众、内容表现模式、失败恢复、平台内适配、发布节奏和策略候选。
 
 - 只属于一个 user/account scope。
-- 只有发布/指标 Receipt 支持、经过 Retro 且已 accepted 的 LearningCandidate 才能进入 active knowledge。
+- 只有发布/指标 Receipt 支持、经过 Retro 且通过系统门禁的 LearningCandidate 才能进入 active knowledge。
 - 一次爆款、一次失败和用户自己的主观归因都不能直接成为账号知识。
 - 用户目标、审美、拒绝和表达习惯属于用户记忆；它们能约束 Agent，但不能污染账号绩效事实。
 
@@ -94,6 +104,6 @@
 
 ## 完成边界
 
-当前已经完成结构化四库、内置基线、防用户/模型污染写入门、Receipt-backed 账号晋升、签名聚合知识投影和 Preflight 检索。赛道库目前有治理合同和真实证据/签名知识包入口，尚无大规模真实样本。后续缺口是海量真实采集、平台与赛道时效巡检、完整指标回收、跨账号匿名聚合与 UI 治理。
+当前已经完成结构化四库、内置基线、防用户/模型污染写入门、Receipt-backed 账号晋升、签名聚合知识投影和 Preflight 检索。Hermes Cron 现会静默执行已观察指标恢复、平台/市场知识时效与显式冲突隔离、三条以上公域作品且每条至少两次快照的市场聚合、真实发布复盘投影，以及权重候选的支持度/反例率/历史伤害回放；用户决策 RPC 已封闭。赛道库仍需更大规模真实样本，平台官方规则的持续刷新仍依赖可信原生采集源或签名知识包，而不是对话输入。
 
-Preflight 中的 `knowledge_support` 只表示知识覆盖与置信度，不直接证明内容质量。通用原理存在不能给烂内容加分；知识不足只会降低判断置信，真实内容、证据、账号适配和发布回执仍决定结论。
+Preflight 中的 `knowledge_support` 只表示 Marketing 四库覆盖与置信度，不直接证明内容质量。`content-production-preflight-v0.8` 已移除 Human Observation 覆盖因子和缺失警告；显式核心投影只可作为 `read_only_no_score_or_writeback` 上下文。真实内容、证据、账号适配和发布回执仍决定产品结论。

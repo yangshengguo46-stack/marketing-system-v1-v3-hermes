@@ -8,8 +8,8 @@ from typing import Any
 
 from agent.marketing.domains.human_model import existence_ontology_contract
 
-SOCIAL_SYSTEM_SIMULATION_VERSION = "social-system-simulation-v0.2"
-CAUSAL_REFLECTION_VERSION = "causal-reflection-v0.2"
+SOCIAL_SYSTEM_SIMULATION_VERSION = "social-system-simulation-v0.3"
+CAUSAL_REFLECTION_VERSION = "causal-reflection-v0.3"
 
 
 def build_social_system_simulation(
@@ -34,6 +34,9 @@ def build_social_system_simulation(
             for item in scenarios
         }
     )
+    collective_mechanisms = sorted(
+        {str(item.get("collective_mechanism") or "unknown") for item in scenarios}
+    )
     body = {
         "version": SOCIAL_SYSTEM_SIMULATION_VERSION,
         "scope": "content_enters_social_attention_field",
@@ -44,7 +47,7 @@ def build_social_system_simulation(
             "cognitive_projection",
             "existence_strategy",
             "observable_behavior",
-            "group_propagation",
+            "collective_mechanism_projection",
             "platform_distribution",
             "business_action",
         ],
@@ -65,6 +68,10 @@ def build_social_system_simulation(
                 ),
                 "stances": sorted({str(item.get("stance") or "unknown") for item in scenarios}),
                 "trust_or_share_hypothesis": dimensions.get("trust"),
+                "collective_mechanisms": collective_mechanisms,
+                "mechanism_notice": (
+                    "anonymous_group_projection_not_individual_motive_or_universal_law"
+                ),
             },
             "platform_distribution": {
                 "platforms": list(plan.get("target_platforms") or []),

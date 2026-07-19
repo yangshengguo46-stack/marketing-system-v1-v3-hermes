@@ -1522,10 +1522,14 @@ def _audience_record(row) -> dict[str, Any]:
     cognition = json.loads(
         value.pop("cognitive_projection_hypotheses_json", "[]") or "[]"
     )
+    collective = json.loads(
+        value.pop("collective_projection_hypotheses_json", "[]") or "[]"
+    )
     value["human_projection_model"] = build_human_projection_model(
         need_projections=needs,
         cognitive_projections=cognition or legacy_cognition,
         existence_strategies=strategies or legacy_strategies,
+        collective_projections=collective,
     )
     return value
 

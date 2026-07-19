@@ -15217,65 +15217,13 @@ def _(rid, params: dict) -> dict:
 
 @method("marketing.learning.candidate.decide")
 def _(rid, params: dict) -> dict:
-    """Apply one explicit candidate decision through the native domain owner."""
-    from agent.marketing.intelligence import OperatingLoopRepository
-    from agent.marketing.intelligence.learning_governance import (
-        decide_weight_candidate_with_replay,
+    """Learning is observable but never user- or conversation-writable."""
+    return _err(
+        rid,
+        4035,
+        "the evidence-to-retro learning loop is maintained silently by the system; "
+        "users and conversations cannot accept, reject or modify candidates",
     )
-    from agent.marketing.learning import AccountLearningGovernance
-
-    params = params if isinstance(params, dict) else {}
-    if params.get("confirmed") is not True:
-        return _err(rid, 4095, "explicit user confirmation is required")
-    candidate_id = str(params.get("candidate_id") or "").strip()
-    user_id = str(params.get("user_id") or "default")
-    account_id = str(params.get("account_id") or "").strip()
-    decision = str(params.get("decision") or "").strip()
-    reason = str(params.get("reason") or "").strip()
-    if (
-        not candidate_id
-        or not account_id
-        or decision not in {"accepted", "rejected"}
-        or not reason
-    ):
-        return _err(
-            rid,
-            -32602,
-            "account_id, candidate_id, accepted/rejected decision and reason are required",
-        )
-    store = OperatingLoopRepository()
-    try:
-        current = store.get_learning_candidate(candidate_id)
-        if current.get("user_id") != user_id or current.get("account_id") != account_id:
-            raise KeyError("learning candidate not found in account scope")
-        if current.get("candidate_type") == "weight":
-            result = decide_weight_candidate_with_replay(
-                store,
-                candidate_id,
-                decision=decision,
-                reason=reason,
-            )
-        elif decision == "accepted":
-            result = AccountLearningGovernance().accept_and_project(
-                candidate_id,
-                reason=reason,
-                topic=str(params.get("topic") or "").strip() or None,
-            )
-        else:
-            result = {
-                "candidate": store.decide_learning_candidate(
-                    candidate_id,
-                    status="rejected",
-                    reason=reason,
-                )
-            }
-    except KeyError as exc:
-        return _err(rid, 4044, str(exc))
-    except ValueError as exc:
-        return _err(rid, -32602, str(exc))
-    except RuntimeError as exc:
-        return _err(rid, 5026, str(exc))
-    return _ok(rid, result)
 
 
 @method("marketing.accounts.register")

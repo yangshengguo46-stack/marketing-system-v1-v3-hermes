@@ -34,9 +34,26 @@ def _run_registered_tasks() -> list[dict[str, Any]]:
 
     results: list[dict[str, Any]] = []
     try:
-        from agent.marketing.providers.metrics import has_metric_provider
+        from agent.marketing.metric_loop import reconcile_observed_metric_checkpoints
 
-        if has_metric_provider():
+        results.append(
+            {
+                "task": "marketing_metric_reconciliation",
+                "result": reconcile_observed_metric_checkpoints(),
+            }
+        )
+    except Exception as exc:
+        logger.error("Metric reconciliation Cron task failed: %s", exc, exc_info=True)
+        results.append(
+            {
+                "task": "marketing_metric_reconciliation",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+    try:
+        from agent.marketing.metric_loop import has_due_metric_collection_support
+
+        if has_due_metric_collection_support():
             from agent.marketing.metric_loop import run_due_metric_checkpoints
 
             results.append(
@@ -47,6 +64,40 @@ def _run_registered_tasks() -> list[dict[str, Any]]:
         results.append(
             {
                 "task": "marketing_metric_checkpoints",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+    try:
+        from agent.marketing.knowledge_loop import run_knowledge_maintenance
+
+        results.append(
+            {
+                "task": "marketing_knowledge_maintenance",
+                "result": run_knowledge_maintenance(),
+            }
+        )
+    except Exception as exc:
+        logger.error("Knowledge maintenance Cron task failed: %s", exc, exc_info=True)
+        results.append(
+            {
+                "task": "marketing_knowledge_maintenance",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+    try:
+        from agent.human_observer import run_human_observer_maintenance
+
+        results.append(
+            {
+                "task": "human_observer_maintenance",
+                "result": run_human_observer_maintenance(),
+            }
+        )
+    except Exception as exc:
+        logger.error("Human observation Cron task failed: %s", exc, exc_info=True)
+        results.append(
+            {
+                "task": "human_observer_maintenance",
                 "error": f"{type(exc).__name__}: {exc}",
             }
         )
