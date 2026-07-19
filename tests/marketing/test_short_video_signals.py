@@ -11,7 +11,10 @@ from agent.marketing.domains.short_video_signals import (
     decode_browser_signal_result,
 )
 from agent.marketing.intelligence.production_preflight import (
+    build_article_draft_preflight,
     build_content_production_preflight,
+    build_video_cut_preflight,
+    build_video_treatment_preflight,
 )
 from agent.marketing.evidence_capture import enrich_tool_result_with_evidence
 from hermes_state import SessionDB
@@ -131,7 +134,221 @@ def test_video_preflight_treats_bgm_as_first_class_signal():
     assert without_sound["scores"]["sound_fit"] == 0
     assert with_sound["scores"]["sound_fit"] == 0.92
     assert with_sound["scores"]["overall"] > without_sound["scores"]["overall"]
-    assert with_sound["formula_version"] == "content-production-preflight-v0.8"
+    assert with_sound["formula_version"] == "content-production-preflight-v0.9"
+
+
+def test_public_priors_keep_cold_start_productive_without_fake_personalization():
+    treatment = {
+        "platform": "douyin",
+        "format": "short_video",
+        "title": "AI 是泡沫吗",
+        "thesis": "估值泡沫不等于需求不存在",
+        "audience_promise": "用三组证据拆开这个问题",
+        "hook": "AI 泡沫已经破了，但真正的问题不是估值。",
+        "hook_hypothesis": {
+            "first_three_seconds": "AI 泡沫已经破了，但你可能看错了泡沫在哪。",
+            "tension": "市场下跌与真实需求同时存在",
+            "payoff": "给出估值、需求、生产率三层判断",
+        },
+        "aspect_ratio": "9:16",
+        "target_duration": 9,
+        "pacing": "前三秒冲突，随后每三秒兑现一个证据",
+        "caption_style": "逐句高亮关键词",
+        "cta": "你认为泡沫在哪一层？",
+        "voiceover_script": "AI 泡沫已经破了。估值、需求和生产率其实是三个问题。",
+        "beat_sheet": [
+            {"purpose": "hook"},
+            {"purpose": "evidence"},
+            {"purpose": "conclusion"},
+        ],
+        "claim_evidence_map": [
+            {"claim": "基础设施投入正在变化", "evidence_refs": ["evidence-1"]}
+        ],
+        "sound_strategy": {
+            "voice_style": "冷静、快速",
+            "music_role": "低频张力，不盖旁白",
+            "sfx_cues": ["开场冲击"],
+        },
+        "shot_list": [
+            {
+                "id": "s1",
+                "duration": 3,
+                "purpose": "hook",
+                "visual_query": "AI stock market crash chart",
+                "on_screen_text": "泡沫破了吗？",
+            },
+            {
+                "id": "s2",
+                "duration": 3,
+                "purpose": "evidence",
+                "visual_query": "data center servers",
+                "on_screen_text": "需求仍在增长",
+            },
+            {
+                "id": "s3",
+                "duration": 3,
+                "purpose": "conclusion",
+                "visual_query": "office worker artificial intelligence",
+                "on_screen_text": "分三层判断",
+            },
+        ],
+    }
+    result = build_video_treatment_preflight(
+        {
+            "platform": "douyin",
+            "treatment": treatment,
+            "evidence_refs": ["evidence-1"],
+            "knowledge_context": {
+                "platform": [{"id": "public-platform-1"}],
+                "market": [{"id": "public-market-1"}],
+                "content": [{"id": "public-content-1"}],
+                "account": [],
+            },
+            "account_context": {},
+        }
+    )
+
+    assert result["prior_mode"] == "public_prior_cold_start"
+    assert result["personal_prior"]["available"] is False
+    assert result["public_prior"]["support"] > 0
+    assert result["preflight_decision"]["go"] is True
+    assert "personal_model_missing_public_prior_cold_start" in result[
+        "preflight_decision"
+    ]["warnings"]
+    assert result["prediction_contract"]["exact_views_allowed"] is False
+
+
+def test_general_preflight_missing_private_audience_is_warning_not_brain_death():
+    result = build_content_production_preflight(
+        {
+            "objective": "AI 泡沫公域冷启动内容",
+            "kind": "faceless_video",
+            "platforms": ["douyin"],
+            "evidence": [{"url": "https://example.com/public-report"}],
+            "knowledge_context": {"content": [{"id": "public-prior-1"}]},
+        }
+    )
+
+    assert "audience_context_missing" not in result["decision"]["blockers"]
+    assert "personal_audience_context_missing_using_public_prior" in result[
+        "decision"
+    ]["warnings"]
+    assert result["input"]["prior_mode"] == "public_prior_cold_start"
+    assert result["preflight_decision"]["go"] is True
+    assert result["decision"]["publish_eligible"] is False
+    assert "public_prior_exploratory_draft_only" in result["decision"]["warnings"]
+
+
+def test_cut_preflight_requires_observed_hook_material_audio_and_treatment_parity():
+    review = {
+        "playable": True,
+        "hook_first_three_seconds_visible": True,
+        "treatment_parity": True,
+        "caption_readability": True,
+        "material_relevance": True,
+        "evidence_alignment": True,
+        "audio_present": True,
+        "audio_sync": True,
+        "ending_cta_present": True,
+        "scores": {
+            "audience_fit": 8,
+            "platform_fit": 8,
+            "account_fit": 7,
+            "emotional_pull": 7,
+            "pacing": 8,
+            "information_density": 8,
+            "evidence_alignment": 8,
+        },
+        "issues": [],
+    }
+    ready = build_video_cut_preflight(
+        {
+            "platform": "douyin",
+            "treatment": {"platform": "douyin"},
+            "technical_qa": {"disposition": "ready"},
+            "audio_expected": True,
+            "visual_review": review,
+        }
+    )
+
+    assert ready["scope"] == "video_cut_preflight"
+    assert ready["preflight_decision"]["go"] is True
+    assert ready["preflight_decision"]["stage"] == "cut_review"
+    assert ready["prediction_contract"]["exact_views_allowed"] is False
+
+    failed = build_video_cut_preflight(
+        {
+            "platform": "douyin",
+            "treatment": {"platform": "douyin"},
+            "technical_qa": {"disposition": "ready"},
+            "audio_expected": True,
+            "visual_review": {
+                **review,
+                "hook_first_three_seconds_visible": False,
+                "material_relevance": False,
+                "audio_sync": False,
+            },
+        }
+    )
+    assert failed["preflight_decision"]["go"] is False
+    assert failed["preflight_decision"]["action"] == "revise_cut"
+    assert {
+        "cut_hook_contract_failed",
+        "cut_material_relevance_failed",
+        "cut_audio_contract_failed",
+    } <= set(failed["preflight_decision"]["blockers"])
+
+
+def test_article_draft_preflight_is_platform_native_and_evidence_gated():
+    review = {
+        "platform_native": True,
+        "factual_claims_traceable": True,
+        "hook_effective": True,
+        "structure_complete": True,
+        "cta_present": True,
+        "deliverable_complete": True,
+        "scores": {
+            "audience_fit": 8,
+            "platform_fit": 8,
+            "account_fit": 6,
+            "knowledge_fit": 8,
+            "strategy_fit": 8,
+            "evidence_strength": 8,
+            "hook": 8,
+            "emotion": 7,
+            "structure": 8,
+            "viewpoint": 8,
+        },
+        "issues": [],
+    }
+    ready = build_article_draft_preflight(
+        {
+            "platform": "zhihu",
+            "article": {
+                "platform": "zhihu",
+                "claim_evidence_map": [
+                    {"claim": "AI 投资增加", "evidence_refs": ["evidence-1"]}
+                ],
+            },
+            "draft_review": review,
+        }
+    )
+    assert ready["preflight_decision"]["go"] is True
+    assert ready["draft_features"]["mapped_evidence_count"] == 1
+
+    failed = build_article_draft_preflight(
+        {
+            "platform": "zhihu",
+            "article": {"platform": "zhihu", "claim_evidence_map": []},
+            "draft_review": {
+                **review,
+                "platform_native": False,
+                "factual_claims_traceable": False,
+            },
+        }
+    )
+    assert failed["preflight_decision"]["go"] is False
+    assert failed["preflight_decision"]["action"] == "revise_article"
 
 
 def test_preflight_human_observer_projection_is_read_only_and_score_neutral():

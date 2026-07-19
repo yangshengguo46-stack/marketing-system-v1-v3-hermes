@@ -79,6 +79,45 @@ def _sole_entity_id(paths: MarketingDataPaths) -> str:
     return str(rows[0][0])
 
 
+def test_platform_targets_bind_real_account_and_label_public_prior_fallback():
+    targets = daily._platform_production_targets(
+        entity_context={
+            "linked_account_contexts": [
+                {
+                    "account_id": "acct-douyin",
+                    "connected": True,
+                    "account": {"id": "acct-douyin", "platform": "douyin"},
+                },
+                {
+                    "account_id": "acct-wechat",
+                    "connected": True,
+                    "account": {
+                        "id": "acct-wechat",
+                        "platform": "wechat_official",
+                    },
+                },
+            ]
+        },
+        platforms=["douyin", "wechat_official", "youtube"],
+        fallback_account_id="acct-anchor",
+    )
+
+    assert targets["douyin"] == {
+        "platform": "douyin",
+        "account_id": "acct-douyin",
+        "execution_account_id": "acct-anchor",
+        "binding_status": "linked_platform_account",
+        "personalization_available": True,
+        "candidate_account_ids": ["acct-douyin"],
+    }
+    assert targets["youtube"]["account_id"] is None
+    assert targets["youtube"]["execution_account_id"] == "acct-anchor"
+    assert targets["youtube"]["binding_status"] == (
+        "public_prior_only_no_linked_account"
+    )
+    assert targets["youtube"]["personalization_available"] is False
+
+
 def test_daily_batch_delivers_only_preflight_go_candidates_and_is_idempotent(
     tmp_path, monkeypatch
 ):

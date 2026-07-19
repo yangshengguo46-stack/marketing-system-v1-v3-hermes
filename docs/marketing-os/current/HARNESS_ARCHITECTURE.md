@@ -129,22 +129,24 @@ Daily signals / evidence fan-out
   → platform fit fan-out
   → preflight + prediction reducer
   → recommended TopicBrief
-      ├─ Article Director
-      │   → platform article variants → QA → Draft Box
-      └─ Video Director
-          → platform video brief → script/voice/shot plan
+      ├─ per-platform Article Writer
+      │   → platform-native final draft → ArticleDraft Preflight
+      │   → bounded rewrite (max 2) → Draft Box
+      └─ per-platform Video Showrunner
+          → VideoTreatment (hook/voice/beat/claim/shot/sound contract)
+          → Treatment Preflight → bounded revision (max 2)
           → library search + rights-cleared web search in parallel
-          → missing-shot generation approval when required
           → playable proxy/previs → audio/captions
           → Remotion / HyperFrames / FFmpeg render activities
-          → technical QA + independent content review → Draft Box
+          → technical QA + observed-cut review (`video_analyze`)
+          → Cut Preflight → Draft Box
   → human review
   → publish approval/effect
   → cross-day metrics fan-out
   → retro + governed learning
 ```
 
-`TopicBrief` 必须带原始选题、EvidencePack、预演/预测、目标平台集合、各平台匹配和平台蓝图。图文与视频只共享这个上游事实，不共享彼此的脚本、分镜或生命周期。Remotion、HyperFrames、FFmpeg、TTS、素材 Provider 都是可替换的执行 hands，不是项目 owner。
+`TopicBrief` 必须带原始选题、EvidencePack、预演/预测、实际推荐平台、各平台匹配、目标账号绑定和平台蓝图。图文与视频只共享这个上游事实，不共享彼此的脚本、分镜或生命周期。缺个人/账号样本时，公开平台、市场、基准和内容信息作为冷启动 prior 继续支持可逆草稿，同时降低置信且禁止精确流量承诺。Remotion、HyperFrames、FFmpeg、TTS、素材 Provider 和后续 `video-use`/OpenCut adapter 都是可替换的执行 hands，不是项目 owner。
 
 ## 六、审批与恢复
 
@@ -207,7 +209,7 @@ H0 以重构开始前的 28 个 tracked 修改为基线。下列裁决只决定�
 - 相同 Attempt/相同输出的结算幂等；Receipt 的相同 idempotency key 若输入不同会 fail closed。
 - 旧 `marketing.operation` 已映射为一个兼容 Workflow/Step；Gateway 重启后不再直接标错，而是结束旧 Attempt、追加 reclaim Event 并把 Step 放回可重试队列。
 - Gateway 已提供 workflow list/get/events/cancel/retry/approvals/respond RPC；取消、追加重试和审批决定均要求明确用户动作并校验 owner。Desktop task tray 已优先读取 Workflow，并在页面重载后从后端恢复活跃任务 projection，不再把 operation Session 当唯一任务事实。
-- `marketing.topic_production.start` 已能从预演通过的 candidate 创建幂等 TopicBrief DAG。图文与视频 Director 都只依赖 `topic_brief.freeze`；未知平台先走独立 research Step，两个生产分支各自 QA、进入草稿箱后才在 reducer 汇合。视频按平台分别建立 previs/render/QA，不再把一个母版伪装成全平台成品。
+- `marketing.topic_production.start` 已能从预演通过的 candidate 创建幂等 TopicBrief DAG。中央任务只生产实际 `recommended_platforms`，并为每个平台绑定真实目标账号或明确公域冷启动。图文与视频 Worker 都只依赖 `topic_brief.freeze`；未知平台先走独立 research Step。图文按平台直接写最终交付并运行 ArticleDraft Preflight；视频按平台建立 Showrunner Treatment、Treatment Preflight、素材/声音/previs/render 和真实成片 Cut Preflight，不再把母稿或母版伪装成全平台成品。
 - `HarnessDispatcher` 已提供注册式 typed handler、限定 Step kind 领取、3 路默认并发、自动 heartbeat、资源互斥、临时/永久错误分类和 Receipt 结算。Topic DAG 的全部 Step kind 已注册真实 handler；模型只做受限创意判断，领域库负责 plan/preflight/content/media/video/draft 的事实结算。
 - 素材解析顺序已固定为：账号素材库 → 零费用开放许可 Provider 搜索/下载（默认 Wikimedia Commons 官方 API；已有免费 Key 时可叠加 Pexels）→ 已安装 `media-use` 的项目/全局本地缓存。自动流程硬禁付费云生成，`media-use` 强制 `--local-only`，返回 generated 也拒绝采用；所有零费用来源仍未命中时 Step 明确失败并允许重试，不生成占位素材。每次命中都冻结成本地文件并写入 `MediaAssetRepository` 来源、许可证/生成状态与 resolver receipt；发布仍单独复核人物、物权、商标与使用场景。
 - Desktop 工作台“制作选题”已直连 `marketing.topic_production.start`，任务托盘按 workflow Event 增量恢复进度、审批、停止和重试；结果统一进入草稿箱。图文审核页已删除“拿平台图文稿制作视频”的入口，视频不再等待或复制图文脚本。

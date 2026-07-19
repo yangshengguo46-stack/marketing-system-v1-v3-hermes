@@ -18,14 +18,18 @@ PREFLIGHT_DECISION_VERSION = "preflight-decision-v0.1"
 
 VALID_STAGES = {
     "production_draft",
+    "treatment_review",
     "render_prepare",
+    "cut_review",
     "publish_review",
     "launch",
 }
 
 READY_BY_STAGE = {
     "production_draft": ("ready_for_asset_draft", "produce_asset"),
+    "treatment_review": ("ready_for_material_sourcing", "source_materials"),
     "render_prepare": ("ready_for_render_prepare", "prepare_render"),
+    "cut_review": ("ready_for_draft_review", "prepare_draft_review"),
     "publish_review": ("ready_for_publish_review", "prepare_publish_review"),
     "launch": ("ready_for_action", "execute_action"),
 }
@@ -101,6 +105,10 @@ def _next_steps(status: str, blockers: list[str], lane: str | None, stage: str) 
     if not steps and status.startswith("ready_"):
         if stage == "publish_review":
             steps.append("进入发布审批，并确认标题、封面、时间和指标回收计划。")
+        elif stage == "treatment_review":
+            steps.append("按已冻结的平台视频方案逐镜头检索素材并记录授权。")
+        elif stage == "cut_review":
+            steps.append("进入草稿箱人审，保留成片特征快照和发布前预测。")
         elif stage == "render_prepare":
             steps.append("进入素材/渲染准备，先检查素材授权、字幕和音频来源。")
         elif lane == "faceless_video":
@@ -165,6 +173,23 @@ def build_preflight_decision(
         status = "needs_evidence"
         go = False
         action = "collect_evidence"
+    elif any(
+        item.startswith("treatment_")
+        or item.startswith("hook_")
+        or item.startswith("duration_")
+        or item.startswith("platform_contract_")
+        or item.startswith("cut_")
+        or item.startswith("article_")
+        for item in blockers
+    ):
+        status = "needs_revision"
+        go = False
+        if any(item.startswith("cut_") for item in blockers):
+            action = "revise_cut"
+        elif any(item.startswith("article_") for item in blockers):
+            action = "revise_article"
+        else:
+            action = "revise_treatment"
     elif "material_license_check_required" in blockers or "material_missing" in blockers:
         status = "replace_or_license_materials"
         go = False
@@ -173,6 +198,14 @@ def build_preflight_decision(
         status = "blocked_by_risk"
         go = False
         action = "reduce_risk"
+    elif (
+        context.get("exploratory_public_prior") is True
+        and not blockers
+        and score >= 45
+    ):
+        status, action = READY_BY_STAGE[stage]
+        go = True
+        warnings.append("public_prior_exploratory_draft_only")
     elif score_decision == "do_not_open_or_publish_yet" or score < 38:
         status = "do_not_open_or_publish_yet"
         go = False
@@ -194,7 +227,9 @@ def build_preflight_decision(
     required_next_steps = _next_steps(status, blockers, lane, stage)
     ready_label = {
         "ready_for_asset_draft": "可进入生产",
+        "ready_for_material_sourcing": "方案通过，可找素材",
         "ready_for_render_prepare": "可准备渲染",
+        "ready_for_draft_review": "粗剪通过，可进入审片",
         "ready_for_publish_review": "可进入发布审批",
         "ready_for_action": "可执行",
     }.get(status, "需要处理")

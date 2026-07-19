@@ -36,8 +36,8 @@
 | Account lifecycle | Hermes AccountRegistry 已拥有注册、真实登录验证、认证状态、断开、删除、会话绑定和 BrowserContext 租约；MCP owner 自动释放登录窗口，后续以同一持久 profile 后台恢复；删除时清理 profile | automated | 真人多平台登录/退出、Cookie 信号随平台变更的巡检 |
 | Owned account diagnosis | 微信公众号已验证最近 9 篇逐篇内容分析指标；抖音已验证公开 3 条、私密 1 条的作品口径；Hermes 将作品、指标、EvidenceRecord、透明执行基线和数据缺口按账号写入 `state.db`；Desktop 只读展示 | dev-runtime | 新空 profile 真人扫码、多账号恢复、分页完整性巡检；评分继续区分执行基线、内容解释和受众反馈 |
 | EvidencePack | `web_extract` 后自动固化 | automated | 多源交叉核验、来源语义、时效治理 |
-| Content plan/assets | 图文、不露脸素材视频与 `cross_platform_campaign` 三 lane policy；同一内容内核按任意国内/海外平台集合生成不同受众、开头、结构、互动、CTA、视觉与格式合同；未知平台保留明确调研缺口；不可变版本、人审与草稿归档继续复用原 owner | automated | 真实模型五平台成品质量、人审与发布；平台画像时效来源；草稿归档/恢复真人验收 |
-| Preflight | InfluenceOS + 不可变记录 + draft gate；每个平台保存独立适配评估；经营优先级/选题推荐必须先产生 plan + preflight，返回 `recommended` 或 `research_only`，阻断候选不得伪装成推荐 | automated | 真实账号历史校准、自动推送任务真人验收、评论聚类 Provider、平台竞争/时段/投流先验 |
+| Content plan/assets | 中央 TopicOrder 只派发实际推荐平台；同一 TopicBrief 按平台和真实目标账号分别建立图文/视频 work order。图文由各平台 Writer 直接写最终成品，不再先造通用母稿；视频由各平台 Showrunner 独立产出 Treatment、旁白、镜头、素材与声音方案 | automated | 真实模型五平台成品质量、人审与发布；平台画像时效来源；草稿归档/恢复真人验收 |
+| Preflight | InfluenceOS + 同一不可变 Preflight owner；选题、平台 VideoTreatment、平台 ArticleDraft、渲染 Cut 四级复核。缺个人样本时使用公域平台/市场/内容先验继续生产但降低置信，禁止伪精确播放承诺；不通过项最多两次方案/稿件修订或明确阻断 | automated | 真实账号历史校准、成片自动修剪 executor、自动推送任务真人验收、评论聚类 Provider、平台竞争/时段/投流先验 |
 | Receipt/Learning store | ReceiptRef、LearningCandidate、PublishAction、MetricCheckpoint 状态机；观察后自动执行投影机制链对账和分层 causal reflection；系统门禁静默晋级/等待/淘汰，用户与对话不能操作候选 | automated | 更多平台一方指标采集器、真实跨天规模数据 |
 | Hermes memory/Skill | 1 个产品运行 Skill、23 个原始营销 playbook 和 13 个内容/编剧/视频参考 Skill 已纳入源码；用户自述/偏好进入 USER/MEMORY，系统学习候选按证据与回放门禁静默投影 | automated | 重复成功流程沉淀；参考 Skill 升级必须逐项审查 |
 | Publishing/metrics | 原生发布 intent、一次性审批、Provider 插槽、unknown 恢复、回执校验、5 段 checkpoint；Hermes Cron 原生触发指标 owner；抖音/公众号已接账号隔离浏览器一方作品采集，支持领取、延期、7d 淘汰、崩溃恢复和 unavailable 回执 | automated | 其余平台真实发布/指标 Provider 和真人跨天验收 |
@@ -50,9 +50,9 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 
 | 交付形态 | 当前原生能力 | 主要缺口 | 当前证据 |
 |---|---|---|---|
-| `article_soft` 软文 | 账号/实验绑定、EvidencePack、父稿与平台变体、质量门、版本资产、Preflight 和发布资格约束 | 真实账号调性、主张级多源核验、配图版权与真人审稿 | automated |
-| `faceless_video` 不露脸素材视频 | 账号/实验绑定、内容计划、素材需求、声音计划、特征快照、Preflight、不可变 Video IR/EDL、scene/IR/render-plan hash、能力路由、显式渲染批准、固定版本 Remotion/HyperFrames 镜头执行、真实 FFmpeg 规格化与合成、场景缓存、派生最终素材、不可变成品版本、失败重试与 Render Receipt；黑场/冻结/响度/技术规格自动 QA；TopicBrief 直接 fan-out 到独立 Video Director，不再依赖或复制图文脚本；素材按用户库 → Wikimedia Commons/Pexels 等零费用开放来源 → 本地缓存检索，拒绝付费生成；Desktop 已真实加载并播放成片 | 首条端到端证明片只复用了一条开放素材，部分 Remotion 大字存在裁切；后续运行已加素材相关性与多查询/多来源策略，但仍需真实模型多平台人审、发布和跨天数据回收 | dev-runtime（成片与播放已验；未达 publish-grade/human-loop） |
-| `cross_platform_campaign` 全平台 campaign | 一个内容内核绑定任意目标平台集合；内置抖音、公众号、视频号、知乎、小红书、B站、快手、TikTok、YouTube、Instagram、LinkedIn、X 的版本化内容画像，非内置安全平台 ID 以 `generic_unverified_requires_platform_research` 降级；每个平台变体必须内容实质不同并说明受众、开头、结构和 CTA 适配依据 | 真实模型成品、平台画像的证据/有效期治理、账号级效果校准、各平台发布 Provider | automated |
+| `article_soft` 软文 | 同一不可变 TopicBrief 下，各平台 Writer 读取本平台画像、目标账号模型和四库后直接写最终交付；ArticleDraft Preflight 检查平台原生性、证据映射、钩子、结构、CTA 和完整性，最多两次重写后才进草稿箱 | 真实账号调性、主张级多源核验、配图版权与真人审稿 | automated |
+| `faceless_video` 不露脸素材视频 | 每个平台 Showrunner 独立产出 `VideoTreatment`；总预演通过后，素材/声音/Video IR/Remotion/HyperFrames/FFmpeg 只消费该平台批准方案。渲染后同时执行黑场/冻结/音轨/规格技术 QA 与 `video_analyze` 成片观察，再由同一 Preflight owner 检查前三秒、素材答题、证据、字幕、音画、CTA 和 Treatment 一致性 | 新 Cut Preflight 会明确阻断不合格成片，但尚未接自动剪辑 executor 做成片级有界重剪；仍需新多样性门的真实十镜头复跑、真人审片、发布和跨天回收 | dev-runtime（历史成片与播放已验；新 v2 生产合同为 automated） |
+| `cross_platform_campaign` 全平台 campaign | 中央任务只冻结共享的选题核、EvidencePack、平台匹配与目标账号绑定，不再冻结一份可被复制的通用成稿；内置 12 平台画像，未知安全平台先研究，随后平台图文 Writer 与平台视频 Showrunner 各自独立生产 | 真实模型成品、平台画像的证据/有效期治理、账号级效果校准、各平台发布 Provider | automated |
 
 三种内部形态共同消费经营主体上下文、当前定位和内容系统、EvidencePack、ContentProductionPolicy、Preflight、ContentAsset、发布 Receipt、指标 checkpoint、Retro 与系统门禁治理的学习候选。完整草稿和生产状态进入 Hermes `state.db` 的领域 owner；Electron 只展示状态、收集输入和承接用户自身选择与外部动作授权，不拥有生产、素材、浏览器、发布或学习事实。
 
@@ -86,6 +86,17 @@ Marketing OS 内容生产保留三种内部交付形态，共享同一条 Hermes
 - **结果可纵向对账。** Marketing Receipt 连接器现在同时绑定同一用户的伪名 subject 和账号/平台匿名 cohort；选择与后续真实结果可以在 Human Observer 内按主体纵向研究，但两个连接器都只有系统 capability、保持幂等且没有 Gateway/Tool/Desktop 写入口。
 - **代码路径。** `agent/marketing/session_scope.py`、`tui_gateway/server.py`、`agent/human_observer/marketing_connector.py`、`agent/human_observer/runner.py`；架构合同同步更新 `PRODUCT_CONSTITUTION.md`、`PRODUCT_PHILOSOPHY.md`、`ARCHITECTURE_DOCTRINE.md`、`NATIVE_ARCHITECTURE.md` 和 `docs/human-observer/ARCHITECTURE.md`。
 - **自动化证据。** 不重复计数的当前回归共 `544 passed, 1 skipped`：全 Marketing/Human Observer/实时 AccountContext/认识论/Cron/产品身份/经营循环 `243 passed, 1 skipped`，完整 Gateway `301 passed`。Python compile、Ruff 与 `git diff --check` 进入提交前总门。当前证据为 automated；尚未宣称 Human Core 已学会人类模型，仍需要合法长期样本、跨语境反证、偏差审计和安全评估。
+
+### PRODUCTION-02 中央选题到平台原生成品的生产主链（automated，2026-07-19）
+
+- **中央系统只发任务，不写成品。** 每日静默系统冻结不可变 TopicBrief，并把“被评估的平台”与“实际推荐生产的平台”分开；只有 `recommended_platforms` 会进入生产 DAG。TopicBrief 不只传 `evidence_id`，还把经营主体内已验证 EvidencePack 的标题、来源 URL、有界摘要、采集时间和校验级别冻结给 Worker，避免编导拿空 ID 靠常识补事实。每个平台同时保存真实关联账号、兼容存储账号和 `public_prior_only_no_linked_account` 等绑定状态；真实平台账号只提供个性化上下文，旧 account-first Repository 暂用 TopicOrder 锚点保存计划/证据/草稿。发布资格保持 fail-closed，直到发布 effect 显式消费 `target_account_id`，不能拿兼容账号错发。没有个人样本时仍可用公域先验做可逆草稿，但不得伪装成账号个性化。
+- **平台图文不再套母稿。** v2 DAG 改为 `article.write.{platform} → article.qa.{platform}`；每个平台 Writer 直接读取该平台画像、目标账号上下文和 Platform/Market/Account/Content 四库，从 TopicBrief 写最终成品。ArticleDraft Preflight 检查平台原生表达、证据映射、钩子、结构、CTA 和交付完整性，最多两次完整重写，仍不通过就阻断，不把半成品塞入草稿箱。历史 v1 的父稿/adapter handler 只为 durable workflow 恢复保留，不再被新任务创建。
+- **短视频编导是平台 Showrunner，不是图文下属。** 每个平台分别生成 `VideoTreatment`：目标、受众承诺、前三秒假设、平台画幅/时长/节奏/字幕/CTA、旁白、beat sheet、主张证据表、声音策略和 2–12 个逐镜头合同。图文稿和视频稿只共享 TopicBrief/EvidencePack；视频不读取、等待或复制图文脚本。
+- **总预演只保留一个 owner、增加阶段。** `content-production-preflight-v0.9` 仍是唯一预演 owner；新增 `video-treatment-v1`、`article-draft-v1` 与 `video-cut-v1` 三个阶段记录。Treatment 不通过时 Showrunner 最多修订两次；缺账号历史只降低 confidence，公域平台/市场/内容先验可继续冷启动；所有预测只输出带置信的范围合同，明确禁止精确播放/曝光承诺。
+- **素材、声音和渲染消费批准方案。** 每个平台的素材检索、零费用开放来源下载、版权冻结、火山旁白、预演、Video IR 和渲染全部读取自己通过预演的 Treatment；画幅决定素材横竖方向与 IR Canvas，不再由一份全局分镜或图文结构隐式决定。Remotion、HyperFrames、FFmpeg 和 TTS 仍是可替换执行 hands，不成为编导或项目 owner。
+- **成片必须回到总引擎。** Render Receipt 的黑场、冻结、分辨率、音轨和响度 QA 只证明技术可用；`platform_video_cut_reviewer` 必须对真实本地成片调用 `video_analyze`，观察前三秒、镜头/素材答题、字幕、证据、音画、CTA 与 Treatment 一致性。观察结果交给确定性 Cut Preflight；不合格成片明确阻断，不能以“渲染成功”冒充内容合格。
+- **剪辑工具边界。** 已安装的 `video-use` 定位为后续剪辑 executor/方法库，其 audio-first、字幕最后、输出自检和最多三轮修复规则可由未来 `EditorActivity` 消费，但它不负责选题、编导、预演或业务状态。当前仓库没有 OpenCut/Chat Cut 原生接线；Chat Cut 因计费不进入当前方案，OpenCut 只有在出现可验证的本地 adapter 与回执合同后才可接入，不能先写一个假按钮。
+- **当前证据与未完成。** 新 DAG、平台账号绑定、公域冷启动、EvidencePack 冻结、Treatment/Article/Cut Preflight、素材画幅和成片观察已有定向 `36 passed`，全 `tests/marketing` 回归退出码 0，相关 Content/Operating/产品身份/账号上下文回归退出码 0；Python compile、Ruff 和 `git diff --check` 通过。尚未用 v2 合同跑真实模型五平台端到端，也没有自动成片重剪 executor、真人审片、发布与跨天回收，因此证据等级是 `automated`，不得升级成 human-loop。
 
 ### HARNESS-00 全项目 Durable Multi-Agent Harness 重构（H1～H4 首条端到端 dev-runtime 已验，2026-07-18）
 
@@ -427,7 +438,9 @@ LOOP-02/03/04 的本地闭环已收口：`cron/product_tasks.py` 只提供 Herme
 - **自动化与安全证据。** 本轮变更域后端 `34/34`、发布/经营回归 `25/25`、草稿箱/图文/视频 UI `11/11` 通过；新增覆盖 campaign 直达、每镜头素材请求幂等、Remotion/HyperFrames 路由、不可变素材修订、缺旁白/占位/渲染器门禁，以及“误标 accepted 的静态卡仍不能准备发布”。TypeScript、Python compile 与 `git diff --check` 通过。开发应用已重启在 Vite `5174` / Electron CDP `9222`，本轮没有平台发布、费用调用或跨天指标写入。
 - **仍未完成。** 视频板块不再以“逐镜头补素材即可完成”描述；必须先完成下面的产品结构重整，才能再次建立真实 production。图文仍需补齐 publish preflight 所需的账号定位、内容系统和目标平台连接；之后才是一次性发布批准、可靠回执、作品身份反查和跨天数据回收。平台画像来源、有效期和账号效果校准也仍未完成。本节只有图文链与失败审计达到 `dev-runtime`，视频产品闭环没有达到。
 
-### MATERIAL-VIDEO-AUDIT-01 素材视频板块重整（盘点完成，待实施，2026-07-18）
+### MATERIAL-VIDEO-AUDIT-01 素材视频板块重整（生产主链已实施；项目/UI 余项保留，2026-07-19）
+
+- **2026-07-19 收口裁决。** `PRODUCTION-02` 已实现中央 TopicOrder、逐平台 Showrunner、Treatment 预演、逐镜头素材/声音/IR 消费和真实成片 Cut Preflight，解决“视频等待图文”“全平台共用一套分镜”“只做技术 QA”的生产主链问题。下列 P0 继续作为专项历史审计保留：项目/修订 owner、准备态播放器、声音/字幕时间线、自动重剪 executor 和 entity-first Repository 仍未因本轮生产编排自动完成。
 
 - **现有底座可以保留。** `MediaAssetRepository` 的受控导入、来源/授权、临时与本地层级、引用保护；`Video IR` 的规范化、scene/IR hash 与能力路由；固定版本 Remotion/HyperFrames runtime；FFmpeg 规格化/合成、场景缓存、自动 QA、不可变成片与 Render Receipt；TTS 的一次性批准状态机；草稿箱/发布 owner 的 fail-closed 门禁，均属于正确原生 owner。
 - **P0-1 / 素材检索不可信。** 本地搜索按空格拆词，中文视觉描述大多无法匹配；即使完全不匹配也给所有资产固定 `0.55` 语义分，并允许 `storyboard/derived/marketing_os_local_storyboard` 进入 `user_library` 候选。必须先排除占位/派生/已删除素材，改为经营主体范围的真实资产检索，候选必须展示缩略图、来源、作者、授权、时长、画幅和逐镜头匹配理由；无真实候选就明确为空，不能凑数。当前只有 Pexels 一个外部适配器且未配置，不能声称在线素材链可用。

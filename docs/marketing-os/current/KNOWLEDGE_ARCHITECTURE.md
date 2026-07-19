@@ -108,4 +108,4 @@
 
 当前已经完成结构化四库、内置基线、防用户/模型污染写入门、Receipt-backed 账号晋升、签名聚合知识投影和 Preflight 检索。Hermes Cron 现会静默执行已观察指标恢复、平台/市场知识时效与显式冲突隔离、三条以上公域作品且每条至少两次快照的市场聚合、真实发布复盘投影，以及权重候选的支持度/反例率/历史伤害回放；学习候选 list/decide RPC 与 Desktop 请求均已删除，repository 决策需要 system capability。赛道库仍需更大规模真实样本，平台官方规则的持续刷新仍依赖可信原生采集源或签名知识包，而不是对话输入。
 
-Preflight 中的 `knowledge_support` 只表示 Marketing 四库覆盖与置信度，不直接证明内容质量。`content-production-preflight-v0.8` 已移除 Human Observation 覆盖因子和缺失警告；显式核心投影只可作为 `read_only_no_score_or_writeback` 上下文。真实内容、证据、账号适配和发布回执仍决定产品结论。
+Preflight 中的 `knowledge_support` 只表示 Marketing 四库覆盖与置信度，不直接证明内容质量。`content-production-preflight-v0.9` 已移除 Human Observation 覆盖因子和缺失警告；显式核心投影只可作为 `read_only_no_score_or_writeback` 上下文。缺个人历史时公开平台/市场/内容先验可支持低置信可逆草稿，但不能冒充账号个性化或精确流量预测；真实内容、证据、账号适配和发布回执仍决定产品结论。

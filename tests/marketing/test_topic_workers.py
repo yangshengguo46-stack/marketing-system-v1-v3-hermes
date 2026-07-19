@@ -6,7 +6,12 @@ import pytest
 
 from agent.harness import PermanentStepError
 from agent.marketing.domains.content_assets import _validated_sound_plan
-from agent.marketing.workflows.topic_workers import TopicProductionWorkers
+from agent.marketing.domains.account_context import AccountContextRepository
+from agent.marketing.workflows.topic_workers import (
+    TopicProductionWorkers,
+    _evidence_pack_projection,
+    _knowledge_for_production_target,
+)
 
 
 def _context() -> SimpleNamespace:
@@ -343,3 +348,211 @@ def test_optional_voice_job_survives_content_asset_sound_plan_validation():
     assert result["voice_job_id"] == "audio-job-1"
     assert result["voice_required"] is False
     assert result["voice_status"] == "prepared"
+
+
+def test_cut_qa_observes_rendered_file_then_persists_canonical_preflight(tmp_path):
+    final = tmp_path / "final.mp4"
+    final.write_bytes(b"rendered-video")
+    treatment = {
+        "platform": "douyin",
+        "title": "AI 是泡沫吗",
+        "hook": "三秒钩子",
+    }
+    context = SimpleNamespace(
+        workflow={
+            "id": "workflow-cut",
+            "owner_user_id": "default",
+            "input": {"account_id": "acct-anchor"},
+            "steps": [
+                {
+                    "key": "topic_brief.freeze",
+                    "state": "succeeded",
+                    "output": {
+                        "topic_brief": {
+                            "platform_targets": {
+                                "douyin": {"execution_account_id": "acct-douyin"}
+                            }
+                        },
+                        "lane_orders": {
+                            "video": {"douyin": {"plan_id": "plan-douyin"}}
+                        },
+                    },
+                },
+                {
+                    "key": "video.preflight.douyin",
+                    "state": "succeeded",
+                    "output": {"approved_treatment": treatment},
+                },
+                {
+                    "key": "video.render.douyin",
+                    "state": "succeeded",
+                    "output": {
+                        "platform": "douyin",
+                        "production_id": "production-1",
+                        "output_asset_id": "content-1",
+                        "final_video_asset_id": "media-final",
+                    },
+                },
+            ],
+        },
+        step={"input": {"platform": "douyin"}},
+        attempt_id="attempt-cut",
+    )
+
+    class Video:
+        def get(self, **kwargs):
+            assert kwargs["account_id"] == "acct-douyin"
+            return {
+                "id": "production-1",
+                "status": "completed",
+                "edl": {"voice_asset_id": "voice-1"},
+                "receipt": {
+                    "summary": {
+                        "technical": {
+                            "quality_assurance": {"disposition": "ready"}
+                        }
+                    }
+                },
+            }
+
+    class Media:
+        def resolve_local_path(self, **kwargs):
+            assert kwargs["asset_id"] == "media-final"
+            return str(final)
+
+    class Loop:
+        def create_preflight(self, **kwargs):
+            assert kwargs["plan_id"] == "plan-douyin"
+            assert kwargs["input"]["final_video_asset_id"] == "media-final"
+            return {"id": "preflight-cut-1", **kwargs}
+
+    creative_calls: list[dict] = []
+
+    def creative(**kwargs):
+        creative_calls.append(kwargs)
+        assert kwargs["toolsets"] == ("video",)
+        assert kwargs["context"]["final_video_path"] == str(final)
+        return {
+            **{
+                key: True
+                for key in (
+                    "playable",
+                    "hook_first_three_seconds_visible",
+                    "treatment_parity",
+                    "caption_readability",
+                    "material_relevance",
+                    "evidence_alignment",
+                    "audio_present",
+                    "audio_sync",
+                    "ending_cta_present",
+                )
+            },
+            "scores": {
+                "audience_fit": 8,
+                "platform_fit": 8,
+                "account_fit": 8,
+                "emotional_pull": 8,
+                "pacing": 8,
+                "information_density": 8,
+                "evidence_alignment": 8,
+            },
+            "issues": [],
+        }
+
+    worker = object.__new__(TopicProductionWorkers)
+    worker.video = Video()
+    worker.media = Media()
+    worker.loop = Loop()
+    worker.creative = creative
+
+    result = worker.qa_video(context)
+
+    assert len(creative_calls) == 1
+    assert result.output["cut_preflight_id"] == "preflight-cut-1"
+    assert result.output["qa"]["preflight"]["go"] is True
+    assert result.artifacts[0]["object_id"] == "preflight-cut-1"
+
+
+def test_unbound_platform_keeps_execution_owner_but_cannot_borrow_personal_model():
+    worker = object.__new__(TopicProductionWorkers)
+    context = worker._platform_account_context(
+        user_id="default",
+        account_id="acct-douyin-anchor",
+        production_target={
+            "binding_status": "public_prior_only_no_linked_account",
+            "personalization_available": False,
+        },
+    )
+    knowledge = _knowledge_for_production_target(
+        {
+            "platform": [{"id": "platform-public"}],
+            "market": [{"id": "market-public"}],
+            "content": [{"id": "content-public"}],
+            "account": [{"id": "douyin-private"}],
+        },
+        production_target={"personalization_available": False},
+    )
+
+    assert context == {
+        "account_id": "acct-douyin-anchor",
+        "connected": False,
+        "personalization_available": False,
+        "binding_status": "public_prior_only_no_linked_account",
+    }
+    assert knowledge["account"] == []
+    assert knowledge["platform"] == [{"id": "platform-public"}]
+
+
+def test_linked_platform_model_is_read_from_target_but_stored_under_compat_owner(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        AccountContextRepository,
+        "read",
+        lambda self, **kwargs: {
+            "account_id": kwargs["account_id"],
+            "connected": True,
+            "account": {"id": kwargs["account_id"], "platform": "douyin"},
+            "lifecycle": {"audience_hypothesis": {"segments": ["创业者"]}},
+        },
+    )
+    worker = object.__new__(TopicProductionWorkers)
+    worker.paths = SimpleNamespace()
+
+    context = worker._platform_account_context(
+        user_id="default",
+        account_id="acct-anchor",
+        production_target={
+            "account_id": "acct-douyin",
+            "binding_status": "linked_platform_account",
+            "personalization_available": True,
+        },
+    )
+
+    assert context["account_id"] == "acct-anchor"
+    assert context["connected"] is False
+    assert context["target_connected"] is True
+    assert context["execution_account_id"] == "acct-anchor"
+    assert context["target_account_id"] == "acct-douyin"
+    assert context["target_account"]["platform"] == "douyin"
+    assert context["lifecycle"]["audience_hypothesis"]["segments"] == ["创业者"]
+
+
+def test_topic_brief_evidence_projection_keeps_source_content_and_lineage_bounded():
+    projection = _evidence_pack_projection(
+        [
+            {
+                "id": "evidence-1",
+                "title": "AI infrastructure report",
+                "canonical_url": "https://example.com/report",
+                "excerpt": "x" * 3000,
+                "captured_at": "2026-07-19T00:00:00Z",
+                "verification_level": "source_integrity",
+            }
+        ]
+    )
+
+    assert projection[0]["id"] == "evidence-1"
+    assert projection[0]["source_url"] == "https://example.com/report"
+    assert len(projection[0]["excerpt"]) == 2500
+    assert projection[0]["verification_level"] == "source_integrity"

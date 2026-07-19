@@ -139,6 +139,11 @@ def _preflight_candidates(
             *candidate["platforms"],
             *candidate["platform_fit_hypotheses"],
         ])
+        platform_targets = _platform_production_targets(
+            entity_context=entity_context,
+            platforms=candidate_platforms,
+            fallback_account_id=account_id,
+        )
         plan = ContentProductionPolicy().plan(
             objective=objective,
             kind="cross_platform_campaign",
@@ -213,6 +218,11 @@ def _preflight_candidates(
             ),
             "recommendation_type": recommendation_type,
             "recommended_platforms": recommended_platforms,
+            "platform_targets": {
+                platform: platform_targets[platform]
+                for platform in recommended_platforms
+                if platform in platform_targets
+            },
             "platform_matches": platform_matches,
             "preflight": {
                 "status": decision["status"],
@@ -225,6 +235,64 @@ def _preflight_candidates(
             "platform_blueprints": saved_plan.get("platform_blueprints") or {},
         })
     return results
+
+
+def _platform_production_targets(
+    *,
+    entity_context: dict[str, Any],
+    platforms: list[str],
+    fallback_account_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Bind a recommended platform to its real entity account when one exists.
+
+    The daily topic batch is entity-scoped, while older production tables still
+    require an execution account.  We therefore keep the fallback account only
+    as a compatibility execution owner and explicitly record that it is *not* a
+    platform-specific personalization source.  A missing target account lowers
+    confidence; it never prevents public-prior drafting.
+    """
+
+    contexts = [
+        item
+        for item in (entity_context.get("linked_account_contexts") or [])
+        if isinstance(item, dict)
+    ]
+    by_platform: dict[str, list[dict[str, Any]]] = {}
+    for context in contexts:
+        account = context.get("account") if isinstance(context.get("account"), dict) else {}
+        platform = str(account.get("platform") or "").strip()
+        account_id = str(context.get("account_id") or account.get("id") or "").strip()
+        if platform and account_id and context.get("connected") is True:
+            by_platform.setdefault(platform, []).append(context)
+
+    targets: dict[str, dict[str, Any]] = {}
+    for platform in platforms:
+        matches = by_platform.get(platform) or []
+        target = matches[0] if len(matches) == 1 else None
+        target_account_id = str((target or {}).get("account_id") or "").strip()
+        targets[platform] = {
+            "platform": platform,
+            "account_id": target_account_id or None,
+            # Legacy repositories still require an account-scoped storage
+            # owner. Keep the action/anchor account for compatibility while
+            # recording the real platform account separately for modelling
+            # and later publish effects. Entity ownership remains canonical.
+            "execution_account_id": fallback_account_id,
+            "binding_status": (
+                "linked_platform_account"
+                if target_account_id
+                else (
+                    "ambiguous_platform_accounts"
+                    if len(matches) > 1
+                    else "public_prior_only_no_linked_account"
+                )
+            ),
+            "personalization_available": bool(target_account_id),
+            "candidate_account_ids": [
+                str(item.get("account_id") or "") for item in matches
+            ],
+        }
+    return targets
 
 
 def _candidate(value: Any, *, rank: int) -> dict[str, Any]:

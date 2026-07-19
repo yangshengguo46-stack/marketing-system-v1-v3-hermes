@@ -404,7 +404,7 @@ def test_native_content_tools_plan_save_and_resume_in_bound_account(
     assert planned["checkpoint_status"] == "planned"
     assert planned["preflight"]["id"].startswith("preflight_")
     assert (
-        planned["preflight"]["formula_version"] == "content-production-preflight-v0.6"
+        planned["preflight"]["formula_version"] == "content-production-preflight-v0.9"
     )
     assert planned["preflight"]["scores"]["knowledge_support"] > 0
     assert planned["preflight"]["scores"]["knowledge_confidence_factor"] <= 1

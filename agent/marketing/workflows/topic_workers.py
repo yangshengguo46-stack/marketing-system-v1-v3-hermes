@@ -18,15 +18,20 @@ from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.account_context import AccountContextRepository
 from agent.marketing.domains.content_assets import ContentAssetRepository
 from agent.marketing.domains.content_policy import ContentProductionPolicy
+from agent.marketing.domains.evidence import EvidenceRepository
 from agent.marketing.domains.knowledge_bases import KnowledgeBaseRepository
 from agent.marketing.domains.material_sourcing import MaterialSourcingRepository
 from agent.marketing.domains.media_assets import MediaAssetRepository
 from agent.marketing.domains.production_audio import ProductionAudioRepository
+from agent.marketing.domains.operating_entities import OperatingEntityRepository
 from agent.marketing.domains.topic_recommendations import TopicRecommendationRepository
 from agent.marketing.domains.video_ir import VIDEO_IR_VERSION
 from agent.marketing.domains.video_production import VideoProductionRepository
 from agent.marketing.intelligence.production_preflight import (
+    create_article_draft_preflight,
     create_content_production_preflight,
+    create_video_cut_preflight,
+    create_video_treatment_preflight,
 )
 from agent.marketing.intelligence.store import OperatingLoopRepository
 
@@ -124,6 +129,7 @@ class TopicProductionWorkers:
             "article.qa": self.qa_article,
             "video.direction": self.direct_video,
             "video.platform_plan": self.adapt_video,
+            "video.treatment_preflight": self.preflight_video_treatment,
             "video.material_search": self.search_video_materials,
             "video.audio_plan": self.plan_video_audio,
             "video.previsualization": self.previsualize_video,
@@ -155,50 +161,93 @@ class TopicProductionWorkers:
             user_id=user_id,
             account_id=account_id,
         )
-
-        article_platforms = self._platforms_for_prefix(context, "article.adapt.")
-        video_platforms = self._platforms_for_prefix(context, "video.adapt.")
-        account_context = AccountContextRepository(self.paths).read(
+        entity = OperatingEntityRepository(self.paths).get(
+            entity_id=entity_id,
             user_id=user_id,
-            account_id=account_id,
         )
+        evidence_records = EvidenceRepository(self.paths).require_verified_across_accounts(
+            user_id=user_id,
+            account_ids=list(entity.get("account_ids") or []),
+            evidence_ids=list(brief["evidence_refs"]),
+            require_any=True,
+        )
+        brief = {
+            **brief,
+            "evidence_pack": _evidence_pack_projection(evidence_records),
+        }
+
+        article_platforms = self._platforms_for_prefix(context, "article.write.")
+        if not article_platforms:
+            # Durable v1 workflows used a parent article plus platform adapters.
+            article_platforms = self._platforms_for_prefix(context, "article.adapt.")
+        video_platforms = self._platforms_for_prefix(context, "video.adapt.")
+        if not video_platforms:
+            video_platforms = self._platforms_for_prefix(context, "video.direct.")
         lane_orders: dict[str, Any] = {}
         if article_platforms:
-            lane_orders["article"] = self._ensure_lane_order(
-                lane="article",
-                kind="cross_platform_campaign",
-                platforms=article_platforms,
-                brief=brief,
-                user_id=user_id,
-                account_id=account_id,
-                account_context=account_context,
-                origin_plan=origin_plan,
-            )
+            article_orders: dict[str, Any] = {}
+            for platform in article_platforms:
+                production_target = brief["platform_targets"].get(platform) or {}
+                target_account_id = _execution_account_id(
+                    brief, platform=platform, fallback_account_id=account_id
+                )
+                target_context = self._platform_account_context(
+                    user_id=user_id,
+                    account_id=target_account_id,
+                    production_target=production_target,
+                )
+                article_orders[platform] = self._ensure_lane_order(
+                    lane="article",
+                    # The legacy article_soft owner requires a parent bundle.
+                    # New platform-native drafts intentionally avoid that
+                    # schema and use one single-platform campaign order.
+                    kind="cross_platform_campaign",
+                    platforms=[platform],
+                    brief=brief,
+                    user_id=user_id,
+                    account_id=target_account_id,
+                    account_context=target_context,
+                    origin_plan=origin_plan,
+                )
+            lane_orders["article"] = article_orders
         if video_platforms:
-            lane_orders["video"] = self._ensure_lane_order(
-                lane="video",
-                kind="faceless_video",
-                platforms=video_platforms,
-                brief=brief,
-                user_id=user_id,
-                account_id=account_id,
-                account_context=account_context,
-                origin_plan=origin_plan,
-            )
+            video_orders: dict[str, Any] = {}
+            for platform in video_platforms:
+                production_target = brief["platform_targets"].get(platform) or {}
+                target_account_id = _execution_account_id(
+                    brief, platform=platform, fallback_account_id=account_id
+                )
+                target_context = self._platform_account_context(
+                    user_id=user_id,
+                    account_id=target_account_id,
+                    production_target=production_target,
+                )
+                video_orders[platform] = self._ensure_lane_order(
+                    lane="video",
+                    kind="faceless_video",
+                    platforms=[platform],
+                    brief=brief,
+                    user_id=user_id,
+                    account_id=target_account_id,
+                    account_context=target_context,
+                    origin_plan=origin_plan,
+                )
+            lane_orders["video"] = video_orders
         output = {
             "topic_brief": brief,
             "lane_orders": lane_orders,
             "origin_preflight_id": origin_preflight["id"],
         }
+        orders = _flatten_lane_orders(lane_orders)
         artifacts = [
             _artifact("topic_brief", "marketing.topic_candidate", candidate_id),
             *[
                 _artifact("production_plan", "content_production_plan", order["plan_id"])
-                for order in lane_orders.values()
+                for order in orders
             ],
             *[
                 _artifact("preflight", "marketing_preflight", order["preflight_id"])
-                for order in lane_orders.values()
+                for order in orders
             ],
         ]
         return StepResult(output=output, artifacts=artifacts)
@@ -228,6 +277,62 @@ class TopicProductionWorkers:
 
     def direct_article(self, context: StepExecutionContext) -> StepResult:
         frozen = self._output(context, "topic_brief.freeze")
+        platform = str(context.step["input"].get("platform") or "").strip()
+        if platform:
+            brief = frozen["topic_brief"]
+            order = frozen["lane_orders"]["article"][platform]
+            user_id, account_id = self._scope(context, platform=platform)
+            production_target = brief["platform_targets"].get(platform) or {}
+            account_context = self._platform_account_context(
+                user_id=user_id,
+                account_id=account_id,
+                production_target=production_target,
+            )
+            knowledge = KnowledgeBaseRepository(self.paths).retrieve_for_preflight(
+                user_id=user_id,
+                account_id=_personalization_account_id(
+                    production_target,
+                    fallback_account_id=account_id,
+                ),
+                platforms=[platform],
+                content_kind=str(order["kind"]),
+            )
+            knowledge = _knowledge_for_production_target(
+                knowledge,
+                production_target=production_target,
+            )
+            result = self._creative(
+                context,
+                role="platform_article_writer",
+                instruction=(
+                    "Write the final platform-native article or image-text deliverable directly "
+                    "from TopicBrief. Do not create a universal parent article and do not adapt a "
+                    "draft from another platform. Use the supplied platform mechanism, account "
+                    "model and governed knowledge; if the personal model is absent, continue from "
+                    "public platform/content priors and mark the basis as cold-start. Use only the "
+                    "supplied evidence IDs for factual claims. Return JSON only with: platform, "
+                    "format, title, hook, thesis, body_markdown or caption/short_text/thread/"
+                    "carousel_cards, claim_evidence_map (array of {claim,evidence_refs}), "
+                    "visual_brief, and adaptation_basis containing audience_intent, opening, "
+                    "structure, cta. Keep [evidence_xxx] markers beside factual claims."
+                ),
+                payload={
+                    "platform": platform,
+                    "platform_profile": self._platform_profile(context, platform),
+                    "topic_brief": brief,
+                    "account_context": account_context,
+                    "knowledge_context": knowledge,
+                    "production_target": production_target,
+                },
+            )
+            article = _normalize_article_deliverable(
+                result,
+                platform=platform,
+                allowed_evidence_refs=set(brief["evidence_refs"]),
+            )
+            return StepResult(output={"platform": platform, "article": article})
+
+        # Compatibility for durable v1 workflows.
         result = self._creative(
             context,
             role="article_director",
@@ -273,6 +378,138 @@ class TopicProductionWorkers:
     def qa_article(self, context: StepExecutionContext) -> StepResult:
         frozen = self._output(context, "topic_brief.freeze")
         brief = frozen["topic_brief"]
+        platform = str(context.step["input"].get("platform") or "").strip()
+        if platform:
+            order = frozen["lane_orders"]["article"][platform]
+            article = dict(
+                self._output(context, f"article.write.{platform}")["article"]
+            )
+            user_id, account_id = self._scope(context, platform=platform)
+            evaluations: list[dict[str, Any]] = []
+            for revision in range(3):
+                review = self._creative(
+                    context,
+                    role="platform_article_reviewer",
+                    instruction=(
+                        "Review the supplied final platform article itself. Do not reward generic "
+                        "prose or assume that another platform's structure is acceptable. Check "
+                        "platform-native opening/structure/CTA, claim-to-evidence markers, factual "
+                        "traceability, completeness and account fit when account evidence exists. "
+                        "Missing personal history lowers account_fit but is not by itself a failure. "
+                        "Return JSON only with boolean keys: platform_native, "
+                        "factual_claims_traceable, hook_effective, structure_complete, cta_present, "
+                        "deliverable_complete; scores object with 0-10 audience_fit, platform_fit, "
+                        "account_fit, knowledge_fit, strategy_fit, evidence_strength, hook, emotion, "
+                        "structure, viewpoint; and issues array of "
+                        "{code,severity,observation,fix}."
+                    ),
+                    payload={
+                        "platform": platform,
+                        "platform_profile": self._platform_profile(context, platform),
+                        "topic_brief": brief,
+                        "article": article,
+                    },
+                )
+                evaluated = create_article_draft_preflight(
+                    self.loop,
+                    {
+                        "user_id": user_id,
+                        "account_id": account_id,
+                        "session_id": f"{context.attempt_id}:article:{revision}",
+                        "plan_id": order["plan_id"],
+                        "platform": platform,
+                        "article": article,
+                        "draft_review": review,
+                    },
+                )
+                evaluations.append(evaluated)
+                if evaluated["preflight_decision"].get("go") is True:
+                    break
+                if revision >= 2:
+                    raise PermanentStepError(
+                        "platform article failed preflight after two revisions: "
+                        + json.dumps(
+                            evaluated["preflight_decision"],
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
+                    )
+                revised = self._creative(
+                    context,
+                    role="platform_article_writer_revision",
+                    instruction=(
+                        "Rewrite the complete platform-native article to resolve every supplied "
+                        "preflight blocker. Preserve TopicBrief meaning, use no evidence outside the "
+                        "allowlist, and return the same complete JSON contract as the original "
+                        "platform_article_writer."
+                    ),
+                    payload={
+                        "platform": platform,
+                        "platform_profile": self._platform_profile(context, platform),
+                        "topic_brief": brief,
+                        "previous_article": article,
+                        "preflight_findings": _bounded_preflight_projection(evaluated),
+                    },
+                )
+                article = _normalize_article_deliverable(
+                    revised,
+                    platform=platform,
+                    allowed_evidence_refs=set(brief["evidence_refs"]),
+                )
+            approved = evaluations[-1]
+            asset = self.content.create_draft(
+                user_id=user_id,
+                account_id=account_id,
+                title=str(article["title"]),
+                plan_id=str(order["plan_id"]),
+                asset_type="script",
+                platform=platform,
+                production_kind=str(order["kind"]),
+                content={
+                    "schema": "marketing.platform_article.v1",
+                    "platform": platform,
+                    "format": article["format"],
+                    "thesis": article["thesis"],
+                    "deliverable": article["deliverable"],
+                    "claim_evidence_map": article["claim_evidence_map"],
+                    "visual_brief": article["visual_brief"],
+                    "production_basis": {
+                        **article["adaptation_basis"],
+                        "production_target": brief["platform_targets"].get(platform)
+                        or {},
+                    },
+                    "draft_preflight": {
+                        "preflight_id": approved["preflight_id"],
+                        **_bounded_preflight_projection(approved),
+                    },
+                },
+                topic=str(brief["topic"]),
+                hook=str(article["hook"]),
+                evidence_refs=list(brief["evidence_refs"]),
+                reaction_scenarios=[],
+            )
+            return StepResult(
+                output={
+                    "platform": platform,
+                    "asset_id": asset["id"],
+                    "status": asset["status"],
+                    "preflight_id": approved["preflight_id"],
+                    "revision_count": len(evaluations) - 1,
+                },
+                artifacts=[
+                    *[
+                        _artifact(
+                            "article_draft_preflight",
+                            "marketing_preflight",
+                            item["preflight_id"],
+                        )
+                        for item in evaluations
+                    ],
+                    _artifact("content_asset", "content_asset", asset["id"]),
+                ],
+            )
+
+        # Compatibility for durable v1 workflows.
         order = frozen["lane_orders"]["article"]
         direction = self._output(context, "article.direct")["article_direction"]
         variants = {
@@ -310,30 +547,72 @@ class TopicProductionWorkers:
 
     def direct_video(self, context: StepExecutionContext) -> StepResult:
         frozen = self._output(context, "topic_brief.freeze")
+        brief = frozen["topic_brief"]
+        platform = str(context.step["input"].get("platform") or "").strip()
+        if not platform:
+            # Durable v1 workflows may still be resumed after the v2 rollout.
+            legacy_platforms = context.step["input"].get("platforms") or []
+            platform = str(legacy_platforms[0] if legacy_platforms else brief["target_platforms"][0])
+        user_id, account_id = self._scope(context, platform=platform)
+        production_target = brief["platform_targets"].get(platform) or {}
+        account_context = self._platform_account_context(
+            user_id=user_id,
+            account_id=account_id,
+            production_target=production_target,
+        )
+        knowledge = KnowledgeBaseRepository(self.paths).retrieve_for_preflight(
+            user_id=user_id,
+            account_id=_personalization_account_id(
+                production_target,
+                fallback_account_id=account_id,
+            ),
+            platforms=[platform],
+            content_kind="faceless_video",
+        )
+        knowledge = _knowledge_for_production_target(
+            knowledge,
+            production_target=production_target,
+        )
         result = self._creative(
             context,
-            role="video_director",
+            role="platform_video_showrunner",
             instruction=(
-                "Plan a faceless video independently from the article branch. Do not request or "
-                "reuse an article script. Return JSON only with: title, hook, thesis, "
-                "voiceover_script, target_duration, sound_strategy, and shot_list. shot_list must "
-                "contain 2-10 objects with id, duration, purpose, visual_query, media_type, "
-                "on_screen_text, visual_query as a concise English stock-media search phrase, "
-                "media_type chosen from image, video, either according to what best communicates "
-                "that shot, and "
-                "motion_intent (array chosen from straight_cut, kinetic_typography, "
-                "data_visualization, brand_layout, html_css_motion, svg_motion, "
-                "designed_transition), and preferred_renderer (auto/remotion/hyperframes)."
+                "Act as the platform-native short-video showrunner. Plan independently from every "
+                "article branch and never request an article script. Use the supplied account model "
+                "when available; otherwise keep working from explicit public platform, market and "
+                "content priors and mark the plan as cold-start. Return JSON only with: platform, "
+                "format, title, thesis, audience_promise, hook, hook_hypothesis "
+                "({first_three_seconds,tension,payoff}), aspect_ratio, target_duration, pacing, "
+                "caption_style, cta, voiceover_script, beat_sheet (array), claim_evidence_map "
+                "(array of {claim,evidence_refs}), sound_strategy "
+                "({voice_style,music_role,sfx_cues}), and shot_list. shot_list must contain 2-12 "
+                "objects with id, duration, purpose, narration, visual_query, media_type, "
+                "on_screen_text, evidence_refs, motion_intent, and preferred_renderer. Each "
+                "visual_query must be a concise English stock-media search phrase. Use only evidence "
+                "IDs supplied by TopicBrief. The durations must add up to target_duration."
             ),
-            payload=frozen,
+            payload={
+                "platform": platform,
+                "platform_profile": self._platform_profile(context, platform),
+                "topic_brief": brief,
+                "account_context": account_context,
+                "knowledge_context": knowledge,
+                "production_target": production_target,
+            },
         )
-        for field in ("title", "hook", "voiceover_script"):
-            _required_text(result.get(field), field)
-        shots = result.get("shot_list")
-        if not isinstance(shots, list) or not 2 <= len(shots) <= 10:
-            raise PermanentStepError("video direction requires 2-10 shots")
-        result["shot_list"] = [_normalize_shot(item, index) for index, item in enumerate(shots)]
-        return StepResult(output={"video_direction": result})
+        treatment = _normalize_video_treatment(
+            result,
+            platform=platform,
+            allowed_evidence_refs=set(brief["evidence_refs"]),
+        )
+        return StepResult(
+            output={
+                "platform": platform,
+                "video_treatment": treatment,
+                # Compatibility projection for already-rendered UI/readers.
+                "video_direction": treatment,
+            }
+        )
 
     def adapt_video(self, context: StepExecutionContext) -> StepResult:
         frozen = self._output(context, "topic_brief.freeze")
@@ -358,9 +637,109 @@ class TopicProductionWorkers:
         _required_text(result.get("opening"), "opening")
         return StepResult(output={"platform": platform, "video_plan": result})
 
+    def preflight_video_treatment(self, context: StepExecutionContext) -> StepResult:
+        """Run plan-level simulation and at most two bounded showrunner revisions."""
+
+        frozen = self._output(context, "topic_brief.freeze")
+        brief = frozen["topic_brief"]
+        platform = str(context.step["input"].get("platform") or "").strip()
+        directed = self._output(context, f"video.direct.{platform}")
+        treatment = dict(directed["video_treatment"])
+        user_id, account_id = self._scope(context, platform=platform)
+        order = frozen["lane_orders"]["video"][platform]
+        production_target = brief["platform_targets"].get(platform) or {}
+        account_context = self._platform_account_context(
+            user_id=user_id,
+            account_id=account_id,
+            production_target=production_target,
+        )
+        knowledge = KnowledgeBaseRepository(self.paths).retrieve_for_preflight(
+            user_id=user_id,
+            account_id=_personalization_account_id(
+                production_target,
+                fallback_account_id=account_id,
+            ),
+            platforms=[platform],
+            content_kind="faceless_video",
+        )
+        knowledge = _knowledge_for_production_target(
+            knowledge,
+            production_target=production_target,
+        )
+        evaluations: list[dict[str, Any]] = []
+        for revision in range(3):
+            evaluated = create_video_treatment_preflight(
+                self.loop,
+                {
+                    "user_id": user_id,
+                    "account_id": account_id,
+                    "session_id": f"{context.attempt_id}:treatment:{revision}",
+                    "plan_id": order["plan_id"],
+                    "platform": platform,
+                    "treatment": treatment,
+                    "evidence_refs": list(brief["evidence_refs"]),
+                    "knowledge_context": knowledge,
+                    "account_context": account_context,
+                },
+            )
+            evaluations.append(evaluated)
+            if evaluated["preflight_decision"].get("go") is True:
+                return StepResult(
+                    output={
+                        "platform": platform,
+                        "approved_treatment": treatment,
+                        "preflight_id": evaluated["preflight_id"],
+                        "preflight": _bounded_preflight_projection(evaluated),
+                        "revision_count": revision,
+                    },
+                    artifacts=[
+                        _artifact(
+                            "treatment_preflight",
+                            "marketing_preflight",
+                            item["preflight_id"],
+                        )
+                        for item in evaluations
+                    ],
+                )
+            if revision >= 2:
+                break
+            revised = self._creative(
+                context,
+                role="platform_video_showrunner_revision",
+                instruction=(
+                    "Revise the supplied platform-native VideoTreatment to resolve every preflight "
+                    "blocker without changing the TopicBrief's factual meaning or inventing evidence. "
+                    "Return the complete replacement treatment using exactly the same JSON contract "
+                    "as the original showrunner output. Durations must add up exactly."
+                ),
+                payload={
+                    "platform": platform,
+                    "topic_brief": brief,
+                    "platform_profile": self._platform_profile(context, platform),
+                    "account_context": account_context,
+                    "knowledge_context": knowledge,
+                    "previous_treatment": treatment,
+                    "preflight_findings": _bounded_preflight_projection(evaluated),
+                },
+            )
+            treatment = _normalize_video_treatment(
+                revised,
+                platform=platform,
+                allowed_evidence_refs=set(brief["evidence_refs"]),
+            )
+        final = evaluations[-1]
+        raise PermanentStepError(
+            "video treatment failed preflight after two revisions: "
+            + json.dumps(
+                final["preflight_decision"], ensure_ascii=False, sort_keys=True
+            )
+        )
+
     def search_video_materials(self, context: StepExecutionContext) -> StepResult:
-        direction = self._output(context, "video.direct")["video_direction"]
-        user_id, account_id = self._scope(context)
+        platform = str(context.step["input"].get("platform") or "").strip()
+        direction = self._approved_treatment(context, platform=platform)
+        user_id, account_id = self._scope(context, platform=platform)
+        orientation = "landscape" if direction.get("aspect_ratio") == "16:9" else "portrait"
         searches: list[dict[str, Any]] = []
         selected: dict[str, str] = {}
         reusable_assets: list[str] = []
@@ -384,12 +763,13 @@ class TopicProductionWorkers:
                     account_id=account_id,
                     query=query,
                     role="broll",
-                    orientation="portrait",
+                    orientation=orientation,
                     media_type=str(shot.get("media_type") or "either"),
                     target_duration=float(shot["duration"]),
                     limit=8,
                     request_ref=(
-                        f"{context.workflow['id']}:video-v3:{shot['id']}:{query_index}"
+                        f"{context.workflow['id']}:video-v4:{platform or 'legacy'}:"
+                        f"{shot['id']}:{query_index}"
                     ),
                 )
                 search_attempts.append(search)
@@ -591,6 +971,7 @@ class TopicProductionWorkers:
             )
         return StepResult(
             output={
+                "platform": platform or None,
                 "searches": searches,
                 "selected_assets": selected,
                 "diversity": {
@@ -607,8 +988,12 @@ class TopicProductionWorkers:
             ],
             receipts=[{
                 "kind": "material.search",
-                "idempotency_key": f"material-search:{context.workflow['id']}",
-                "input": {"shot_count": len(direction["shot_list"])},
+                "idempotency_key": f"material-search:{context.workflow['id']}:{platform or 'legacy'}",
+                "input": {
+                    "platform": platform or None,
+                    "orientation": orientation,
+                    "shot_count": len(direction["shot_list"]),
+                },
                 "output": {
                     "search_ids": [item["search_id"] for item in searches],
                     "skill_resolutions": skill_resolutions,
@@ -618,12 +1003,18 @@ class TopicProductionWorkers:
 
 
     def plan_video_audio(self, context: StepExecutionContext) -> StepResult:
-        direction = self._output(context, "video.direct")["video_direction"]
-        user_id, account_id = self._scope(context)
+        platform = str(context.step["input"].get("platform") or "").strip()
+        direction = self._approved_treatment(context, platform=platform)
+        user_id, account_id = self._scope(context, platform=platform)
+        sound_strategy = (
+            direction.get("sound_strategy")
+            if isinstance(direction.get("sound_strategy"), dict)
+            else {}
+        )
         job = self.audio.prepare_voice(
             user_id=user_id,
             account_id=account_id,
-            name=f"{direction['title']} 旁白",
+            name=f"{direction['title']} · {platform or '视频'} 旁白",
             script_text=str(direction["voiceover_script"])[:4000],
         )
         automatic = (
@@ -649,26 +1040,26 @@ class TopicProductionWorkers:
         artifacts = [_artifact("audio_job", "marketing_audio_job", job["id"])]
         if voice_asset_id:
             artifacts.append(_artifact("voiceover", "media_asset", voice_asset_id))
-        return StepResult(
-            output={
-                "voice_job_id": job["id"],
-                "voice_status": job["status"],
-                "draft_mix": "voiceover" if voice_asset_id else "captions_only",
-                "render_voice_asset_id": voice_asset_id,
-            },
-            artifacts=artifacts,
-        )
+        output = {
+            "voice_job_id": job["id"],
+            "voice_status": job["status"],
+            "draft_mix": "voiceover" if voice_asset_id else "captions_only",
+            "render_voice_asset_id": voice_asset_id,
+        }
+        if platform:
+            output.update({"platform": platform, "sound_strategy": sound_strategy})
+        return StepResult(output=output, artifacts=artifacts)
 
     def previsualize_video(self, context: StepExecutionContext) -> StepResult:
         frozen = self._output(context, "topic_brief.freeze")
         brief = frozen["topic_brief"]
-        order = frozen["lane_orders"]["video"]
-        direction = self._output(context, "video.direct")["video_direction"]
         platform = str(context.step["input"].get("platform") or "")
-        platform_plan = self._output(context, f"video.adapt.{platform}")["video_plan"]
-        materials = self._output(context, "video.material.search")
-        audio = self._output(context, "video.audio.plan")
-        user_id, account_id = self._scope(context)
+        order = frozen["lane_orders"]["video"][platform]
+        treatment_preflight = self._output(context, f"video.preflight.{platform}")
+        direction = treatment_preflight["approved_treatment"]
+        materials = self._output(context, f"video.material.{platform}")
+        audio = self._output(context, f"video.audio.{platform}")
+        user_id, account_id = self._scope(context, platform=platform)
 
         visuals: dict[str, str] = dict(materials.get("selected_assets") or {})
         missing = [
@@ -690,10 +1081,17 @@ class TopicProductionWorkers:
             platform=platform,
             production_kind="faceless_video",
             content={
-                "schema": "marketing.faceless_video.v2",
+                "schema": "marketing.faceless_video.v3",
+                "video_treatment": direction,
                 "video_direction": direction,
-                "platform_plan": platform_plan,
+                "platform_plan": _platform_plan_projection(direction),
+                "production_target": brief["platform_targets"].get(platform) or {},
+                "treatment_preflight": {
+                    "preflight_id": treatment_preflight["preflight_id"],
+                    **treatment_preflight["preflight"],
+                },
                 "material_manifest": {"searches": materials["searches"], "asset_ids": list(visuals.values())},
+                "sound_strategy": audio.get("sound_strategy") or {},
                 "sound_plan": {
                     "mode": "original_voice_only",
                     "mix_role": "voice_first" if audio["render_voice_asset_id"] else "captions_first_preview",
@@ -710,8 +1108,7 @@ class TopicProductionWorkers:
             reaction_scenarios=[],
         )
         video_ir = _video_ir(
-            direction=direction,
-            platform_plan=platform_plan,
+            treatment=direction,
             visual_asset_ids=visuals,
             voice_asset_id=audio["render_voice_asset_id"],
         )
@@ -746,7 +1143,7 @@ class TopicProductionWorkers:
     def render_video(self, context: StepExecutionContext) -> StepResult:
         platform = str(context.step["input"].get("platform") or "")
         previs = self._output(context, f"video.previs.{platform}")
-        user_id, account_id = self._scope(context)
+        user_id, account_id = self._scope(context, platform=platform)
         if (context.workflow.get("policy") or {}).get("local_draft_render_authorized") is not True:
             raise PermanentStepError("workflow has no local draft render authorization")
         production = self.video.approve(
@@ -791,7 +1188,7 @@ class TopicProductionWorkers:
     def qa_video(self, context: StepExecutionContext) -> StepResult:
         platform = str(context.step["input"].get("platform") or "")
         rendered = self._output(context, f"video.render.{platform}")
-        user_id, account_id = self._scope(context)
+        user_id, account_id = self._scope(context, platform=platform)
         production = self.video.get(
             production_id=str(rendered["production_id"]),
             user_id=user_id,
@@ -800,13 +1197,120 @@ class TopicProductionWorkers:
         quality = (((production.get("receipt") or {}).get("summary") or {}).get("technical") or {}).get("quality_assurance")
         if production.get("status") != "completed":
             raise PermanentStepError("video QA requires a completed production")
-        return StepResult(output={**rendered, "qa": quality or {"status": "render_receipt_present"}})
+        if not isinstance(quality, dict):
+            raise PermanentStepError("video QA has no deterministic technical report")
+        final_path = self.media.resolve_local_path(
+            asset_id=str(rendered["final_video_asset_id"]),
+            user_id=user_id,
+        )
+        if not final_path:
+            raise PermanentStepError("video QA cannot resolve the rendered local file")
+        treatment = self._approved_treatment(context, platform=platform)
+        visual_review = self._creative(
+            context,
+            role="platform_video_cut_reviewer",
+            instruction=(
+                "You are the cut reviewer, not the renderer and not the showrunner. You MUST call "
+                "video_analyze on final_video_path and judge the observed cut itself; do not infer "
+                "success from filenames, treatment JSON, or render receipts. Check the first three "
+                "seconds, representative middle transitions, captions, material relevance, ending "
+                "CTA, and audio when the analysis evidence includes audio. Return JSON only with "
+                "boolean keys: playable, hook_first_three_seconds_visible, treatment_parity, "
+                "caption_readability, material_relevance, evidence_alignment, audio_present, "
+                "audio_sync, ending_cta_present; scores object with 0-10 audience_fit, platform_fit, "
+                "account_fit, emotional_pull, pacing, information_density, evidence_alignment; "
+                "and issues array of {code,severity,at_seconds,observation,fix}. Never claim exact "
+                "view counts. If audio was not observable, set audio fields false and explain why."
+            ),
+            payload={
+                "platform": platform,
+                "final_video_path": final_path,
+                "approved_treatment": treatment,
+                "technical_qa": quality,
+            },
+            toolsets=("video",),
+        )
+        frozen = self._output(context, "topic_brief.freeze")
+        order = frozen["lane_orders"]["video"][platform]
+        cut_preflight = create_video_cut_preflight(
+            self.loop,
+            {
+                "user_id": user_id,
+                "account_id": account_id,
+                "session_id": f"{context.attempt_id}:cut-review",
+                "plan_id": order["plan_id"],
+                "platform": platform,
+                "treatment": treatment,
+                "visual_review": visual_review,
+                "technical_qa": quality,
+                "audio_expected": bool((production.get("edl") or {}).get("voice_asset_id")),
+                "final_video_asset_id": rendered["final_video_asset_id"],
+            },
+        )
+        if cut_preflight["preflight_decision"].get("go") is not True:
+            raise PermanentStepError(
+                "rendered cut failed canonical cut preflight: "
+                + json.dumps(
+                    cut_preflight["preflight_decision"],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+        return StepResult(
+            output={
+                **rendered,
+                "qa": {
+                    "technical": quality,
+                    "visual": visual_review,
+                    "preflight": _bounded_preflight_projection(cut_preflight),
+                },
+                "cut_preflight_id": cut_preflight["preflight_id"],
+            },
+            artifacts=[
+                _artifact(
+                    "cut_preflight",
+                    "marketing_preflight",
+                    cut_preflight["preflight_id"],
+                )
+            ],
+            receipts=[
+                {
+                    "kind": "video.cut_review",
+                    "idempotency_key": f"video-cut-review:{production['id']}",
+                    "input": {
+                        "production_id": production["id"],
+                        "final_video_asset_id": rendered["final_video_asset_id"],
+                    },
+                    "output": {
+                        "cut_preflight_id": cut_preflight["preflight_id"],
+                        "status": cut_preflight["status"],
+                    },
+                }
+            ],
+        )
 
     def settle_draft_branch(self, context: StepExecutionContext) -> StepResult:
         lane = str(context.step["input"].get("lane") or "")
         if lane == "article":
-            article = self._output(context, "article.qa")
-            refs = [{"object_id": article["asset_id"], "object_type": "content_asset", "title": "图文草稿"}]
+            refs = [
+                {
+                    "object_id": step["output"]["asset_id"],
+                    "object_type": "content_asset",
+                    "title": f"{step['output']['platform']} 图文草稿",
+                }
+                for step in context.workflow["steps"]
+                if step["key"].startswith("article.qa.")
+                and step["state"] == "succeeded"
+            ]
+            if not refs:
+                article = self._output(context, "article.qa")
+                refs = [
+                    {
+                        "object_id": article["asset_id"],
+                        "object_type": "content_asset",
+                        "title": "图文草稿",
+                    }
+                ]
         elif lane == "video":
             refs = [
                 {
@@ -910,6 +1414,7 @@ class TopicProductionWorkers:
             raise PermanentStepError(f"{lane} lane failed inherited preflight")
         return {
             "lane": lane,
+            "kind": saved["kind"],
             "plan_id": saved["plan_id"],
             "preflight_id": preflight["id"],
             "platforms": platforms,
@@ -946,6 +1451,29 @@ class TopicProductionWorkers:
                     return output
         raise KeyError(f"required workflow output is unavailable: {key}")
 
+    def _approved_treatment(
+        self, context: StepExecutionContext, *, platform: str
+    ) -> dict[str, Any]:
+        if platform:
+            try:
+                return dict(
+                    self._output(context, f"video.preflight.{platform}")[
+                        "approved_treatment"
+                    ]
+                )
+            except KeyError:
+                try:
+                    directed = self._output(context, f"video.direct.{platform}")
+                    return dict(
+                        directed.get("video_treatment")
+                        or directed["video_direction"]
+                    )
+                except KeyError:
+                    pass
+        # Compatibility for v1 workflows and focused unit tests.
+        legacy = self._output(context, "video.direct")
+        return dict(legacy.get("video_treatment") or legacy["video_direction"])
+
     @staticmethod
     def _platforms_for_prefix(context: StepExecutionContext, prefix: str) -> list[str]:
         return [
@@ -961,12 +1489,64 @@ class TopicProductionWorkers:
             frozen = self._output(context, "topic_brief.freeze")
             return dict(frozen["topic_brief"]["platform_blueprints"].get(platform) or {})
 
-    @staticmethod
-    def _scope(context: StepExecutionContext) -> tuple[str, str]:
-        return (
-            str(context.workflow["owner_user_id"]),
-            str((context.workflow.get("input") or {}).get("account_id") or ""),
+    def _scope(
+        self, context: StepExecutionContext, *, platform: str = ""
+    ) -> tuple[str, str]:
+        user_id = str(context.workflow["owner_user_id"])
+        fallback = str(
+            (context.workflow.get("input") or {}).get("account_id") or ""
         )
+        if not platform:
+            return user_id, fallback
+        try:
+            brief = self._output(context, "topic_brief.freeze")["topic_brief"]
+        except KeyError:
+            return user_id, fallback
+        return user_id, _execution_account_id(
+            brief, platform=platform, fallback_account_id=fallback
+        )
+
+    def _platform_account_context(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        production_target: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Keep compatibility execution ownership separate from personalization."""
+
+        if production_target.get("personalization_available") is not True:
+            return {
+                "account_id": account_id,
+                "connected": False,
+                "personalization_available": False,
+                "binding_status": production_target.get("binding_status"),
+            }
+        personalization_account_id = _personalization_account_id(
+            production_target,
+            fallback_account_id=account_id,
+        )
+        target_context = AccountContextRepository(self.paths).read(
+            user_id=user_id,
+            account_id=personalization_account_id,
+        )
+        return {
+            **target_context,
+            # Until every repository is entity-first, plans/preflights/assets
+            # must share the TopicOrder's compatibility storage owner. The
+            # real platform account remains explicit modelling/effect context.
+            "account_id": account_id,
+            # The plan's compatibility account is not the publish target.
+            # Keep publish eligibility fail-closed until the publish effect
+            # explicitly consumes target_account_id.
+            "connected": False,
+            "target_connected": target_context.get("connected") is True,
+            "execution_account_id": account_id,
+            "target_account_id": personalization_account_id,
+            "target_account": target_context.get("account") or {},
+            "personalization_available": True,
+            "binding_status": production_target.get("binding_status"),
+        }
 
 
 def build_topic_production_handlers(
@@ -1028,7 +1608,202 @@ def _validate_variant(value: dict[str, Any], *, platform: str) -> None:
         raise PermanentStepError(f"{platform} article variant has no adaptation basis")
 
 
-def _normalize_shot(value: Any, index: int) -> dict[str, Any]:
+def _normalize_article_deliverable(
+    value: Any,
+    *,
+    platform: str,
+    allowed_evidence_refs: set[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise PermanentStepError("platform article deliverable must be an object")
+    supplied_platform = str(value.get("platform") or platform).strip()
+    if supplied_platform != platform:
+        raise PermanentStepError("platform article does not match its work order")
+    for field in ("format", "title", "hook", "thesis"):
+        _required_text(value.get(field), field)
+    _validate_variant(value, platform=platform)
+    deliverable_fields = (
+        "body_markdown",
+        "caption",
+        "short_text",
+        "thread",
+        "carousel_cards",
+    )
+    deliverable = {
+        field: value[field]
+        for field in deliverable_fields
+        if value.get(field) not in (None, "", [])
+    }
+    claims = value.get("claim_evidence_map")
+    if not isinstance(claims, list) or not claims:
+        raise PermanentStepError("platform article requires claim_evidence_map")
+    normalized_claims: list[dict[str, Any]] = []
+    for raw in claims[:100]:
+        if not isinstance(raw, dict):
+            raise PermanentStepError("article claim evidence mapping must be an object")
+        refs = _evidence_refs(raw.get("evidence_refs") or raw.get("evidence_ref"))
+        unknown = sorted(set(refs) - allowed_evidence_refs)
+        if unknown:
+            raise PermanentStepError(
+                "platform article references evidence outside TopicBrief: "
+                + ", ".join(unknown)
+            )
+        normalized_claims.append(
+            {
+                "claim": _required_text(raw.get("claim"), "claim")[:2000],
+                "evidence_refs": refs,
+            }
+        )
+    return {
+        "schema": "marketing.platform_article_treatment.v1",
+        "platform": platform,
+        "format": str(value["format"]).strip()[:120],
+        "title": str(value["title"]).strip()[:300],
+        "hook": str(value["hook"]).strip()[:1000],
+        "thesis": str(value["thesis"]).strip()[:2000],
+        "deliverable": deliverable,
+        "claim_evidence_map": normalized_claims,
+        "visual_brief": (
+            value.get("visual_brief")
+            if isinstance(value.get("visual_brief"), dict)
+            else {}
+        ),
+        "adaptation_basis": dict(value["adaptation_basis"]),
+    }
+
+
+def _normalize_video_treatment(
+    value: Any,
+    *,
+    platform: str,
+    allowed_evidence_refs: set[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise PermanentStepError("video treatment must be an object")
+    supplied_platform = str(value.get("platform") or platform).strip()
+    if supplied_platform != platform:
+        raise PermanentStepError("video treatment platform does not match its work order")
+    for field in (
+        "format",
+        "title",
+        "thesis",
+        "audience_promise",
+        "hook",
+        "aspect_ratio",
+        "pacing",
+        "caption_style",
+        "cta",
+        "voiceover_script",
+    ):
+        _required_text(value.get(field), field)
+    aspect = str(value.get("aspect_ratio") or "").strip()
+    if aspect not in {"9:16", "16:9", "1:1", "4:5"}:
+        raise PermanentStepError("video treatment aspect_ratio is unsupported")
+    try:
+        target_duration = max(3.0, min(float(value.get("target_duration")), 600.0))
+    except (TypeError, ValueError) as exc:
+        raise PermanentStepError("video treatment target_duration is invalid") from exc
+    hook_hypothesis = (
+        value.get("hook_hypothesis")
+        if isinstance(value.get("hook_hypothesis"), dict)
+        else {}
+    )
+    first_three_seconds = _required_text(
+        hook_hypothesis.get("first_three_seconds")
+        or hook_hypothesis.get("first_3_seconds"),
+        "hook_hypothesis.first_three_seconds",
+    )
+    beats = value.get("beat_sheet")
+    if not isinstance(beats, list) or not beats:
+        raise PermanentStepError("video treatment beat_sheet must be a non-empty array")
+    normalized_beats: list[dict[str, Any]] = []
+    for index, beat in enumerate(beats[:30]):
+        if not isinstance(beat, dict):
+            raise PermanentStepError("video treatment beat must be an object")
+        normalized_beats.append(
+            {
+                "id": str(beat.get("id") or f"beat_{index + 1:02d}")[:120],
+                "purpose": _required_text(
+                    beat.get("purpose") or beat.get("summary") or beat.get("beat"),
+                    "beat purpose",
+                )[:1000],
+                "payoff": str(beat.get("payoff") or "").strip()[:1000],
+            }
+        )
+    claim_map = value.get("claim_evidence_map")
+    if not isinstance(claim_map, list) or not claim_map:
+        raise PermanentStepError(
+            "video treatment claim_evidence_map must be a non-empty array"
+        )
+    normalized_claims: list[dict[str, Any]] = []
+    for raw in claim_map[:100]:
+        if not isinstance(raw, dict):
+            raise PermanentStepError("claim evidence mapping must be an object")
+        refs = _evidence_refs(raw.get("evidence_refs") or raw.get("evidence_ref"))
+        unknown = sorted(set(refs) - allowed_evidence_refs)
+        if unknown:
+            raise PermanentStepError(
+                "video treatment references evidence outside TopicBrief: "
+                + ", ".join(unknown)
+            )
+        normalized_claims.append(
+            {
+                "claim": _required_text(raw.get("claim"), "claim")[:2000],
+                "evidence_refs": refs,
+            }
+        )
+    shots = value.get("shot_list")
+    if not isinstance(shots, list) or not 2 <= len(shots) <= 12:
+        raise PermanentStepError("video treatment requires 2-12 shots")
+    normalized_shots = [
+        _normalize_shot(item, index, allowed_evidence_refs=allowed_evidence_refs)
+        for index, item in enumerate(shots)
+    ]
+    sound_strategy = (
+        value.get("sound_strategy")
+        if isinstance(value.get("sound_strategy"), dict)
+        else {}
+    )
+    return {
+        "schema": "marketing.platform_video_treatment.v1",
+        "platform": platform,
+        "format": str(value["format"]).strip()[:120],
+        "title": str(value["title"]).strip()[:300],
+        "thesis": str(value["thesis"]).strip()[:2000],
+        "audience_promise": str(value["audience_promise"]).strip()[:1000],
+        "hook": str(value["hook"]).strip()[:1000],
+        "hook_hypothesis": {
+            "first_three_seconds": first_three_seconds[:1000],
+            "tension": str(hook_hypothesis.get("tension") or "").strip()[:1000],
+            "payoff": str(hook_hypothesis.get("payoff") or "").strip()[:1000],
+        },
+        "aspect_ratio": aspect,
+        "target_duration": round(target_duration, 3),
+        "pacing": str(value["pacing"]).strip()[:1000],
+        "caption_style": str(value["caption_style"]).strip()[:1000],
+        "cta": str(value["cta"]).strip()[:1000],
+        "voiceover_script": str(value["voiceover_script"]).strip()[:12_000],
+        "beat_sheet": normalized_beats,
+        "claim_evidence_map": normalized_claims,
+        "sound_strategy": {
+            "voice_style": str(sound_strategy.get("voice_style") or "").strip()[:500],
+            "music_role": str(sound_strategy.get("music_role") or "").strip()[:500],
+            "sfx_cues": [
+                str(item).strip()[:300]
+                for item in (sound_strategy.get("sfx_cues") or [])[:30]
+                if str(item).strip()
+            ],
+        },
+        "shot_list": normalized_shots,
+    }
+
+
+def _normalize_shot(
+    value: Any,
+    index: int,
+    *,
+    allowed_evidence_refs: set[str] | None = None,
+) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise PermanentStepError("video shot must be an object")
     shot_id = str(value.get("id") or f"scene_{index + 1:03d}").strip()[:120]
@@ -1049,6 +1824,12 @@ def _normalize_shot(value: Any, index: int) -> dict[str, Any]:
         "designed_transition",
     }
     normalized_motion = [str(item) for item in motion if str(item) in allowed]
+    refs = _evidence_refs(value.get("evidence_refs") or value.get("evidence_ref"))
+    unknown = sorted(set(refs) - set(allowed_evidence_refs or refs))
+    if unknown:
+        raise PermanentStepError(
+            "video shot references evidence outside TopicBrief: " + ", ".join(unknown)
+        )
     return {
         "id": shot_id,
         "duration": round(duration, 3),
@@ -1061,6 +1842,8 @@ def _normalize_shot(value: Any, index: int) -> dict[str, Any]:
             else "either"
         ),
         "on_screen_text": _required_text(value.get("on_screen_text"), "on_screen_text")[:300],
+        "narration": str(value.get("narration") or "").strip()[:2000],
+        "evidence_refs": refs,
         "motion_intent": normalized_motion or ["kinetic_typography"],
         "preferred_renderer": str(value.get("preferred_renderer") or "auto").strip().lower(),
     }
@@ -1068,17 +1851,20 @@ def _normalize_shot(value: Any, index: int) -> dict[str, Any]:
 
 def _video_ir(
     *,
-    direction: dict[str, Any],
-    platform_plan: dict[str, Any],
+    treatment: dict[str, Any],
     visual_asset_ids: dict[str, str],
     voice_asset_id: str | None = None,
 ) -> dict[str, Any]:
-    aspect = str(platform_plan.get("aspect_ratio") or "9:16")
-    width, height = (1920, 1080) if aspect == "16:9" else (1080, 1920)
+    aspect = str(treatment.get("aspect_ratio") or "9:16")
+    width, height = {
+        "16:9": (1920, 1080),
+        "1:1": (1080, 1080),
+        "4:5": (1080, 1350),
+    }.get(aspect, (1080, 1920))
     scenes = []
     captions = []
     cursor = 0.0
-    for shot in direction["shot_list"]:
+    for shot in treatment["shot_list"]:
         duration = float(shot["duration"])
         preference = str(shot.get("preferred_renderer") or "auto")
         if preference not in {"auto", "remotion", "hyperframes"}:
@@ -1098,14 +1884,17 @@ def _video_ir(
                 "style_token": "marketing.headline",
             }],
             "motion_intent": shot["motion_intent"],
-            "constraints": {"safe_area": "short_vertical", "rights_required": True},
+            "constraints": {
+                "safe_area": "short_vertical" if height > width else "landscape_video",
+                "rights_required": True,
+            },
             "renderer_policy": {"preference": preference, "fallback": "remotion"},
             "review_rules": ["headline remains readable inside the platform safe area"],
         })
         captions.append({
             "start": round(cursor, 3),
             "end": round(cursor + duration, 3),
-            "text": shot["on_screen_text"],
+            "text": shot.get("narration") or shot["on_screen_text"],
         })
         cursor += duration
     return {
@@ -1117,5 +1906,112 @@ def _video_ir(
         "review_rules": [
             "playable MP4 is required before the production may enter the draft box",
             "every source visual must carry a durable rights state",
+            "the rendered cut must preserve the approved platform hook, evidence map and CTA",
         ],
     }
+
+
+def _evidence_refs(value: Any) -> list[str]:
+    raw = value if isinstance(value, list) else ([value] if value else [])
+    return list(
+        dict.fromkeys(str(item).strip() for item in raw if str(item).strip())
+    )[:100]
+
+
+def _evidence_pack_projection(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bound verified evidence for creative Workers without losing lineage."""
+
+    return [
+        {
+            "id": str(item.get("id") or ""),
+            "title": str(item.get("title") or "")[:500],
+            "source_url": str(
+                item.get("canonical_url") or item.get("source_url") or ""
+            )[:2000],
+            "excerpt": str(item.get("excerpt") or "")[:2500],
+            "captured_at": item.get("captured_at"),
+            "verification_level": item.get("verification_level"),
+        }
+        for item in records[:30]
+        if str(item.get("id") or "").strip()
+    ]
+
+
+def _platform_plan_projection(treatment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "platform": treatment["platform"],
+        "format": treatment["format"],
+        "aspect_ratio": treatment["aspect_ratio"],
+        "target_duration": treatment["target_duration"],
+        "opening": treatment["hook_hypothesis"]["first_three_seconds"],
+        "pacing": treatment["pacing"],
+        "caption_style": treatment["caption_style"],
+        "cta": treatment["cta"],
+    }
+
+
+def _bounded_preflight_projection(value: dict[str, Any]) -> dict[str, Any]:
+    decision = value.get("preflight_decision") or {}
+    return {
+        "formula_version": value.get("formula_version"),
+        "status": decision.get("status"),
+        "go": decision.get("go") is True,
+        "score": decision.get("score"),
+        "confidence": decision.get("confidence"),
+        "prior_mode": value.get("prior_mode"),
+        "blockers": list(decision.get("blockers") or []),
+        "warnings": list(decision.get("warnings") or []),
+        "required_next_steps": list(decision.get("required_next_steps") or []),
+        "prediction_contract": value.get("prediction_contract") or {},
+        "treatment_features": value.get("treatment_features") or {},
+        "cut_features": value.get("cut_features") or {},
+        "draft_features": value.get("draft_features") or {},
+    }
+
+
+def _execution_account_id(
+    brief: dict[str, Any], *, platform: str, fallback_account_id: str
+) -> str:
+    target = (brief.get("platform_targets") or {}).get(platform)
+    if isinstance(target, dict):
+        resolved = str(
+            target.get("execution_account_id") or target.get("account_id") or ""
+        ).strip()
+        if resolved:
+            return resolved
+    return str(fallback_account_id or "").strip()
+
+
+def _knowledge_for_production_target(
+    value: dict[str, Any], *, production_target: dict[str, Any]
+) -> dict[str, Any]:
+    """Remove account-personal evidence from an unbound platform cold start."""
+
+    result = dict(value or {})
+    if production_target.get("personalization_available") is not True:
+        result["account"] = []
+    return result
+
+
+def _personalization_account_id(
+    production_target: dict[str, Any], *, fallback_account_id: str
+) -> str:
+    if production_target.get("personalization_available") is True:
+        target = str(production_target.get("account_id") or "").strip()
+        if target:
+            return target
+    return str(fallback_account_id or "").strip()
+
+
+def _flatten_lane_orders(value: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for lane in value.values():
+        if isinstance(lane, dict) and "plan_id" in lane:
+            result.append(lane)
+        elif isinstance(lane, dict):
+            result.extend(
+                item
+                for item in lane.values()
+                if isinstance(item, dict) and "plan_id" in item
+            )
+    return result

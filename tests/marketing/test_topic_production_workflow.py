@@ -57,29 +57,41 @@ def test_topic_workflow_fans_article_and_video_out_as_siblings(tmp_path, monkeyp
 
     assert workflow["policy"]["automatic_voiceover_authorized"] is True
     assert workflow["policy"]["paid_generation_allowed"] is False
-    assert steps["article.direct"]["depends_on"] == ["topic_brief.freeze"]
-    assert steps["video.direct"]["depends_on"] == ["topic_brief.freeze"]
-    assert not any(key.startswith("article.") for key in steps["video.direct"]["depends_on"])
-    assert not any(key.startswith("video.") for key in steps["article.direct"]["depends_on"])
-    assert "article.adapt.wechat_official" in steps
-    assert "video.adapt.douyin" in steps
-    assert "article.adapt.x" in steps
-    assert "video.adapt.x" in steps
-    assert steps["platform.research.future_social"]["kind"] == "platform.research"
-    assert "platform.research.future_social" in steps[
-        "video.adapt.future_social"
-    ]["depends_on"]
+    assert steps["article.write.wechat_official"]["depends_on"] == [
+        "topic_brief.freeze"
+    ]
+    assert steps["video.direct.douyin"]["depends_on"] == ["topic_brief.freeze"]
+    assert not any(
+        key.startswith("article.")
+        for key in steps["video.direct.douyin"]["depends_on"]
+    )
+    assert not any(
+        key.startswith("video.")
+        for key in steps["article.write.wechat_official"]["depends_on"]
+    )
+    assert "article.write.wechat_official" in steps
+    assert "article.qa.wechat_official" in steps
+    assert "video.direct.douyin" in steps
+    assert "video.preflight.douyin" in steps
+    assert "article.write.x" in steps
+    assert "video.direct.x" in steps
+    # future_social was evaluated, but was not recommended. Production must not
+    # silently manufacture every platform that happened to be scored.
+    assert "platform.research.future_social" not in steps
     assert steps["video.previs.douyin"]["depends_on"] == [
-        "video.adapt.douyin",
-        "video.material.search",
-        "video.audio.plan",
+        "video.preflight.douyin",
+        "video.material.douyin",
+        "video.audio.douyin",
     ]
     assert steps["video.render.douyin"]["depends_on"] == ["video.previs.douyin"]
     assert steps["video.qa.douyin"]["depends_on"] == ["video.render.douyin"]
     assert set(steps["video.draft_box"]["depends_on"]) == {
         "video.qa.douyin",
         "video.qa.x",
-        "video.qa.future_social",
+    }
+    assert set(steps["article.draft_box"]["depends_on"]) == {
+        "article.qa.wechat_official",
+        "article.qa.x",
     }
     assert not any(
         dependency.startswith("article.")

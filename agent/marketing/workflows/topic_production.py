@@ -10,7 +10,7 @@ from agent.marketing.domains.topic_recommendations import TopicRecommendationRep
 from agent.marketing.platform_catalog import platform_content_blueprints
 
 
-TOPIC_PRODUCTION_WORKFLOW_VERSION = "marketing.topic-production.workflow.v1"
+TOPIC_PRODUCTION_WORKFLOW_VERSION = "marketing.topic-production.workflow.v2"
 
 _ARTICLE_FORMATS = frozenset(
     {"long_article", "article", "image_text", "carousel", "image", "text", "document", "short_text", "thread"}
@@ -103,7 +103,16 @@ def create_topic_production_workflow(
 
 def _topic_brief(candidate: dict[str, Any]) -> dict[str, Any]:
     nested = candidate.get("candidate") if isinstance(candidate.get("candidate"), dict) else {}
-    platforms = [str(item) for item in candidate.get("target_platforms") or []]
+    candidate_platforms = [str(item) for item in candidate.get("target_platforms") or []]
+    recommended_platforms = [
+        str(item)
+        for item in nested.get("recommended_platforms") or []
+        if str(item) in candidate_platforms
+    ]
+    # A recommendation is an immutable production order, not permission to
+    # manufacture every platform that was merely evaluated.  Older candidates
+    # without the v2 field keep their historical target set.
+    platforms = recommended_platforms or candidate_platforms
     blueprints = nested.get("platform_blueprints")
     if not isinstance(blueprints, dict):
         blueprints = {}
@@ -120,6 +129,34 @@ def _topic_brief(candidate: dict[str, Any]) -> dict[str, Any]:
         for platform in platforms
     }
     lanes = {platform: _lanes(resolved_blueprints[platform]) for platform in platforms}
+    raw_targets = nested.get("platform_targets")
+    if not isinstance(raw_targets, dict):
+        raw_targets = {}
+    fallback_account_id = str(candidate.get("account_id") or "")
+    platform_targets = {
+        platform: {
+            "platform": platform,
+            "account_id": (
+                str((raw_targets.get(platform) or {}).get("account_id") or "").strip()
+                or None
+            ),
+            "execution_account_id": (
+                str(
+                    (raw_targets.get(platform) or {}).get("execution_account_id")
+                    or (raw_targets.get(platform) or {}).get("account_id")
+                    or fallback_account_id
+                ).strip()
+            ),
+            "binding_status": str(
+                (raw_targets.get(platform) or {}).get("binding_status")
+                or "legacy_fallback_account"
+            ),
+            "personalization_available": bool(
+                (raw_targets.get(platform) or {}).get("personalization_available")
+            ),
+        }
+        for platform in platforms
+    }
     return {
         "candidate_id": str(candidate["id"]),
         "topic": str(candidate["topic"]),
@@ -129,7 +166,9 @@ def _topic_brief(candidate: dict[str, Any]) -> dict[str, Any]:
         "evidence_refs": list(candidate.get("evidence_refs") or []),
         "signal_refs": list(candidate.get("signal_refs") or []),
         "target_platforms": platforms,
-        "recommended_platforms": list(nested.get("recommended_platforms") or []),
+        "evaluated_platforms": candidate_platforms,
+        "recommended_platforms": platforms,
+        "platform_targets": platform_targets,
         "recommendation_type": str(nested.get("recommendation_type") or "general"),
         "platform_matches": list(nested.get("platform_matches") or []),
         "platform_blueprints": resolved_blueprints,
@@ -192,153 +231,128 @@ def _steps(brief: dict[str, Any]) -> list[dict[str, Any]]:
     ]
     branch_terminals: list[str] = []
     if article_platforms:
-        steps.append(
-            {
-                "key": "article.direct",
-                "kind": "article.direction",
-                "worker_role": "article_director",
-                "toolsets": ["marketing.read", "marketing.draft"],
-                "resource_scope": f"article-project:{brief['candidate_id']}",
-                "input": {**reference, "platforms": article_platforms},
-                "depends_on": ["topic_brief.freeze"],
-            }
-        )
-        article_variants: list[str] = []
+        article_qa_keys: list[str] = []
         for platform in article_platforms:
-            key = f"article.adapt.{platform}"
-            article_variants.append(key)
-            steps.append(
+            write_key = f"article.write.{platform}"
+            qa_key = f"article.qa.{platform}"
+            article_qa_keys.append(qa_key)
+            steps.extend([
                 {
-                    "key": key,
-                    "kind": "article.platform_variant",
-                    "worker_role": "article_adapter",
+                    "key": write_key,
+                    "kind": "article.direction",
+                    "worker_role": "platform_article_writer",
                     "toolsets": ["marketing.read", "marketing.draft"],
-                    "resource_scope": f"article-revision:{brief['candidate_id']}:{platform}",
+                    "resource_scope": f"article-treatment:{brief['candidate_id']}:{platform}",
                     "input": {**reference, "platform": platform},
                     "depends_on": [
-                        "article.direct",
+                        "topic_brief.freeze",
                         *([research_keys[platform]] if platform in research_keys else []),
                     ],
-                }
-            )
-        steps.extend(
-            [
+                },
                 {
-                    "key": "article.qa",
+                    "key": qa_key,
                     "kind": "article.qa",
                     "worker_role": "content_reviewer",
                     "toolsets": ["marketing.read"],
-                    "resource_scope": f"article-qa:{brief['candidate_id']}",
-                    "input": reference,
-                    "depends_on": article_variants,
+                    "resource_scope": f"article-qa:{brief['candidate_id']}:{platform}",
+                    "input": {**reference, "platform": platform},
+                    "depends_on": [write_key],
                 },
-                {
-                    "key": "article.draft_box",
-                    "kind": "draft.settle",
-                    "worker_role": "draft_reducer",
-                    "toolsets": ["marketing.draft"],
-                    "resource_scope": f"draft-box:article:{brief['candidate_id']}",
-                    "input": {**reference, "lane": "article"},
-                    "depends_on": ["article.qa"],
-                },
-            ]
+            ])
+        steps.append(
+            {
+                "key": "article.draft_box",
+                "kind": "draft.settle",
+                "worker_role": "draft_reducer",
+                "toolsets": ["marketing.draft"],
+                "resource_scope": f"draft-box:article:{brief['candidate_id']}",
+                "input": {**reference, "lane": "article"},
+                "depends_on": article_qa_keys,
+            }
         )
         branch_terminals.append("article.draft_box")
 
     if video_platforms:
-        steps.append(
-            {
-                "key": "video.direct",
-                "kind": "video.direction",
-                "worker_role": "video_director",
-                "toolsets": ["marketing.read", "video"],
-                "resource_scope": f"video-project:{brief['candidate_id']}",
-                "input": {**reference, "platforms": video_platforms},
-                "depends_on": ["topic_brief.freeze"],
-            }
-        )
-        video_variants: list[str] = []
-        for platform in video_platforms:
-            key = f"video.adapt.{platform}"
-            video_variants.append(key)
-            steps.append(
-                {
-                    "key": key,
-                    "kind": "video.platform_plan",
-                    "worker_role": "video_adapter",
-                    "toolsets": ["marketing.read", "video"],
-                    "resource_scope": f"video-revision:{brief['candidate_id']}:{platform}",
-                    "input": {**reference, "platform": platform},
-                    "depends_on": [
-                        "video.direct",
-                        *([research_keys[platform]] if platform in research_keys else []),
-                    ],
-                }
-            )
-        steps.extend(
-            [
-                {
-                    "key": "video.material.search",
-                    "kind": "video.material_search",
-                    "worker_role": "material_researcher",
-                    "toolsets": ["marketing.read", "web", "video"],
-                    "resource_scope": f"material-search:{brief['candidate_id']}",
-                    "input": reference,
-                    "depends_on": ["video.direct"],
-                },
-                {
-                    "key": "video.audio.plan",
-                    "kind": "video.audio_plan",
-                    "worker_role": "audio_director",
-                    "toolsets": ["marketing.read", "tts"],
-                    "resource_scope": f"video-audio:{brief['candidate_id']}",
-                    "input": reference,
-                    "depends_on": ["video.direct"],
-                },
-            ]
-        )
         video_qa_keys: list[str] = []
         for platform in video_platforms:
+            direction_key = f"video.direct.{platform}"
+            preflight_key = f"video.preflight.{platform}"
+            material_key = f"video.material.{platform}"
+            audio_key = f"video.audio.{platform}"
             previs_key = f"video.previs.{platform}"
             render_key = f"video.render.{platform}"
             qa_key = f"video.qa.{platform}"
             video_qa_keys.append(qa_key)
-            steps.extend(
-                [
-                    {
-                        "key": previs_key,
-                        "kind": "video.previsualization",
-                        "worker_role": "video_compositor",
-                        "toolsets": ["video"],
-                        "resource_scope": f"video-previs:{brief['candidate_id']}:{platform}",
-                        "input": {**reference, "platform": platform},
-                        "depends_on": [
-                            f"video.adapt.{platform}",
-                            "video.material.search",
-                            "video.audio.plan",
-                        ],
-                    },
-                    {
-                        "key": render_key,
-                        "kind": "video.render",
-                        "worker_role": "render_worker",
-                        "toolsets": ["video"],
-                        "resource_scope": f"video-render:{brief['candidate_id']}:{platform}",
-                        "input": {**reference, "platform": platform},
-                        "depends_on": [previs_key],
-                        "max_attempts": 3,
-                    },
-                    {
-                        "key": qa_key,
-                        "kind": "video.qa",
-                        "worker_role": "video_reviewer",
-                        "toolsets": ["video", "vision"],
-                        "resource_scope": f"video-qa:{brief['candidate_id']}:{platform}",
-                        "input": {**reference, "platform": platform},
-                        "depends_on": [render_key],
-                    },
-                ]
-            )
+            steps.extend([
+                {
+                    "key": direction_key,
+                    "kind": "video.direction",
+                    "worker_role": "video_showrunner",
+                    "toolsets": ["marketing.read", "video"],
+                    "resource_scope": f"video-treatment:{brief['candidate_id']}:{platform}",
+                    "input": {**reference, "platform": platform},
+                    "depends_on": [
+                        "topic_brief.freeze",
+                        *([research_keys[platform]] if platform in research_keys else []),
+                    ],
+                },
+                {
+                    "key": preflight_key,
+                    "kind": "video.treatment_preflight",
+                    "worker_role": "preflight_evaluator",
+                    "toolsets": ["marketing.read", "video", "vision"],
+                    "resource_scope": f"video-treatment-preflight:{brief['candidate_id']}:{platform}",
+                    "input": {**reference, "platform": platform},
+                    "depends_on": [direction_key],
+                    "max_attempts": 3,
+                },
+                {
+                    "key": material_key,
+                    "kind": "video.material_search",
+                    "worker_role": "material_researcher",
+                    "toolsets": ["marketing.read", "web", "video"],
+                    "resource_scope": f"material-search:{brief['candidate_id']}:{platform}",
+                    "input": {**reference, "platform": platform},
+                    "depends_on": [preflight_key],
+                },
+                {
+                    "key": audio_key,
+                    "kind": "video.audio_plan",
+                    "worker_role": "audio_director",
+                    "toolsets": ["marketing.read", "tts"],
+                    "resource_scope": f"video-audio:{brief['candidate_id']}:{platform}",
+                    "input": {**reference, "platform": platform},
+                    "depends_on": [preflight_key],
+                },
+                {
+                    "key": previs_key,
+                    "kind": "video.previsualization",
+                    "worker_role": "video_compositor",
+                    "toolsets": ["video"],
+                    "resource_scope": f"video-previs:{brief['candidate_id']}:{platform}",
+                    "input": {**reference, "platform": platform},
+                    "depends_on": [preflight_key, material_key, audio_key],
+                },
+                {
+                    "key": render_key,
+                    "kind": "video.render",
+                    "worker_role": "render_worker",
+                    "toolsets": ["video"],
+                    "resource_scope": f"video-render:{brief['candidate_id']}:{platform}",
+                    "input": {**reference, "platform": platform},
+                    "depends_on": [previs_key],
+                    "max_attempts": 3,
+                },
+                {
+                    "key": qa_key,
+                    "kind": "video.qa",
+                    "worker_role": "video_reviewer",
+                    "toolsets": ["video", "vision"],
+                    "resource_scope": f"video-qa:{brief['candidate_id']}:{platform}",
+                    "input": {**reference, "platform": platform},
+                    "depends_on": [render_key],
+                },
+            ])
         steps.append(
             {
                 "key": "video.draft_box",

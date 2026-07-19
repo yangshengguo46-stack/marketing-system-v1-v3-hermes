@@ -231,10 +231,10 @@ Candidate_t = interpret(Retro_t, repeated evidence, user feedback)
 
 - ContentOps：受众价值、钩子、结构、证据、信任、情绪、行动路径。
 - PlatformOps：格式、分发闸门、合规、标签、时长、编辑器和平台表达。
-- 同一父内容生成平台变体，但共享同一事实、受众目标和经营假设。
+- 同一 TopicBrief 派发平台级独立 work order；共享的是事实、EvidencePack、经营目标和可证伪受众假设，不共享一份可复制的父成稿。
 - 平台知识必须带来源、地区、版本、生效/失效时间。
 - 登录/浏览器 connector 目录可以是有限实现集；内容适配目录不是 connector 白名单。任意安全国内或海外平台 ID 都能进入 `cross_platform_campaign`，但未知平台必须标记调研缺口并只输出通用可重排素材，不得套用相似平台规则冒充原生适配。
-- 跨平台 campaign 的每个平台变体都必须保存格式以及 audience/opening/structure/CTA 适配依据，并与其它平台变体保持实质差异；共享的是 content kernel 和 EvidencePack，不是复制粘贴的成稿。
+- 跨平台 campaign 的每个平台 Writer/Showrunner 都必须从本平台画像和目标账号上下文直接生成最终交付，并保存格式以及 audience/opening/structure/CTA 依据；共享的是 TopicBrief、content kernel 和 EvidencePack，不是复制粘贴的成稿或分镜。
 
 ## 账号浏览器是原生 MCP
 
