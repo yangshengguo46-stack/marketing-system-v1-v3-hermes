@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { ContextMenu } from '@/app/chat/composer/context-menu'
 import { PRIMARY_ICON_BTN } from '@/app/chat/composer/controls'
@@ -1369,34 +1369,37 @@ export function VideoProductionWorkbench({
               setInspectorPanelOpen(current => (category === inspectorTab ? !current : true))
             }}
             resolveAsset={category => detail?.media_assets.find(item => assetMatchesTab(item, category))}
-          />
-        ) : null}
-
-        {inspectorPanelOpen && !inspectorRailHidden && directorLayout !== 'stacked' ? (
-          <div className="absolute inset-y-0 right-28 z-50 flex min-h-0 w-80 overflow-hidden border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) shadow-[-18px_0_42px_-28px_rgba(54,42,31,.55)]">
-            <VideoReferenceLibraryPanel
+          >
+            <VideoProductionRailSummary
               accepted={accepted}
               activeStage={activeStage}
-              assets={detail?.media_assets || []}
-              audioCatalog={audioCatalog}
               canvas={canvas}
-              category={activeReferenceCategory}
               completed={summary?.status === 'completed' && Boolean(detail?.output_asset?.id)}
               confirming={stageConfirming}
               generatingVoice={generatingVoice}
-              onClose={() => setInspectorPanelOpen(false)}
               onConfirm={() => void confirmStage()}
               onGenerateVoice={() => void generateVoiceover()}
-              onSelectVoice={voiceId => void selectDefaultVoice(voiceId)}
               quality={quality}
               readiness={readiness}
               rendered={summary?.status === 'completed'}
-              scene={selectedScene}
-              scenePlan={scenePlan}
               scenes={scenes}
-              selectingVoiceId={selectingVoiceId}
               summary={summary}
               totalDuration={totalDuration}
+            />
+          </VideoReferenceRail>
+        ) : null}
+
+        {inspectorPanelOpen && !inspectorRailHidden && directorLayout !== 'stacked' ? (
+          <div className="absolute inset-y-0 right-28 z-50 flex min-h-0 w-[28rem] max-w-[calc(100%-7rem)] overflow-hidden border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) shadow-[-18px_0_42px_-28px_rgba(54,42,31,.55)]">
+            <VideoReferenceLibraryPanel
+              assets={detail?.media_assets || []}
+              audioCatalog={audioCatalog}
+              category={activeReferenceCategory}
+              onClose={() => setInspectorPanelOpen(false)}
+              onSelectVoice={voiceId => void selectDefaultVoice(voiceId)}
+              scene={selectedScene}
+              scenePlan={scenePlan}
+              selectingVoiceId={selectingVoiceId}
             />
           </div>
         ) : null}
@@ -1704,6 +1707,7 @@ function VoiceLibrary({
 function VideoReferenceRail({
   activeCategory,
   ariaLabel,
+  children,
   className,
   navClassName,
   onCategory,
@@ -1711,6 +1715,7 @@ function VideoReferenceRail({
 }: {
   activeCategory: SetupCategory | null
   ariaLabel: string
+  children?: ReactNode
   className?: string
   navClassName?: string
   onCategory: (category: SetupCategory) => void
@@ -1719,11 +1724,11 @@ function VideoReferenceRail({
   return (
     <aside
       className={cn(
-        'flex min-h-0 flex-col border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background)',
+        'flex min-h-0 flex-col overflow-hidden border-l border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background)',
         className
       )}
     >
-      <nav aria-label={ariaLabel} className={cn('grid gap-1.5 px-2 py-3', navClassName)}>
+      <nav aria-label={ariaLabel} className={cn('grid shrink-0 gap-1.5 px-2 py-3', navClassName)}>
         {VIDEO_REFERENCE_CATEGORIES.map(category => {
           const Icon = category.icon
           const asset = resolveAsset?.(category.id)
@@ -1742,56 +1747,223 @@ function VideoReferenceRail({
           )
         })}
       </nav>
+      {children}
     </aside>
   )
 }
 
-function VideoReferenceLibraryPanel({
+function VideoProductionRailSummary({
   accepted,
   activeStage,
-  assets,
-  audioCatalog,
   canvas,
-  category,
   completed,
   confirming,
   generatingVoice,
   onConfirm,
-  onClose,
   onGenerateVoice,
-  onSelectVoice,
   quality,
   readiness,
   rendered,
-  scene,
-  scenePlan,
   scenes,
-  selectingVoiceId,
   summary,
   totalDuration
 }: {
   accepted: boolean
   activeStage: DirectorStage
-  assets: MediaAssetProjection[]
-  audioCatalog: AudioCatalogProjection | null
   canvas: CanvasSpec
-  category: SetupCategory
   completed: boolean
   confirming: boolean
   generatingVoice: boolean
   onConfirm: () => void
-  onClose: () => void
   onGenerateVoice: () => void
-  onSelectVoice: (voiceId: string) => void
   quality?: VideoQualityReport
   readiness?: VideoRenderReadiness
   rendered: boolean
-  scene?: VideoScene
-  scenePlan?: { fallback_used?: boolean; renderer?: string }
   scenes: VideoScene[]
-  selectingVoiceId: string
   summary?: VideoProductionSummary
   totalDuration: number
+}) {
+  const activeIndex = DIRECTOR_STAGES.findIndex(stage => stage.id === activeStage)
+  const currentStage = DIRECTOR_STAGES[Math.max(0, activeIndex)]
+  const nextStage = DIRECTOR_STAGES[Math.min(DIRECTOR_STAGES.length - 1, Math.max(0, activeIndex) + 1)]
+
+  const qualityLabel = quality
+    ? { hold: '需人工复核', ready: '自动质检通过', reject: '技术拒收' }[quality.disposition]
+    : rendered
+      ? '待人工审片'
+      : '等待质检'
+
+  const confirmLabel = confirming
+    ? '正在本地渲染…'
+    : activeStage === 'edit' && readiness?.ready === false
+      ? '先补齐真实素材与声音'
+      : completed
+        ? accepted
+          ? '成片已确认'
+          : '确认成片'
+        : `确认${currentStage.label}并进入${nextStage.label}`
+
+  const compactConfirmLabel = confirming
+    ? '渲染中'
+    : activeStage === 'edit' && readiness?.ready === false
+      ? '待补齐'
+      : completed
+        ? accepted
+          ? '已确认'
+          : '确认成片'
+        : `进入${nextStage.label}`
+
+  return (
+    <section
+      aria-label="作品状态与质检"
+      className="flex min-h-0 flex-1 flex-col border-t border-(--ui-stroke-tertiary)"
+    >
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2.5">
+        <div className="grid justify-items-center gap-1.5 text-center">
+          <span className="text-[0.52rem] font-semibold text-(--ui-text-quaternary)">作品状态</span>
+          <ProductionStatus status={summary?.status || 'prepared'} />
+        </div>
+
+        <dl className="mt-2.5 grid grid-cols-2 gap-1">
+          <RailStat label="画幅" value={ratioLabel(canvas)} />
+          <RailStat label="镜头" value={`${scenes.length || summary?.scene_count || 0}`} />
+          <RailStat label="时长" value={formatDuration(totalDuration)} />
+          <RailStat label="方式" value={`${summary?.renderers?.length || 0}`} />
+        </dl>
+
+        <div className="mt-2.5 border-t border-(--ui-stroke-tertiary) pt-2.5">
+          <div className="grid justify-items-center gap-1 text-center">
+            {quality?.disposition === 'ready' ? (
+              <CheckCircle2 className="size-4 text-emerald-600" />
+            ) : (
+              <AlertCircle
+                className={cn(
+                  'size-4',
+                  quality?.disposition === 'reject' ? 'text-red-600' : 'text-amber-600'
+                )}
+              />
+            )}
+            <strong className="text-[0.55rem]">自动媒体质检</strong>
+            <span
+              className={cn(
+                'text-[0.5rem] font-semibold',
+                quality?.disposition === 'ready'
+                  ? 'text-emerald-700'
+                  : quality?.disposition === 'reject'
+                    ? 'text-red-700'
+                    : 'text-amber-700'
+              )}
+            >
+              {qualityLabel}
+            </span>
+          </div>
+
+          {quality?.checks?.length ? (
+            <div className="mt-2 grid gap-1">
+              {quality.checks.map(check => (
+                <div
+                  className="flex items-center justify-between gap-1 rounded-md bg-(--ui-button-hover-background) px-1.5 py-1 text-[0.48rem]"
+                  key={check.id}
+                  title={`${check.label}：${qualityCheckLabel(check)}`}
+                >
+                  <span className="min-w-0 truncate text-(--ui-text-secondary)">{check.label}</span>
+                  <span
+                    className={cn(
+                      'shrink-0',
+                      check.status === 'fail' ? 'font-semibold text-red-700' : 'text-(--ui-text-quaternary)'
+                    )}
+                  >
+                    {qualityCheckLabel(check)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        {readiness?.ready === false ? (
+          <div className="mt-2.5 border-t border-(--ui-stroke-tertiary) pt-2.5">
+            <strong className="block text-center text-[0.52rem] text-amber-800">
+              还缺 {readiness.blockers?.length || 0} 项
+            </strong>
+            <div className="mt-1.5 grid gap-1">
+              {(readiness.blockers || []).map(blocker => (
+                <span
+                  className="line-clamp-2 rounded-md bg-amber-500/8 px-1.5 py-1 text-[0.48rem] leading-3 text-amber-800"
+                  key={blocker.code || blocker.message}
+                  title={blocker.message || blocker.code}
+                >
+                  {blocker.message || blocker.code}
+                </span>
+              ))}
+            </div>
+            {readiness.voice_required &&
+            (readiness.blockers || []).some(item => item.code === 'voiceover_missing') ? (
+              <Button
+                className="mt-1.5 h-8 w-full px-1 text-[0.52rem]"
+                disabled={generatingVoice}
+                onClick={onGenerateVoice}
+                size="sm"
+                variant="outline"
+              >
+                {generatingVoice ? <Loader2 className="size-3 animate-spin" /> : <Mic className="size-3" />}
+                {generatingVoice ? '生成中' : '生成旁白'}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="border-t border-[#d8d0c2] bg-[#faf7ef] p-2">
+        <Button
+          aria-label={confirmLabel}
+          className="h-10 w-full rounded-xl bg-[#f06443] px-1 text-[0.6rem] font-semibold shadow-[0_12px_28px_-18px_rgba(225,83,48,.75)] hover:bg-[#df5838]"
+          disabled={
+            accepted ||
+            confirming ||
+            quality?.disposition === 'reject' ||
+            (activeStage === 'edit' && readiness?.ready === false)
+          }
+          onClick={onConfirm}
+          title={confirmLabel}
+        >
+          {accepted ? <CheckCircle2 className="size-3.5" /> : <Zap className="size-3.5" />}
+          {compactConfirmLabel}
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+function RailStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md bg-(--ui-button-hover-background) px-1 py-1.5 text-center">
+      <dt className="text-[0.44rem] text-(--ui-text-quaternary)">{label}</dt>
+      <dd className="mt-0.5 truncate text-[0.55rem] font-semibold" title={`${label}：${value}`}>
+        {value}
+      </dd>
+    </div>
+  )
+}
+
+function VideoReferenceLibraryPanel({
+  assets,
+  audioCatalog,
+  category,
+  onClose,
+  onSelectVoice,
+  scene,
+  scenePlan,
+  selectingVoiceId
+}: {
+  assets: MediaAssetProjection[]
+  audioCatalog: AudioCatalogProjection | null
+  category: SetupCategory
+  onClose: () => void
+  onSelectVoice: (voiceId: string) => void
+  scene?: VideoScene
+  scenePlan?: { fallback_used?: boolean; renderer?: string }
+  selectingVoiceId: string
 }) {
   const definition = VIDEO_REFERENCE_CATEGORIES.find(item => item.id === category) || VIDEO_REFERENCE_CATEGORIES[0]
   const sceneAssetId = scene?.visuals?.[0]?.media_asset_id
@@ -1799,20 +1971,6 @@ function VideoReferenceLibraryPanel({
   const referenceAssets = assets.filter(
     asset => setupAssetMatches(asset, category) || (category === 'scenes' && asset.id === sceneAssetId)
   )
-
-  const activeIndex = DIRECTOR_STAGES.findIndex(stage => stage.id === activeStage)
-  const currentStage = DIRECTOR_STAGES[Math.max(0, activeIndex)]
-  const nextStage = DIRECTOR_STAGES[Math.min(DIRECTOR_STAGES.length - 1, Math.max(0, activeIndex) + 1)]
-
-  const confirmLabel = confirming
-    ? '正在本地渲染…'
-    : activeStage === 'edit' && readiness?.ready === false
-    ? '先补齐真实素材与声音'
-    : completed
-    ? accepted
-      ? '成片已确认'
-      : '确认成片'
-    : `确认${currentStage.label}并进入${nextStage.label}`
 
   return (
     <aside className="flex min-h-0 flex-1 flex-col bg-(--ui-chat-surface-background)">
@@ -1866,67 +2024,6 @@ function VideoReferenceLibraryPanel({
             <InfoRow label="画面填充" value={fitLabel(scene?.visuals?.[0]?.fit)} />
           </dl>
         ) : null}
-
-        <section className="mt-4 border-t border-[#ded6c9] pt-3">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-xs font-semibold">作品状态</h3>
-            <ProductionStatus status={summary?.status || 'prepared'} />
-          </div>
-          <div className="mt-2.5 grid grid-cols-2 gap-2">
-            <StatBox label="画幅" value={ratioLabel(canvas)} />
-            <StatBox label="镜头" value={`${scenes.length || summary?.scene_count || 0}`} />
-            <StatBox label="时长" value={formatDuration(totalDuration)} />
-            <StatBox label="制作方式" value={`${summary?.renderers?.length || 0}`} />
-          </div>
-        </section>
-
-        <section className="mt-4 border-t border-[#ded6c9] pt-3">
-          <QualityAssurance rendered={rendered} report={quality} />
-        </section>
-
-        {readiness?.ready === false ? (
-          <section className="mt-4 border-t border-[#ded6c9] pt-3">
-            <h3 className="text-xs font-semibold">进入渲染前还缺</h3>
-            <div className="mt-2 space-y-2">
-              {(readiness.blockers || []).map(blocker => (
-                <div
-                  className="rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-[0.64rem] leading-5 text-amber-800"
-                  key={blocker.code || blocker.message}
-                >
-                  {blocker.message || blocker.code}
-                </div>
-              ))}
-            </div>
-            {readiness.voice_required && (readiness.blockers || []).some(item => item.code === 'voiceover_missing') ? (
-              <Button
-                className="mt-2 w-full"
-                disabled={generatingVoice}
-                onClick={onGenerateVoice}
-                size="sm"
-                variant="outline"
-              >
-                {generatingVoice ? <Loader2 className="size-4 animate-spin" /> : <Mic className="size-4" />}
-                {generatingVoice ? '正在生成旁白…' : '确认并生成旁白'}
-              </Button>
-            ) : null}
-          </section>
-        ) : null}
-      </div>
-
-      <div className="border-t border-[#d8d0c2] bg-[#faf7ef] p-3">
-        <Button
-          className="h-12 w-full rounded-xl bg-[#f06443] text-sm font-semibold shadow-[0_12px_28px_-18px_rgba(225,83,48,.75)] hover:bg-[#df5838]"
-          disabled={
-            accepted ||
-            confirming ||
-            quality?.disposition === 'reject' ||
-            (activeStage === 'edit' && readiness?.ready === false)
-          }
-          onClick={onConfirm}
-        >
-          {accepted ? <CheckCircle2 className="mr-2 size-4" /> : <Zap className="mr-2 size-4" />}
-          {confirmLabel}
-        </Button>
       </div>
     </aside>
   )
@@ -1943,65 +2040,6 @@ function ReferenceThumb({ asset, icon: Icon }: { asset?: MediaAssetProjection; i
       ) : null}
       {!asset || asset.media_type === 'video' ? <Icon className="m-auto size-5 opacity-55" /> : null}
     </span>
-  )
-}
-
-function QualityAssurance({ report, rendered }: { rendered: boolean; report?: VideoQualityReport }) {
-  const labels = {
-    hold: '需人工复核',
-    ready: '自动质检通过',
-    reject: '技术拒收'
-  }
-
-  if (!report) {
-    return (
-      <>
-        <div className="flex items-center gap-2">
-          <AlertCircle className="size-4 text-(--ui-text-quaternary)" />
-          <h3 className="text-sm font-semibold">自动媒体质检</h3>
-        </div>
-        <p className="mt-2 text-[0.68rem] leading-relaxed text-(--ui-text-tertiary)">
-          {rendered
-            ? '这条旧成片没有自动质检报告，需要人工完整审片。'
-            : '渲染完成后将自动检查黑场、冻结、响度和技术规格。'}
-        </p>
-      </>
-    )
-  }
-
-  const tone = {
-    hold: 'text-amber-700',
-    ready: 'text-emerald-700',
-    reject: 'text-red-700'
-  }[report.disposition]
-
-  return (
-    <>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          {report.disposition === 'ready' ? (
-            <CheckCircle2 className="size-4 text-emerald-600" />
-          ) : (
-            <AlertCircle className={`size-4 ${tone}`} />
-          )}
-          <h3 className="text-sm font-semibold">自动媒体质检</h3>
-        </div>
-        <span className={`text-[0.62rem] font-semibold ${tone}`}>{labels[report.disposition]}</span>
-      </div>
-      <div className="mt-3 grid gap-1.5">
-        {report.checks.map(check => (
-          <div
-            className="flex items-center justify-between gap-3 rounded-lg bg-(--ui-button-hover-background) px-2.5 py-2 text-[0.66rem]"
-            key={check.id}
-          >
-            <span className="truncate text-(--ui-text-secondary)">{check.label}</span>
-            <span className={check.status === 'fail' ? 'font-semibold text-red-700' : 'text-(--ui-text-quaternary)'}>
-              {qualityCheckLabel(check)}
-            </span>
-          </div>
-        ))}
-      </div>
-    </>
   )
 }
 
@@ -2559,15 +2597,6 @@ function MetaChip({ label }: { label: string }) {
     <span className="rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-background)/65 px-2 py-1 text-[0.62rem] text-(--ui-text-tertiary)">
       {label}
     </span>
-  )
-}
-
-function StatBox({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl bg-(--ui-button-hover-background) px-3 py-2.5">
-      <small className="block text-[0.58rem] text-(--ui-text-quaternary)">{label}</small>
-      <strong className="mt-1 block truncate text-xs">{value}</strong>
-    </div>
   )
 }
 
