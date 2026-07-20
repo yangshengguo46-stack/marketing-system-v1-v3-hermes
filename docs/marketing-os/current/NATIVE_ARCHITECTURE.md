@@ -234,7 +234,7 @@ Candidate_t = interpret(Retro_t, repeated evidence, user feedback)
 - 同一 TopicBrief 派发平台级独立 work order；共享的是事实、EvidencePack、经营目标和可证伪受众假设，不共享一份可复制的父成稿。
 - 平台知识必须带来源、地区、版本、生效/失效时间。
 - 登录/浏览器 connector 目录可以是有限实现集；内容适配目录不是 connector 白名单。任意安全国内或海外平台 ID 都能进入 `cross_platform_campaign`，但未知平台必须标记调研缺口并只输出通用可重排素材，不得套用相似平台规则冒充原生适配。
-- 跨平台 campaign 的每个平台 Writer/Showrunner 都必须从本平台画像和目标账号上下文直接生成最终交付，并保存格式以及 audience/opening/structure/CTA 依据；共享的是 TopicBrief、content kernel 和 EvidencePack，不是复制粘贴的成稿或分镜。
+- 跨平台 campaign 的每个平台 Writer/Super Director 都必须从本平台画像和目标账号上下文直接生成最终交付，并保存格式以及 audience/opening/structure/CTA 依据；共享的是 TopicBrief、content kernel 和 EvidencePack，不是复制粘贴的成稿或分镜。
 
 ## 账号浏览器是原生 MCP
 
@@ -266,12 +266,13 @@ Playwright MCP 官方 `createConnection(config, contextGetter)` 要求 `contextG
 
 - Marketing OS 只拥有图文和不露脸素材视频两条内容生产 lane；二者共享账号、证据、素材、音频、版权、回执和复盘合同。
 - Hermes 原生感知层由 `vision_analyze`、`browser_vision` 和 `video_analyze` 组成，是 Marketing Agent 在研究、采集、创作、预演、审片与普通对话中共享的底层能力，不属于某个视频工作台。产品 `marketing` 与受约束的 `marketing_code` toolset 都直接携带图片/视频理解；渐进工具披露不得隐藏这些能力，通用 Hermes 的 `video` toolset 仍保持 opt-in。小视频可直接交给视频模型，长视频或指定时间段由本机 ffprobe/FFmpeg 生成带时间戳联系表后分析；采样模式必须区分可见事实与推断，不得声称听到未转写音频或覆盖未采样连续性。读取视频二进制文件时也必须引导到 `video_analyze`，禁止按文本猜测内容。
-- 视频生产的唯一执行 owner 是仓库内官方 `kanban-video-orchestrator`：每个平台启动独立 tenant/workspace，由 Director、Showrunner、Material Scout、Voice、Renderer、Editor、Reviewer 七个官方 Hermes profile 在共享目录中按 Kanban task/parent/lease/heartbeat/retry 合同协作。Marketing `video.official_kanban` 只提交锁定的 TopicBrief/Plan/Preflight，不再建立第二套视频 DAG、Worker 或调度器。
+- 视频生产的唯一执行 owner 是仓库内官方 `kanban-video-orchestrator`：每个平台启动独立 tenant/workspace，由 Coordinator、Super Director、Material Scout、Voice、Renderer、Editor、Reviewer 七个官方 Hermes profile 在共享目录中按 Kanban task/parent/lease/heartbeat/retry 合同协作。Coordinator 只路由任务，Super Director 是唯一创意 owner。Marketing `video.official_kanban` 只提交锁定的 TopicBrief/Plan/Preflight，不再建立第二套视频 DAG、Worker 或调度器。
 - `VideoKanbanExecutionRepository` 是业务边界而不是执行器：它探测并锁定真实可用的 Doubao Seed 2.1 Pro，生成官方 plan/setup/brief/TEAM，启动根 Kanban task，并在 Reviewer 结算时验证 `marketing.video.execution.v2`。Marketing 表只记录 execution ID、tenant、workspace、成本上限、最终资产和 Receipt；Kanban task graph 只存在于官方 Kanban DB。
-- Seed 2.1 Pro 负责平台编导、剪辑判断、局部返工与成片审查；Seed 2.0 Mini 只做批量候选素材初筛。模型不可用时明确阻断，不允许静默回退 DeepSeek；豆包只进入视频 lane，图文链路保持原模型和 Writer 合同。
-- Showrunner 先锁定逐镜头旁白、语义、主体、场景、风格、画幅与构图合同；Material Scout 按“自有素材库 → 零费用开放许可来源 → 本地 `media-use` 缓存”检索、看关键帧、评分、重搜并冻结。禁止付费生成缺失素材；不足即阻断。至少一半镜头使用独立素材，单素材最多复用两次。
+- Seed 2.1 Pro 只承担 Super Director、Editor 和 Reviewer 的高判断任务；Seed 2.0 Lite 承担 Coordinator、Material Scout、Voice 和 Renderer 的执行 Turn。模型不可用时明确阻断，不允许静默回退 DeepSeek；豆包只进入视频 lane，图文链路保持原模型和 Writer 合同。代码级付费熔断未解除时，任何官方付费视频 Turn 都不得启动。
+- Super Director 读取不可变 `director-context.json`，其中包含 TopicBrief/EvidencePack、账号模型、平台合同、四库、对标经营图谱、原始预演和只读 Human Observer 投影；随后依次锁定生产合同、完整逐字稿、beat sheet、逐镜头旁白/语义/主体/场景/风格/画幅/机位/调度/构图/证据和因果 measurement plan。每个引用 ID 必须说明它具体约束了哪个创作决定；有可用知识却不引用会失败。
+- `marketing_video_treatment_preflight` 是素材工具前的系统硬门。五件编导产物或 `go=true` 回执缺失、合同 hash 改变时，Material Scout 无权检索。通过后 Material Scout 按“自有素材库 → 零费用开放许可来源 → Web/browser + `yt-dlp`/`watch --no-whisper`”检索、看关键帧、评分、重搜并冻结。禁止付费生成缺失素材；不足即阻断。至少一半镜头使用独立素材，单素材最多复用两次。
 - Voice profile 使用火山 TTS 生成统一音色并记录真实分段时长；画面时间服从旁白。Renderer 使用已验证的 Remotion/HyperFrames 模板与 FFmpeg，Editor 使用 `video-use`、极简剪辑规则和最终字幕；模板表达不了时只允许在隔离 workspace 生成场景代码，不得修改核心 renderer。
-- Reviewer 必须检查真实 MP4 的语义相关性、音画同步、字幕安全区、构图、节奏、版权与技术规格，只返工失败镜头，最多三轮。通过后唯一可用的受限 `marketing_video_finalize` 工具把成片、`marketing.video.ir.v2`、权利映射、模型/TTS/素材/工具费用 Receipt 写入 Draft Box；失败或耗尽则明确阻断，绝不伪报完成。
+- Reviewer 必须检查真实 MP4 的语义相关性、音画同步、字幕安全区、构图、节奏、版权与技术规格，只返工失败镜头，最多三轮；观察必须绑定当前 MP4 SHA-256，并交给同一 Preflight owner 的 `marketing_video_cut_preflight`。只有 Cut 回执 `go=true` 时，受限 `marketing_video_finalize` 才把成片、`marketing.video.ir.v2`、三段 Preflight lineage、知识/观察引用、measurement plan、权利映射和模型/TTS/素材/工具费用 Receipt 写入 Draft Box；失败或耗尽则明确阻断，绝不伪报完成。
 - `agent/marketing/domains/production_audio.py`、`video_ir.py`、`video_quality.py`、`video_renderers.py` 以及旧直调素材/TTS/本地渲染工具、Gateway RPC 和测试已删除。`video-renderers/` Node 目录继续作为官方 Renderer profile 可调用的模板/运行工具，不是第二执行系统。
 - Electron 只读取官方任务/成片投影并播放、收集人审；不能选择模型、驱动素材/TTS/渲染或修改后台闭环。
 - 真人、数字人和 AI 电影级生产由独立 `/Users/yangyucheng/projects/video-studio` 产品拥有，Marketing OS 不保存其项目画布、角色调度、Provider、预算、审批或预演状态。

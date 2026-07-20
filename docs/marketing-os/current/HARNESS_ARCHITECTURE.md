@@ -132,14 +132,15 @@ Daily signals / evidence fan-out
       ├─ per-platform Article Writer
       │   → platform-native final draft → ArticleDraft Preflight
       │   → bounded rewrite (max 2) → Draft Box
-      └─ per-platform Video Showrunner
-          → VideoTreatment (hook/voice/beat/claim/shot/sound contract)
+      └─ official Kanban Coordinator → per-platform Super Director
+          → governed context + full script + VideoTreatment
+            (hook/voice/beat/claim/shot/sound/knowledge/measurement contract)
           → Treatment Preflight → bounded revision (max 2)
           → library search + rights-cleared web search in parallel
           → playable proxy/previs → audio/captions
           → Remotion / HyperFrames / FFmpeg render activities
           → technical QA + observed-cut review (`video_analyze`)
-          → Cut Preflight → Draft Box
+          → hash-bound Cut Preflight → Draft Box + three-stage lineage
   → human review
   → publish approval/effect
   → cross-day metrics fan-out

@@ -17,6 +17,7 @@ from agent.harness import (
     StepExecutionContext,
     StepResult,
 )
+from agent.human_observer import HumanObserverReader
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.account_context import AccountContextRepository
 from agent.marketing.domains.content_assets import ContentAssetRepository
@@ -245,6 +246,7 @@ class TopicProductionWorkers:
             platforms=[platform],
             content_kind="faceless_video",
         )
+        human_observer_projection = _read_human_observer_projection()
         origin_preflight = self.loop.get_preflight(str(brief["preflight_id"]))
         platform_profile = self._platform_profile(context, platform)
         blueprint = brief["platform_blueprints"].get(platform) or {}
@@ -273,6 +275,7 @@ class TopicProductionWorkers:
                     "scores": origin_preflight.get("scores") or {},
                     "decision": origin_preflight.get("decision") or {},
                 },
+                "human_observer_projection": human_observer_projection,
                 "workflow_id": str(
                     context.workflow.get("id") or f"attempt:{context.attempt_id}"
                 ),
@@ -770,6 +773,22 @@ def build_topic_production_handlers(
         creative_runner=creative_runner,
         paths=paths,
     ).handlers()
+
+
+def _read_human_observer_projection() -> dict[str, Any]:
+    """Read a bounded upstream research projection without making it product truth."""
+
+    try:
+        return HumanObserverReader().projection(namespace="global", limit=40)
+    except Exception:
+        return {
+            "contract": "human-observer-read-projection-v1",
+            "namespace": "global",
+            "interpretations": [],
+            "model_revisions": [],
+            "authority": "read_only_no_product_writeback",
+            "data_state": "unavailable_cold_start",
+        }
 
 
 def _artifact(

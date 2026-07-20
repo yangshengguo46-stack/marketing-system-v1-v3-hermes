@@ -740,6 +740,57 @@ class AccountStrategyRepository(MarketingDomainRepository):
             "rule": "multi-role evidence graph; follower count alone never unlocks positioning",
         }
 
+    def read_benchmark_operating_graph(
+        self,
+        *,
+        user_id: str,
+        account_id: str,
+        project_id: str,
+        limit: int = 120,
+    ) -> dict[str, Any]:
+        """Return the bounded, evidence-backed benchmark graph for planning."""
+
+        bounded_limit = max(1, min(int(limit), 300))
+        with self._connection() as db:
+            _require_project(
+                db,
+                user_id=user_id,
+                account_id=account_id,
+                project_id=project_id,
+            )
+            accounts = db.execute(
+                """SELECT * FROM benchmark_accounts
+                WHERE project_id=? AND user_id=? AND target_account_id=?
+                AND selection_status='selected'
+                ORDER BY role,id LIMIT ?""",
+                (project_id, user_id, account_id, bounded_limit),
+            ).fetchall()
+            observations = db.execute(
+                """SELECT observation.* FROM benchmark_observations AS observation
+                JOIN benchmark_accounts AS benchmark
+                  ON benchmark.id=observation.benchmark_account_id
+                WHERE observation.project_id=? AND observation.user_id=?
+                AND observation.target_account_id=?
+                AND benchmark.selection_status='selected'
+                ORDER BY observation.observed_at DESC,observation.id
+                LIMIT ?""",
+                (project_id, user_id, account_id, bounded_limit),
+            ).fetchall()
+        return {
+            "contract": "marketing.benchmark-operating-graph.v1",
+            "project_id": project_id,
+            "nodes": [_benchmark_record(row) for row in accounts],
+            "observations": [
+                _benchmark_observation_record(row) for row in observations
+            ],
+            "readiness": self.benchmark_readiness(
+                user_id=user_id,
+                account_id=account_id,
+                project_id=project_id,
+            ),
+            "authority": "evidence_backed_account_strategy_read_projection",
+        }
+
     def _mark_benchmark_ready_if_complete(
         self, *, user_id: str, account_id: str, project_id: str
     ) -> None:

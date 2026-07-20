@@ -107,6 +107,19 @@ test('stages a self-contained product runtime without editable checkout pointers
   assert.equal(result.manifest.productTree, 'a'.repeat(40))
   assert.equal(result.manifest.python.executable, 'python/bin/python3')
   assert.ok(fs.existsSync(path.join(result.output, 'agent', 'agent', 'marker.txt')))
+  assert.ok(
+    fs.existsSync(
+      path.join(
+        result.output,
+        'agent',
+        'optional-skills',
+        'creative',
+        'kanban-video-orchestrator',
+        'marker.txt'
+      )
+    )
+  )
+  assert.ok(fs.existsSync(path.join(result.output, 'agent', 'skills', 'marker.txt')))
   assert.equal(SOURCE_DIRS.includes('marketing_os'), false)
   assert.ok(fs.existsSync(path.join(result.output, 'site-packages', 'runtime_dependency.py')))
   assert.equal(fs.existsSync(path.join(result.output, 'site-packages', '__editable__.hermes_agent.pth')), false)

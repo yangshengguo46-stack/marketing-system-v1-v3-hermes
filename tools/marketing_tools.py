@@ -78,6 +78,46 @@ FINALIZE_OFFICIAL_VIDEO_SCHEMA = {
     },
 }
 
+PREFLIGHT_OFFICIAL_VIDEO_TREATMENT_SCHEMA = {
+    "name": "marketing_video_treatment_preflight",
+    "description": (
+        "Validate the Super Director's script-first treatment against locked account, "
+        "knowledge, graph, platform and evidence context. A passing receipt unlocks materials."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "execution_id": {"type": "string"},
+            "director_contract_path": {
+                "type": "string",
+                "default": "director-contract.json",
+            },
+        },
+        "required": ["execution_id"],
+    },
+}
+
+PREFLIGHT_OFFICIAL_VIDEO_CUT_SCHEMA = {
+    "name": "marketing_video_cut_preflight",
+    "description": (
+        "Evaluate the actual reviewed MP4 against its approved director treatment and bind "
+        "the decision to the file hash before Draft Box finalization."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "execution_id": {"type": "string"},
+            "final_video_path": {"type": "string"},
+            "review_path": {"type": "string", "default": "review.json"},
+            "director_contract_path": {
+                "type": "string",
+                "default": "director-contract.json",
+            },
+        },
+        "required": ["execution_id", "final_video_path"],
+    },
+}
+
 SEARCH_OFFICIAL_VIDEO_MATERIALS_SCHEMA = {
     "name": "marketing_video_material_search",
     "description": (
@@ -2317,6 +2357,18 @@ def _official_video_finalizer_available() -> bool:
 _official_video_finalizer_available._hermes_uncached = True
 
 
+def _official_video_direction_available() -> bool:
+    return (
+        os.environ.get("HERMES_PROFILE") == "marketing-video-director"
+        and bool(os.environ.get("HERMES_KANBAN_TASK"))
+        and bool(os.environ.get("HERMES_TENANT"))
+        and bool(os.environ.get("HERMES_KANBAN_WORKSPACE"))
+    )
+
+
+_official_video_direction_available._hermes_uncached = True
+
+
 def _official_video_materials_available() -> bool:
     return (
         os.environ.get("HERMES_PROFILE") == "marketing-video-material-scout"
@@ -2327,6 +2379,13 @@ def _official_video_materials_available() -> bool:
 
 
 _official_video_materials_available._hermes_uncached = True
+
+
+def _official_video_review_available() -> bool:
+    return _official_video_finalizer_available()
+
+
+_official_video_review_available._hermes_uncached = True
 
 
 def _official_video_repository() -> VideoKanbanExecutionRepository:
@@ -2410,6 +2469,21 @@ def _submit_official_video(args: dict, **kwargs) -> str:
         platforms=[platform],
         content_kind="faceless_video",
     )
+    try:
+        from agent.human_observer import HumanObserverReader
+
+        human_observer_projection = HumanObserverReader().projection(
+            namespace="global", limit=40
+        )
+    except Exception:
+        human_observer_projection = {
+            "contract": "human-observer-read-projection-v1",
+            "namespace": "global",
+            "interpretations": [],
+            "model_revisions": [],
+            "authority": "read_only_no_product_writeback",
+            "data_state": "unavailable_cold_start",
+        }
     execution = VideoKanbanExecutionRepository().submit(
         user_id=user_id,
         entity_id=entity_id,
@@ -2426,6 +2500,7 @@ def _submit_official_video(args: dict, **kwargs) -> str:
             "evidence_refs": evidence_refs,
             "account_context": account_context,
             "knowledge_context": knowledge_context,
+            "human_observer_projection": human_observer_projection,
             "target_duration": int(args.get("target_duration") or 60),
             "aspect_ratio": str(args.get("aspect_ratio") or "").strip(),
         },
@@ -2454,6 +2529,28 @@ def _finalize_official_video(args: dict, **_kwargs) -> str:
         rights_map_path=str(args.get("rights_map_path") or "rights-map.json"),
     )
     return json.dumps({"marketing_video_finalized": result}, ensure_ascii=False)
+
+
+def _preflight_official_video_treatment(args: dict, **_kwargs) -> str:
+    result = _official_video_repository().preflight_treatment(
+        execution_id=str(args.get("execution_id") or ""),
+        director_contract_path=str(
+            args.get("director_contract_path") or "director-contract.json"
+        ),
+    )
+    return json.dumps({"marketing_video_treatment_preflight": result}, ensure_ascii=False)
+
+
+def _preflight_official_video_cut(args: dict, **_kwargs) -> str:
+    result = _official_video_repository().preflight_cut(
+        execution_id=str(args.get("execution_id") or ""),
+        final_video_path=str(args.get("final_video_path") or ""),
+        review_path=str(args.get("review_path") or "review.json"),
+        director_contract_path=str(
+            args.get("director_contract_path") or "director-contract.json"
+        ),
+    )
+    return json.dumps({"marketing_video_cut_preflight": result}, ensure_ascii=False)
 
 
 def _search_official_video_materials(args: dict, **_kwargs) -> str:
@@ -2547,6 +2644,26 @@ registry.register(
     handler=_list_accounts,
     description="List connected Marketing OS accounts without exposing login secrets.",
     emoji="📣",
+)
+
+registry.register(
+    name="marketing_video_treatment_preflight",
+    toolset="marketing_video_direction",
+    schema=PREFLIGHT_OFFICIAL_VIDEO_TREATMENT_SCHEMA,
+    handler=_preflight_official_video_treatment,
+    check_fn=_official_video_direction_available,
+    description="Approve a script-first director treatment before material work.",
+    emoji="🎬",
+)
+
+registry.register(
+    name="marketing_video_cut_preflight",
+    toolset="marketing_video_review",
+    schema=PREFLIGHT_OFFICIAL_VIDEO_CUT_SCHEMA,
+    handler=_preflight_official_video_cut,
+    check_fn=_official_video_review_available,
+    description="Bind actual cut QA to the canonical preflight engine.",
+    emoji="🔬",
 )
 
 registry.register(

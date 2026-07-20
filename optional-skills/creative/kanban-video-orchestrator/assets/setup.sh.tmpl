@@ -14,6 +14,7 @@ PROJECT_SLUG="{{SLUG}}"
 WORKSPACE="{{WORKSPACE}}"
 TENANT="{{TENANT}}"
 BOARD="{{BOARD}}"
+BUNDLED_SKILLS_DIR="{{BUNDLED_SKILLS_DIR}}"
 
 # Kanban workers run under isolated Hermes profile homes. Keep Marketing OS
 # business state pointed at the canonical product store so private video tools
@@ -75,7 +76,7 @@ configure_profile() {
     local skills_json="$3"       # JSON array string, e.g. '["ascii-video"]'
     local model="$4"
     local provider_json="$5"
-    python3 - "$profile" "$toolsets_json" "$skills_json" "$model" "$provider_json" <<'PY'
+    python3 - "$profile" "$toolsets_json" "$skills_json" "$model" "$provider_json" "$BUNDLED_SKILLS_DIR" <<'PY'
 """Patch a Hermes profile config.yaml using PyYAML so we don't depend on the
 exact default-config string format. Validates the patch took effect and exits
 non-zero if anything's off."""
@@ -89,7 +90,7 @@ except ImportError:
     print("ERROR: PyYAML required. pip install pyyaml", file=sys.stderr)
     sys.exit(1)
 
-profile, toolsets_json, skills_json, model, provider_json = sys.argv[1:6]
+profile, toolsets_json, skills_json, model, provider_json, skills_dir = sys.argv[1:7]
 toolsets = json.loads(toolsets_json)
 skills = json.loads(skills_json)
 provider = json.loads(provider_json)
@@ -107,6 +108,14 @@ cfg["toolsets"] = toolsets
 cfg.setdefault("platform_toolsets", {})["cli"] = toolsets
 cfg.setdefault("skills", {})
 cfg["skills"]["always_load"] = skills
+external_dirs = [
+    str(item).strip()
+    for item in (cfg["skills"].get("external_dirs") or [])
+    if str(item).strip()
+]
+if skills_dir not in external_dirs:
+    external_dirs.append(skills_dir)
+cfg["skills"]["external_dirs"] = external_dirs
 if model and provider:
     # Volcengine's Responses-compatible endpoint rejects OpenAI's optional
     # reasoning.summary request field. Disabling the protocol dial does not
@@ -171,6 +180,8 @@ if after.get("platform_toolsets", {}).get("cli") != toolsets:
     errors.append(f"platform_toolsets.cli mismatch: {after.get('platform_toolsets')!r}")
 if after.get("skills", {}).get("always_load") != skills:
     errors.append(f"skills.always_load mismatch: {after.get('skills', {}).get('always_load')!r}")
+if skills_dir not in (after.get("skills", {}).get("external_dirs") or []):
+    errors.append("bundled skills directory was not configured")
 if model and after.get("model", {}).get("default") != model:
     errors.append(f"model mismatch: {after.get('model')!r}")
 if model and after.get("agent", {}).get("reasoning_effort") != "none":
@@ -230,6 +241,7 @@ chmod a-w \
     "$WORKSPACE/brief.md" \
     "$WORKSPACE/TEAM.md" \
     "$WORKSPACE/marketing-context.json" \
+    "$WORKSPACE/director-context.json" \
     "$WORKSPACE/PRODUCTION_RULES.md" \
     "$WORKSPACE/MANIFEST_CONTRACT.json" \
     "$WORKSPACE/taste/brand-guide.md" \
@@ -253,6 +265,10 @@ hermes kanban --board "$BOARD" create "Direct production of {{TITLE}}" \
 Read brief.md, TEAM.md, PRODUCTION_RULES.md, MANIFEST_CONTRACT.json, and taste/.
 
 Decompose into the team graph defined in TEAM.md.
+
+Every child task MUST copy the assignee's exact `skills` array from TEAM.md
+into `kanban_create`. The same list is pinned in that profile's
+`skills.always_load`; both declarations are intentional and must agree.
 
 All child tasks MUST use:
   workspace_kind="dir"

@@ -248,6 +248,9 @@ def render_team_md(plan: dict) -> str:
         lines.append(
             f"- `{t['profile']}` — {t['responsibilities']} ({skills})"
         )
+        lines.append(
+            f"  - Kanban task `skills`: `{json.dumps(t['skills'])}`"
+        )
     lines.extend(["", "## Task Graph", "", "```"])
 
     # Build a simple task graph based on conventions
@@ -477,6 +480,10 @@ def render_setup_sh(plan: dict, brief_md: str, team_md: str) -> str:
     out = out.replace("{{SLUG}}", plan["slug"])
     out = out.replace("{{TENANT}}", plan["tenant"])
     out = out.replace("{{BOARD}}", str(plan.get("board") or "default"))
+    out = out.replace(
+        "{{BUNDLED_SKILLS_DIR}}",
+        str(Path(__file__).resolve().parents[4] / "skills"),
+    )
     out = out.replace(
         "{{WORKSPACE}}",
         str(plan.get("workspace") or f"~/projects/video-pipeline/{plan['slug']}"),

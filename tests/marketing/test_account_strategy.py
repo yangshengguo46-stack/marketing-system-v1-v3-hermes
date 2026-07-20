@@ -250,6 +250,18 @@ def test_full_operating_model_is_versioned_evidence_backed_and_restart_safe(tmp_
     )
     assert readiness["ready"] is True
     assert "score" not in readiness
+    graph = strategy.read_benchmark_operating_graph(
+        user_id="default",
+        account_id="acct-1",
+        project_id=project["id"],
+    )
+    assert graph["contract"] == "marketing.benchmark-operating-graph.v1"
+    assert {item["id"] for item in graph["nodes"]} == {
+        item["id"] for item in benchmarks
+    }
+    assert len(graph["observations"]) == 6
+    assert graph["readiness"]["ready"] is True
+    assert graph["authority"] == "evidence_backed_account_strategy_read_projection"
     assert strategy.get_project(
         user_id="default", account_id="acct-1", project_id=project["id"]
     )["stage"] == "benchmark_graph_ready"

@@ -410,6 +410,7 @@ def build_video_treatment_preflight(
         if isinstance(params.get("account_context"), dict)
         else {}
     )
+    human_observer_context = _human_observer_context(params)
     has_audience = _has_audience_context({"account_context": account_context})
     prior_mode = _prior_mode(
         has_audience=has_audience,
@@ -606,6 +607,7 @@ def build_video_treatment_preflight(
                 if isinstance(item, dict) and item.get("id")
             ][:30],
         },
+        "human_observer_context": human_observer_context,
         "scores": preflight_scores,
         "treatment_features": {
             "hook_first_three_seconds": first_three_seconds,
@@ -663,6 +665,7 @@ def create_video_treatment_preflight(
             "public_prior": result["public_prior"],
             "personal_prior": result["personal_prior"],
             "treatment_features": result["treatment_features"],
+            "human_observer_context": result.get("human_observer_context"),
         },
         scores=result["scores"],
         decision={

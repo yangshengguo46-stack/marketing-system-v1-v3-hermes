@@ -3379,6 +3379,31 @@ def _parse_skills_argument(skills: str | list[str] | tuple[str, ...] | None) -> 
     return parsed
 
 
+def _session_skills(
+    skills: str | list[str] | tuple[str, ...] | None,
+    *,
+    ignore_rules: bool,
+) -> list[str]:
+    """Merge profile-pinned skills with explicit per-session skills.
+
+    Dedicated Kanban profiles declare their durable role capability under
+    ``skills.always_load``.  Per-task ``--skills`` remains additive and wins
+    ordering, while ``--ignore-rules`` deliberately disables both sources of
+    implicit guidance for troubleshooting.
+    """
+
+    explicit = _parse_skills_argument(skills)
+    if ignore_rules:
+        return explicit
+    configured = CLI_CONFIG.get("skills")
+    always_load = (
+        configured.get("always_load")
+        if isinstance(configured, dict)
+        else None
+    )
+    return _parse_skills_argument([*explicit, *_parse_skills_argument(always_load)])
+
+
 def save_config_value(key_path: str, value: any) -> bool:
     """
     Save a value to the active config file at the specified key path.
@@ -15326,7 +15351,7 @@ def main(
             from hermes_cli.tools_config import _get_platform_tools
             toolsets_list = sorted(_get_platform_tools(CLI_CONFIG, "cli"))
     
-    parsed_skills = _parse_skills_argument(skills)
+    parsed_skills = _session_skills(skills, ignore_rules=ignore_rules)
 
     # Create CLI instance
     cli = HermesCLI(

@@ -48,6 +48,189 @@ def _scope(paths: MarketingDataPaths) -> tuple[str, str]:
     return entity["id"], account["id"]
 
 
+def _video_plan(paths: MarketingDataPaths, account_id: str, *, topic: str) -> str:
+    return ContentAssetRepository(paths).save_production_plan(
+        user_id="default",
+        account_id=account_id,
+        plan={
+            "status": "planned",
+            "kind": "faceless_video",
+            "objective": topic,
+            "target_platforms": ["douyin"],
+            "constraints": {},
+            "audience_model": {"target_audience": "AI 创业者"},
+        },
+    )["plan_id"]
+
+
+def _approve_director_treatment(
+    repository: VideoKanbanExecutionRepository,
+    execution: dict,
+    *,
+    evidence_id: str,
+    evidence_quote: str,
+) -> dict:
+    workspace = Path(execution["workspace_path"])
+    projection = execution["execution"]
+    director_context = json.loads(
+        (workspace / "director-context.json").read_text(encoding="utf-8")
+    )
+    delivery = director_context["delivery"]
+    minimum_shots = int(projection["minimum_shots"])
+    target_duration = float(delivery["target_duration_seconds"])
+    shot_duration = target_duration / minimum_shots
+    shots = []
+    for index in range(minimum_shots):
+        shot_id = f"shot_{index + 1:02d}"
+        shots.append(
+            {
+                "id": shot_id,
+                "purpose": "用可验证画面推进论证",
+                "duration": shot_duration,
+                "narration_text": f"这是第 {index + 1} 个有证据的论证节拍。",
+                "visual_subject": "GPU server racks and AI builders",
+                "visual_query": "GPU server racks AI builders documentary",
+                "scene": "data center",
+                "style": "documentary",
+                "frame": "medium wide",
+                "camera": "slow push in",
+                "blocking": "subject remains in the center safe area",
+                "on_screen_text": f"证据 {index + 1}",
+                "composition_strategy": "inset_card",
+                "negative_conditions": ["unrelated generic office"],
+                "claim_evidence_refs": [evidence_id],
+                "claim_evidence_quotes": {evidence_id: evidence_quote},
+                "continuity_anchors": ["neutral warm palette"],
+                "pass_criteria": ["画面主体与当前旁白直接相关"],
+                "metric_hypothesis": {
+                    "intended_response": "继续观看",
+                    "observable_metric": "shot_retention",
+                    "failure_signal": "drop_off",
+                    "repair": "replace the visual proof",
+                },
+            }
+        )
+    knowledge_ids = [
+        str(item["id"])
+        for rows in (director_context.get("knowledge_bases") or {}).values()
+        for item in rows
+        if isinstance(item, dict) and item.get("id")
+    ]
+    graph_ids = [
+        str(item["id"])
+        for item in [
+            *((director_context.get("benchmark_operating_graph") or {}).get("nodes") or []),
+            *((director_context.get("benchmark_operating_graph") or {}).get("observations") or []),
+        ]
+        if isinstance(item, dict) and item.get("id")
+    ]
+    human_projection = director_context.get("human_observer_projection") or {}
+    human_ids = [
+        str(item["id"])
+        for item in [
+            *(human_projection.get("interpretations") or []),
+            *(human_projection.get("model_revisions") or []),
+        ]
+        if isinstance(item, dict) and item.get("id")
+    ]
+    treatment = {
+        "platform": execution["platform"],
+        "thesis": "先区分资本泡沫和长期技术价值",
+        "voiceover_script": "。".join(shot["narration_text"] for shot in shots),
+        "hook": "AI 真的是泡沫，还是我们混淆了两件事？",
+        "hook_hypothesis": {
+            "first_three_seconds": "AI 真的是泡沫，还是我们混淆了两件事？",
+            "tension": "估值泡沫不等于技术没有价值",
+        },
+        "target_duration": target_duration,
+        "aspect_ratio": delivery["aspect_ratio"],
+        "pacing": "evidence-led fast documentary",
+        "caption_style": "single-line safe-area captions",
+        "cta": "关注后续数据复盘",
+        "sound_strategy": {
+            "voice_style": "calm analytical",
+            "music_role": "low tension bed",
+            "sfx_cues": ["hook impact"],
+        },
+        "beat_sheet": [
+            {"shot_id": shot["id"], "purpose": shot["purpose"]} for shot in shots
+        ],
+        "claim_evidence_map": [
+            {"claim": "可验证的 AI 市场判断", "evidence_refs": [evidence_id]}
+        ],
+        "continuity_bible": {"palette": "neutral warm"},
+        "shot_list": shots,
+    }
+    contract = {
+        "contract": "marketing.video.director.v1",
+        "execution_id": execution["id"],
+        "platform": execution["platform"],
+        "topic": director_context["topic"],
+        "production_contract": {
+            "objective": "完成有证据的短视频",
+            "audience_state": "对 AI 泡沫论困惑",
+            "viewer_tension": "资本价格与技术价值混在一起",
+            "promise": "给出可操作的区分框架",
+            "proof": [evidence_id],
+            "placement": execution["platform"],
+            "action": "继续关注复盘",
+            "constraints": ["不得虚构"],
+            "primary_metric": "completion_rate",
+            "guardrails": ["exact evidence quotes"],
+        },
+        "knowledge_basis": {
+            "knowledge_entry_ids": knowledge_ids,
+            "benchmark_graph_ids": graph_ids,
+            "uses": [
+                {"source_id": item, "decision": "constrained the argument or visual plan"}
+                for item in [*knowledge_ids, *graph_ids]
+            ],
+        },
+        "human_observer_basis": {
+            "authority": "read_only_no_score_or_writeback",
+            "projection_ids": human_ids,
+            "uses": [
+                {"source_id": item, "decision": "formed a falsifiable audience question"}
+                for item in human_ids
+            ],
+            "cold_start": not human_ids,
+        },
+        "treatment": treatment,
+        "grounding_review": {
+            "unsupported_claims": [],
+            "stance_conflicts": [],
+            "invented_personal_proof": [],
+            "invented_offers": [],
+            "go": True,
+        },
+        "measurement_plan": {
+            "primary_metric": "completion_rate",
+            "shot_hypotheses": [shot["metric_hypothesis"] for shot in shots],
+        },
+    }
+    (workspace / "director-contract.json").write_text(
+        json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (workspace / "script.md").write_text(treatment["voiceover_script"], encoding="utf-8")
+    (workspace / "narration.json").write_text(
+        json.dumps({"segments": shots}, ensure_ascii=False), encoding="utf-8"
+    )
+    (workspace / "storyboard.json").write_text(
+        json.dumps({"shots": shots}, ensure_ascii=False), encoding="utf-8"
+    )
+    (workspace / "visual-spec.md").write_text(
+        "# Visual spec\n\nDocumentary evidence, safe-area captions.\n", encoding="utf-8"
+    )
+    receipt = repository.preflight_treatment(
+        execution_id=execution["id"],
+        actor_profile="marketing-video-director",
+        tenant=execution["tenant"],
+        kanban_task_id="task-director",
+    )
+    assert receipt["preflight_decision"]["go"] is True
+    return receipt
+
+
 class _Response:
     def __init__(self, payload, status_code=200, headers=None):
         self._payload = payload
@@ -149,6 +332,8 @@ def test_paid_video_execution_is_hard_stopped_outside_injected_tests(tmp_path):
 def test_submit_bootstraps_the_official_seven_profile_kanban(tmp_path, monkeypatch):
     paths = _paths(tmp_path)
     entity_id, account_id = _scope(paths)
+    plan_id = _video_plan(paths, account_id, topic="当前的 AI 是泡沫吗？")
+    evidence_quote = "Verified evidence for the AI bubble director contract."
 
     def runner(command, *, cwd):
         if command[0] == sys.executable:
@@ -172,11 +357,51 @@ def test_submit_bootstraps_the_official_seven_profile_kanban(tmp_path, monkeypat
         entity_id=entity_id,
         account_id=account_id,
         candidate_id="candidate-1",
-        plan_id="plan-1",
+        plan_id=plan_id,
         preflight_id="preflight-1",
         platform="douyin",
         topic="当前的 AI 是泡沫吗？",
-        context={"evidence_refs": ["evidence-1"], "target_duration": 60},
+        context={
+            "evidence_refs": ["evidence-1"],
+            "evidence_pack": [
+                {"id": "evidence-1", "excerpt": evidence_quote}
+            ],
+            "knowledge_context": {
+                "platform": [
+                    {
+                        "id": "knowledge-platform-1",
+                        "statement": "抖音开头应尽快兑现信息承诺。",
+                    }
+                ],
+                "market": [],
+                "account": [],
+                "content": [],
+                "authority_order": ["account", "platform", "market", "content"],
+            },
+            "account_context": {
+                "target_audience": "AI 创业者",
+                "lifecycle": {
+                    "benchmark_operating_graph": {
+                        "contract": "marketing.benchmark-operating-graph.v1",
+                        "nodes": [{"id": "benchmark-node-1", "role": "format_peer"}],
+                        "observations": [
+                            {"id": "benchmark-observation-1", "metric": "hook"}
+                        ],
+                        "authority": "evidence_backed_account_strategy_read_projection",
+                    }
+                },
+            },
+            "human_observer_projection": {
+                "contract": "human-observer-read-projection-v1",
+                "namespace": "global",
+                "interpretations": [
+                    {"id": "human-interpretation-1", "status": "candidate"}
+                ],
+                "model_revisions": [],
+                "authority": "read_only_no_product_writeback",
+            },
+            "target_duration": 60,
+        },
         command_runner=runner,
         model_probe=lambda: {
             "provider": "volcengine_ark",
@@ -204,6 +429,7 @@ def test_submit_bootstraps_the_official_seven_profile_kanban(tmp_path, monkeypat
         "brief.md",
         "TEAM.md",
         "marketing-context.json",
+        "director-context.json",
         "PRODUCTION_RULES.md",
         "MANIFEST_CONTRACT.json",
         "taste/brand-guide.md",
@@ -213,8 +439,8 @@ def test_submit_bootstraps_the_official_seven_profile_kanban(tmp_path, monkeypat
     assert manifest_contract["finalize"]["destination"] == "draft_box"
     assert len(plan["team"]) == 7
     assert {member["profile"] for member in plan["team"]} >= {
+        "marketing-video-coordinator",
         "marketing-video-director",
-        "marketing-video-showrunner",
         "marketing-video-material-scout",
         "marketing-video-voice",
         "marketing-video-renderer",
@@ -223,7 +449,7 @@ def test_submit_bootstraps_the_official_seven_profile_kanban(tmp_path, monkeypat
     }
     assert "marketing-video-dp" not in setup
     assert "marketing-video-renderer — render all locked storyboard scenes" in team
-    assert '--assignee "marketing-video-director"' in setup
+    assert '--assignee "marketing-video-coordinator"' in setup
     assert 'hermes kanban --board "$BOARD" create' in setup
     assert '\nhermes kanban create ' not in setup
     assert "doubao-seed-2-1-pro-260628" in setup
@@ -247,8 +473,16 @@ def test_submit_bootstraps_the_official_seven_profile_kanban(tmp_path, monkeypat
     assert next(
         member
         for member in plan["team"]
-        if member["profile"] == "marketing-video-showrunner"
+        if member["profile"] == "marketing-video-director"
     )["model"] == "doubao-seed-2-1-pro-260628"
+    assert next(
+        member
+        for member in plan["team"]
+        if member["profile"] == "marketing-video-director"
+    )["skills"] == ["marketing-super-director"]
+    assert resolve_toolset("marketing_video_direction") == [
+        "marketing_video_treatment_preflight"
+    ]
     assert "marketing_video_materials" in material_scout["toolsets"]
     assert set(resolve_toolset("marketing_video_materials")) == {
         "marketing_video_material_search",
@@ -259,6 +493,18 @@ def test_submit_bootstraps_the_official_seven_profile_kanban(tmp_path, monkeypat
         "marketing_video_material_freeze",
     }
     assert "local-secret" not in setup
+    director_context = json.loads(
+        (workspace / "director-context.json").read_text(encoding="utf-8")
+    )
+    assert director_context["knowledge_bases"]["platform"][0]["id"] == (
+        "knowledge-platform-1"
+    )
+    assert director_context["benchmark_operating_graph"]["observations"][0][
+        "id"
+    ] == "benchmark-observation-1"
+    assert director_context["human_observer_projection"]["interpretations"][0][
+        "id"
+    ] == "human-interpretation-1"
 
     observed = {}
 
@@ -267,6 +513,33 @@ def test_submit_bootstraps_the_official_seven_profile_kanban(tmp_path, monkeypat
         return {"status": "completed", "candidates": []}
 
     monkeypatch.setattr(MaterialSourcingRepository, "search", material_search)
+    with pytest.raises(PermissionError, match="treatment preflight"):
+        repository.search_materials(
+            execution_id=execution["id"],
+            shot_id="shot-01",
+            query="must not search before the script contract",
+            actor_profile="marketing-video-material-scout",
+            tenant=execution["tenant"],
+            kanban_task_id="material-task-before-treatment",
+        )
+    _approve_director_treatment(
+        repository,
+        execution,
+        evidence_id="evidence-1",
+        evidence_quote=evidence_quote,
+    )
+    director_contract = json.loads(
+        (workspace / "director-contract.json").read_text(encoding="utf-8")
+    )
+    ignored_knowledge = json.loads(json.dumps(director_contract))
+    ignored_knowledge["knowledge_basis"]["knowledge_entry_ids"] = []
+    with pytest.raises(ValueError, match="ignored available governed knowledge"):
+        repository._validate_director_contract(
+            execution=execution,
+            workspace=workspace,
+            contract=ignored_knowledge,
+            director_context=director_context,
+        )
     searched = repository.search_materials(
         execution_id=execution["id"],
         shot_id="shot-01",
@@ -311,7 +584,7 @@ def test_submit_bootstraps_the_official_seven_profile_kanban(tmp_path, monkeypat
         entity_id=entity_id,
         account_id=account_id,
         candidate_id="candidate-1",
-        plan_id="plan-1",
+        plan_id=plan_id,
         preflight_id="preflight-1",
         platform="douyin",
         topic="当前的 AI 是泡沫吗？",
@@ -339,6 +612,8 @@ def test_material_freeze_requires_a_passing_grounded_scout_inspection(
 ):
     paths = _paths(tmp_path)
     entity_id, account_id = _scope(paths)
+    plan_id = _video_plan(paths, account_id, topic="AI 算力军备竞赛")
+    evidence_quote = "Verified evidence for the GPU server material test."
 
     def runner(command, *, cwd):
         if command[0] == sys.executable:
@@ -357,11 +632,16 @@ def test_material_freeze_requires_a_passing_grounded_scout_inspection(
         entity_id=entity_id,
         account_id=account_id,
         candidate_id="candidate-material-inspection",
-        plan_id="plan-material-inspection",
+        plan_id=plan_id,
         preflight_id="preflight-material-inspection",
         platform="douyin",
         topic="AI 算力军备竞赛",
-        context={"evidence_refs": ["evidence-1"]},
+        context={
+            "evidence_refs": ["evidence-1"],
+            "evidence_pack": [
+                {"id": "evidence-1", "excerpt": evidence_quote}
+            ],
+        },
         command_runner=runner,
         model_probe=lambda: {
             "provider": "volcengine_ark",
@@ -387,6 +667,12 @@ def test_material_freeze_requires_a_passing_grounded_scout_inspection(
         provider_asset_id="gpu-server-rack-1",
         source_type="user_upload",
         rights_status="user_confirmed",
+    )
+    _approve_director_treatment(
+        repository,
+        execution,
+        evidence_id="evidence-1",
+        evidence_quote=evidence_quote,
     )
     search = repository.search_materials(
         execution_id=execution["id"],
@@ -886,6 +1172,12 @@ def test_official_reviewer_finalizes_a_real_mp4_to_draft_box_idempotently(tmp_pa
         },
     )
     workspace = Path(execution["workspace_path"])
+    treatment_receipt = _approve_director_treatment(
+        repository,
+        execution,
+        evidence_id=evidence["id"],
+        evidence_quote="Verified evidence for an AI bubble short-video test.",
+    )
     reviewer_state = paths.user_data / "profiles/marketing-video-reviewer/state.db"
     reviewer_state.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(reviewer_state) as profile_db:
@@ -946,7 +1238,8 @@ def test_official_reviewer_finalizes_a_real_mp4_to_draft_box_idempotently(tmp_pa
         timeout=30,
     )
     assert rendered.returncode == 0, rendered.stderr
-    duration = repository._probe_final_video(final_video)["duration_seconds"]
+    technical = repository._probe_final_video(final_video)
+    duration = technical["duration_seconds"]
     scenes = []
     for index in range(4):
         start = round(duration * index / 4, 3)
@@ -1085,6 +1378,28 @@ def test_official_reviewer_finalizes_a_real_mp4_to_draft_box_idempotently(tmp_pa
         "composition_pass": True,
         "rights_pass": True,
         "repair_rounds": 1,
+        "observed_video_sha256": technical["sha256"],
+        "cut_observations": {
+            "playable": True,
+            "hook_first_three_seconds_visible": True,
+            "treatment_parity": True,
+            "caption_readability": True,
+            "material_relevance": True,
+            "evidence_alignment": True,
+            "audio_present": True,
+            "audio_sync": True,
+            "ending_cta_present": True,
+            "scores": {
+                "audience_fit": 0.8,
+                "platform_fit": 0.85,
+                "account_fit": 0.7,
+                "emotional_pull": 0.7,
+                "pacing": 0.8,
+                "information_density": 0.75,
+                "evidence_alignment": 0.9,
+            },
+            "issues": [],
+        },
     }
     for name, payload in (
         ("delivery.json", delivery),
@@ -1095,6 +1410,15 @@ def test_official_reviewer_finalizes_a_real_mp4_to_draft_box_idempotently(tmp_pa
         (workspace / name).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
+
+    cut_receipt = repository.preflight_cut(
+        execution_id=execution["id"],
+        final_video_path="output/final.mp4",
+        actor_profile="marketing-video-reviewer",
+        tenant=execution["tenant"],
+        kanban_task_id="task-reviewer",
+    )
+    assert cut_receipt["preflight_decision"]["go"] is True
 
     finalized = repository.finalize(
         execution_id=execution["id"],
@@ -1115,6 +1439,27 @@ def test_official_reviewer_finalizes_a_real_mp4_to_draft_box_idempotently(tmp_pa
     assert finalized["production_id"] == repeated["production_id"]
     assert finalized["output_asset_id"] == repeated["output_asset_id"]
     assert repository.get(execution["id"])["status"] == "completed"
+    final_draft = content.get(
+        asset_id=finalized["output_asset_id"],
+        user_id="default",
+        account_id=account_id,
+    )
+    final_content = final_draft["content"]
+    assert final_content["director_contract"]["measurement_plan"][
+        "primary_metric"
+    ] == "completion_rate"
+    assert final_content["production"]["video_ir"]["preflight_lineage"] == {
+        "source": preflight["id"],
+        "treatment": treatment_receipt["preflight_id"],
+        "cut": cut_receipt["preflight_id"],
+    }
+    loop = OperatingLoopRepository(paths)
+    assert loop.get_preflight(treatment_receipt["preflight_id"])["status"] == (
+        "used_for_action"
+    )
+    assert loop.get_preflight(cut_receipt["preflight_id"])["status"] == (
+        "used_for_action"
+    )
     canonical_delivery = json.loads(
         (workspace / "delivery.json").read_text(encoding="utf-8")
     )

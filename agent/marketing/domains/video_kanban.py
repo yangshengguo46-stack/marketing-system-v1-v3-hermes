@@ -31,6 +31,7 @@ from agent.marketing.domains.storage import MarketingDomainRepository
 
 
 VIDEO_EXECUTION_VERSION = "marketing.video.execution.v2"
+DIRECTOR_CONTRACT_VERSION = "marketing.video.director.v1"
 # Emergency owner-level cost stop. This is intentionally not a user setting:
 # production cannot issue paid model/TTS calls until a pre-call durable budget
 # reservation is implemented and this code-level interlock is reviewed.
@@ -51,8 +52,8 @@ DOUBAO_MINI_INPUT_CNY_PER_MILLION = 0.2
 DOUBAO_MINI_CACHE_HIT_CNY_PER_MILLION = 0.04
 DOUBAO_MINI_OUTPUT_CNY_PER_MILLION = 2.0
 OFFICIAL_VIDEO_PROFILES = (
+    "marketing-video-coordinator",
     "marketing-video-director",
-    "marketing-video-showrunner",
     "marketing-video-material-scout",
     "marketing-video-voice",
     "marketing-video-renderer",
@@ -61,7 +62,6 @@ OFFICIAL_VIDEO_PROFILES = (
 )
 PRO_REASONING_PROFILES = frozenset({
     "marketing-video-director",
-    "marketing-video-showrunner",
     "marketing-video-editor",
     "marketing-video-reviewer",
 })
@@ -70,6 +70,7 @@ LOCKED_WORKSPACE_INPUTS = (
     "brief.md",
     "TEAM.md",
     "marketing-context.json",
+    "director-context.json",
     "PRODUCTION_RULES.md",
     "MANIFEST_CONTRACT.json",
     "taste/brand-guide.md",
@@ -471,6 +472,22 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
         (workspace / "marketing-context.json").write_text(
             json.dumps(_redact(context), ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        (workspace / "director-context.json").write_text(
+            json.dumps(
+                self._director_context(
+                    execution_id=execution_id,
+                    topic=topic,
+                    platform=platform,
+                    duration=duration,
+                    aspect=aspect,
+                    resolution=resolution,
+                    context=context,
+                ),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         (workspace / "PRODUCTION_RULES.md").write_text(
             self._production_rules(
                 execution_id=execution_id,
@@ -561,6 +578,415 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
         if row is None:
             raise KeyError("video execution not found")
         return _record(row)
+
+    def preflight_treatment(
+        self,
+        *,
+        execution_id: str,
+        director_contract_path: str = "director-contract.json",
+        actor_profile: str | None = None,
+        tenant: str | None = None,
+        kanban_task_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate the Super Director's contract in the canonical preflight owner."""
+
+        from agent.marketing.intelligence.production_preflight import (
+            create_video_treatment_preflight,
+        )
+        from agent.marketing.intelligence.store import OperatingLoopRepository
+
+        execution, workspace, task_id = self._require_dispatched_role(
+            execution_id=execution_id,
+            expected_profile="marketing-video-director",
+            actor_profile=actor_profile,
+            tenant=tenant,
+            kanban_task_id=kanban_task_id,
+        )
+        self._validate_locked_inputs(execution, workspace)
+        contract_path = self._workspace_file(workspace, director_contract_path)
+        if not contract_path.is_file():
+            raise ValueError("director-contract.json is required before treatment preflight")
+        for relative in (
+            "script.md",
+            "narration.json",
+            "storyboard.json",
+            "visual-spec.md",
+        ):
+            if not (workspace / relative).is_file():
+                raise ValueError(f"director artifact is missing: {relative}")
+        contract = self._read_workspace_json(workspace, director_contract_path)
+        contract_sha = hashlib.sha256(contract_path.read_bytes()).hexdigest()
+        existing = (execution.get("execution") or {}).get("treatment_preflight")
+        receipt_path = workspace / "treatment-preflight.json"
+        if (
+            isinstance(existing, dict)
+            and existing.get("director_contract_sha256") == contract_sha
+            and receipt_path.is_file()
+        ):
+            return self._read_workspace_json(workspace, "treatment-preflight.json")
+
+        director_context = self._read_workspace_json(workspace, "director-context.json")
+        marketing_context = self._read_workspace_json(workspace, "marketing-context.json")
+        self._validate_director_contract(
+            execution=execution,
+            workspace=workspace,
+            contract=contract,
+            director_context=director_context,
+        )
+        result = create_video_treatment_preflight(
+            OperatingLoopRepository(self.paths),
+            {
+                "user_id": execution["user_id"],
+                "account_id": execution["account_id"],
+                "plan_id": execution["plan_id"],
+                "session_id": task_id,
+                "platform": execution["platform"],
+                "treatment": contract["treatment"],
+                "evidence_refs": list(
+                    (execution.get("execution") or {}).get("evidence_refs") or []
+                ),
+                "knowledge_context": marketing_context.get("knowledge_context") or {},
+                "account_context": marketing_context.get("account_context") or {},
+                "human_observer_projection": director_context.get(
+                    "human_observer_projection"
+                ) or {},
+                "grounding_review": contract["grounding_review"],
+            },
+        )
+        receipt = {
+            **result,
+            "contract": VIDEO_EXECUTION_VERSION,
+            "director_contract": DIRECTOR_CONTRACT_VERSION,
+            "execution_id": execution_id,
+            "kanban_task_id": task_id,
+            "director_contract_sha256": contract_sha,
+            "recorded_at": _now(),
+        }
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        self._store_execution_gate(
+            execution_id,
+            "treatment_preflight",
+            {
+                "preflight_id": result["preflight_id"],
+                "go": result["preflight_decision"].get("go") is True,
+                "status": result["preflight_decision"].get("status"),
+                "director_contract_sha256": contract_sha,
+                "receipt_path": "treatment-preflight.json",
+                "kanban_task_id": task_id,
+            },
+        )
+        return receipt
+
+    def preflight_cut(
+        self,
+        *,
+        execution_id: str,
+        final_video_path: str,
+        review_path: str = "review.json",
+        director_contract_path: str = "director-contract.json",
+        actor_profile: str | None = None,
+        tenant: str | None = None,
+        kanban_task_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Bind actual cut observations to the canonical cut preflight."""
+
+        from agent.marketing.intelligence.production_preflight import (
+            create_video_cut_preflight,
+        )
+        from agent.marketing.intelligence.store import OperatingLoopRepository
+
+        execution, workspace, task_id = self._require_dispatched_role(
+            execution_id=execution_id,
+            expected_profile="marketing-video-reviewer",
+            actor_profile=actor_profile,
+            tenant=tenant,
+            kanban_task_id=kanban_task_id,
+        )
+        self._validate_locked_inputs(execution, workspace)
+        treatment_gate = self._require_treatment_gate(execution, workspace)
+        final_path = self._workspace_file(workspace, final_video_path)
+        if final_path.suffix.lower() != ".mp4" or not final_path.is_file():
+            raise ValueError("cut preflight requires an existing MP4 in the workspace")
+        review_file = self._workspace_file(workspace, review_path)
+        review = self._read_workspace_json(workspace, review_path)
+        observations = review.get("cut_observations")
+        if not isinstance(observations, dict):
+            raise ValueError("review.json requires cut_observations from the actual preview")
+        technical = self._probe_final_video(final_path)
+        video_sha = technical["sha256"]
+        if str(review.get("observed_video_sha256") or "") != video_sha:
+            raise ValueError("review observations are not bound to the current final MP4")
+        contract = self._read_workspace_json(workspace, director_contract_path)
+        expected_resolution = str((execution.get("execution") or {}).get("resolution") or "")
+        resolution_ok = not expected_resolution or (
+            f"{technical['width']}x{technical['height']}" == expected_resolution
+        )
+        technical_qa = {
+            "disposition": (
+                "ready"
+                if technical["duration_seconds"] > 0
+                and technical["audio_streams"] > 0
+                and resolution_ok
+                else "blocked"
+            ),
+            **technical,
+        }
+        review_sha = hashlib.sha256(review_file.read_bytes()).hexdigest()
+        existing = (execution.get("execution") or {}).get("cut_preflight")
+        receipt_path = workspace / "cut-preflight.json"
+        if (
+            isinstance(existing, dict)
+            and existing.get("final_video_sha256") == video_sha
+            and existing.get("review_sha256") == review_sha
+            and receipt_path.is_file()
+        ):
+            return self._read_workspace_json(workspace, "cut-preflight.json")
+        result = create_video_cut_preflight(
+            OperatingLoopRepository(self.paths),
+            {
+                "user_id": execution["user_id"],
+                "account_id": execution["account_id"],
+                "plan_id": execution["plan_id"],
+                "session_id": task_id,
+                "platform": execution["platform"],
+                "treatment": contract["treatment"],
+                "visual_review": observations,
+                "technical_qa": technical_qa,
+                "audio_expected": True,
+            },
+        )
+        receipt = {
+            **result,
+            "contract": VIDEO_EXECUTION_VERSION,
+            "execution_id": execution_id,
+            "kanban_task_id": task_id,
+            "treatment_preflight_id": treatment_gate["preflight_id"],
+            "final_video_sha256": video_sha,
+            "review_sha256": review_sha,
+            "recorded_at": _now(),
+        }
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        self._store_execution_gate(
+            execution_id,
+            "cut_preflight",
+            {
+                "preflight_id": result["preflight_id"],
+                "go": result["preflight_decision"].get("go") is True,
+                "status": result["preflight_decision"].get("status"),
+                "treatment_preflight_id": treatment_gate["preflight_id"],
+                "final_video_sha256": video_sha,
+                "review_sha256": review_sha,
+                "receipt_path": "cut-preflight.json",
+                "kanban_task_id": task_id,
+            },
+        )
+        return receipt
+
+    def _store_execution_gate(
+        self, execution_id: str, key: str, value: dict[str, Any]
+    ) -> None:
+        with self._transaction() as db:
+            row = db.execute(
+                "SELECT execution_json FROM marketing_video_executions WHERE id=?",
+                (execution_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError("video execution not found")
+            projection = json.loads(row["execution_json"] or "{}")
+            projection[key] = value
+            db.execute(
+                """UPDATE marketing_video_executions
+                SET execution_json=?,updated_at=? WHERE id=?""",
+                (_json(projection), _now(), execution_id),
+            )
+
+    @classmethod
+    def _validate_director_contract(
+        cls,
+        *,
+        execution: dict[str, Any],
+        workspace: Path,
+        contract: dict[str, Any],
+        director_context: dict[str, Any],
+    ) -> None:
+        required = (
+            "production_contract",
+            "knowledge_basis",
+            "human_observer_basis",
+            "treatment",
+            "grounding_review",
+            "measurement_plan",
+        )
+        if contract.get("contract") != DIRECTOR_CONTRACT_VERSION:
+            raise ValueError("unsupported director contract version")
+        if str(contract.get("execution_id") or "") != execution["id"]:
+            raise ValueError("director contract belongs to another execution")
+        if str(contract.get("platform") or "") != execution["platform"]:
+            raise ValueError("director contract platform does not match the execution")
+        if any(not isinstance(contract.get(key), dict) for key in required):
+            raise ValueError("director contract is missing a required object")
+        treatment = contract["treatment"]
+        shots = treatment.get("shot_list")
+        minimum = int((execution.get("execution") or {}).get("minimum_shots") or 1)
+        if not isinstance(shots, list) or len(shots) < minimum:
+            raise ValueError("director treatment has fewer shots than the locked minimum")
+        shot_ids = [str(item.get("id") or "").strip() for item in shots if isinstance(item, dict)]
+        if len(shot_ids) != len(shots) or any(not item for item in shot_ids):
+            raise ValueError("every director shot requires a stable id")
+        if len(set(shot_ids)) != len(shot_ids):
+            raise ValueError("director shot ids must be unique")
+        required_shot_fields = {
+            "purpose",
+            "duration",
+            "narration_text",
+            "visual_subject",
+            "visual_query",
+            "scene",
+            "style",
+            "frame",
+            "camera",
+            "blocking",
+            "on_screen_text",
+            "composition_strategy",
+            "negative_conditions",
+            "claim_evidence_refs",
+            "claim_evidence_quotes",
+            "continuity_anchors",
+            "pass_criteria",
+            "metric_hypothesis",
+        }
+        for shot in shots:
+            if not isinstance(shot, dict) or not required_shot_fields <= set(shot):
+                raise ValueError("every director shot needs the complete production contract")
+            if shot.get("composition_strategy") not in {
+                "full_bleed",
+                "inset_card",
+                "letterbox",
+            }:
+                raise ValueError("director shot has unsupported composition strategy")
+        grounding = contract["grounding_review"]
+        finding_fields = (
+            "unsupported_claims",
+            "stance_conflicts",
+            "invented_personal_proof",
+            "invented_offers",
+        )
+        if grounding.get("go") is not True or any(grounding.get(key) for key in finding_fields):
+            raise ValueError("director grounding review contains unresolved findings")
+        cls._validate_claim_evidence_quotes(
+            execution,
+            workspace,
+            {"scenes": shots},
+        )
+        allowed_knowledge = {
+            str(item.get("id"))
+            for base in (director_context.get("knowledge_bases") or {}).values()
+            for item in (base or [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        used_knowledge = {
+            str(item)
+            for item in (contract["knowledge_basis"].get("knowledge_entry_ids") or [])
+            if str(item)
+        }
+        if allowed_knowledge and not used_knowledge:
+            raise ValueError("director contract ignored available governed knowledge")
+        if not used_knowledge.issubset(allowed_knowledge):
+            raise ValueError("director contract cites knowledge outside the locked context")
+        graph = director_context.get("benchmark_operating_graph") or {}
+        allowed_graph = {
+            str(item.get("id"))
+            for item in [*(graph.get("nodes") or []), *(graph.get("observations") or [])]
+            if isinstance(item, dict) and item.get("id")
+        }
+        used_graph = {
+            str(item)
+            for item in (contract["knowledge_basis"].get("benchmark_graph_ids") or [])
+            if str(item)
+        }
+        if allowed_graph and not used_graph:
+            raise ValueError("director contract ignored the available benchmark graph")
+        if not used_graph.issubset(allowed_graph):
+            raise ValueError("director contract cites benchmark graph data outside the locked context")
+        knowledge_uses = contract["knowledge_basis"].get("uses") or []
+        used_source_ids = {
+            str(item.get("source_id") or "")
+            for item in knowledge_uses
+            if isinstance(item, dict)
+            and item.get("source_id")
+            and str(item.get("decision") or "").strip()
+        }
+        if not (used_knowledge | used_graph).issubset(used_source_ids):
+            raise ValueError("director knowledge citations require an explicit creative use")
+
+        human_basis = contract["human_observer_basis"]
+        if human_basis.get("authority") != "read_only_no_score_or_writeback":
+            raise ValueError("human observer basis must remain read-only")
+        human_projection = director_context.get("human_observer_projection") or {}
+        allowed_human = {
+            str(item.get("id"))
+            for item in [
+                *(human_projection.get("interpretations") or []),
+                *(human_projection.get("model_revisions") or []),
+            ]
+            if isinstance(item, dict) and item.get("id")
+        }
+        used_human = {
+            str(item)
+            for item in (human_basis.get("projection_ids") or [])
+            if str(item)
+        }
+        if allowed_human and not used_human:
+            raise ValueError("director contract ignored available human observer projections")
+        if not used_human.issubset(allowed_human):
+            raise ValueError("director contract cites human observations outside the locked context")
+        human_use_ids = {
+            str(item.get("source_id") or "")
+            for item in (human_basis.get("uses") or [])
+            if isinstance(item, dict)
+            and item.get("source_id")
+            and str(item.get("decision") or "").strip()
+        }
+        if not used_human.issubset(human_use_ids):
+            raise ValueError("human observer citations require an explicit hypothesis use")
+        if not allowed_human and human_basis.get("cold_start") is not True:
+            raise ValueError("empty human observer input must be declared as cold start")
+
+    @staticmethod
+    def _require_treatment_gate(
+        execution: dict[str, Any], workspace: Path
+    ) -> dict[str, Any]:
+        gate = (execution.get("execution") or {}).get("treatment_preflight")
+        if not isinstance(gate, dict) or gate.get("go") is not True:
+            raise PermissionError(
+                "material work is locked until the director treatment preflight passes"
+            )
+        contract_path = workspace / "director-contract.json"
+        receipt_path = workspace / str(gate.get("receipt_path") or "")
+        if not contract_path.is_file() or not receipt_path.is_file():
+            raise ValueError("treatment preflight artifacts are missing")
+        actual_sha = hashlib.sha256(contract_path.read_bytes()).hexdigest()
+        if actual_sha != str(gate.get("director_contract_sha256") or ""):
+            raise ValueError("director contract changed after treatment preflight")
+        return gate
+
+    @staticmethod
+    def _require_cut_gate(
+        execution: dict[str, Any], workspace: Path, *, final_video_sha256: str
+    ) -> dict[str, Any]:
+        gate = (execution.get("execution") or {}).get("cut_preflight")
+        if not isinstance(gate, dict) or gate.get("go") is not True:
+            raise PermissionError("finalization is locked until cut preflight passes")
+        if str(gate.get("final_video_sha256") or "") != final_video_sha256:
+            raise ValueError("cut preflight is not bound to the current final video")
+        receipt_path = workspace / str(gate.get("receipt_path") or "")
+        if not receipt_path.is_file():
+            raise ValueError("cut preflight receipt is missing")
+        return gate
 
     def search_materials(
         self,
@@ -1056,6 +1482,13 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
         active_workspace = str(os.environ.get("HERMES_KANBAN_WORKSPACE") or "").strip()
         if active_workspace and Path(active_workspace).resolve() != workspace:
             raise PermissionError("video tool workspace does not match the execution")
+        if expected_profile == "marketing-video-material-scout":
+            treatment_gate = self._require_treatment_gate(execution, workspace)
+            from agent.marketing.intelligence.store import OperatingLoopRepository
+
+            OperatingLoopRepository(self.paths).mark_preflight_used(
+                str(treatment_gate["preflight_id"])
+            )
         return execution, workspace, task_id
 
     def reconcile_scope(self, *, user_id: str, account_id: str) -> None:
@@ -1528,6 +1961,21 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
         )
         self._validate_material_inspections(execution, manifests["materials"])
         technical = self._probe_final_video(final_path)
+        cut_gate = self._require_cut_gate(
+            execution,
+            workspace,
+            final_video_sha256=technical["sha256"],
+        )
+        director_contract = self._read_workspace_json(
+            workspace, "director-contract.json"
+        )
+        treatment_gate = self._require_treatment_gate(execution, workspace)
+        OperatingLoopRepository(self.paths).mark_preflight_used(
+            str(treatment_gate["preflight_id"])
+        )
+        OperatingLoopRepository(self.paths).mark_preflight_used(
+            str(cut_gate["preflight_id"])
+        )
         expected_resolution = str((execution.get("execution") or {}).get("resolution") or "")
         if expected_resolution and f"{technical['width']}x{technical['height']}" != expected_resolution:
             raise ValueError("final video resolution does not match the locked brief")
@@ -1560,6 +2008,13 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
                 "execution_id": execution_id,
                 "root_task_id": execution.get("root_task_id"),
                 "review_task_id": task_id,
+                "treatment_preflight_id": (
+                    treatment_gate.get("preflight_id")
+                ),
+                "cut_preflight_id": cut_gate.get("preflight_id"),
+                "knowledge_basis": director_contract["knowledge_basis"],
+                "human_observer_basis": director_contract["human_observer_basis"],
+                "measurement_plan": director_contract["measurement_plan"],
                 "review": manifests["review"],
                 "rights_map": manifests["rights"],
             },
@@ -1580,6 +2035,16 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
                     "execution_id": execution_id,
                     "tenant": execution["tenant"],
                     "root_task_id": execution.get("root_task_id"),
+                    "source_preflight_id": execution["preflight_id"],
+                    "treatment_preflight_id": treatment_gate["preflight_id"],
+                    "cut_preflight_id": cut_gate["preflight_id"],
+                },
+                "director_contract": {
+                    "contract": director_contract["contract"],
+                    "production_contract": director_contract["production_contract"],
+                    "knowledge_basis": director_contract["knowledge_basis"],
+                    "human_observer_basis": director_contract["human_observer_basis"],
+                    "measurement_plan": director_contract["measurement_plan"],
                 },
                 "video_direction": manifests["delivery"].get("video_direction") or {},
                 "voiceover_script": manifests["delivery"].get("voiceover_script") or "",
@@ -1591,6 +2056,14 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
                 "material_manifest": manifests["materials"],
                 "rights_map": manifests["rights"],
                 "review": manifests["review"],
+                "prediction": {
+                    "basis": [
+                        f"preflight:{execution['preflight_id']}",
+                        f"treatment_preflight:{treatment_gate['preflight_id']}",
+                        f"cut_preflight:{cut_gate['preflight_id']}",
+                    ],
+                    "causal_measurement_plan": director_contract["measurement_plan"],
+                },
             },
             topic=str(manifests["delivery"].get("topic") or ""),
             hook=str(manifests["delivery"].get("hook") or ""),
@@ -1647,6 +2120,16 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
                 "provider": "volcengine_doubao_speech_2",
             },
             "review": manifests["review"],
+            "director_contract": {
+                "knowledge_basis": director_contract["knowledge_basis"],
+                "human_observer_basis": director_contract["human_observer_basis"],
+                "measurement_plan": director_contract["measurement_plan"],
+            },
+            "preflight_lineage": {
+                "source": execution["preflight_id"],
+                "treatment": treatment_gate["preflight_id"],
+                "cut": cut_gate["preflight_id"],
+            },
         }
         edl = {
             "version": "marketing.faceless_video.edl.v1",
@@ -1675,6 +2158,14 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
             "budget": execution.get("budget") or {},
             "technical": technical,
             "repair_rounds": manifests["review"].get("repair_rounds"),
+            "preflight_lineage": {
+                "source": execution["preflight_id"],
+                "treatment": treatment_gate["preflight_id"],
+                "cut": cut_gate["preflight_id"],
+            },
+            "knowledge_basis": director_contract["knowledge_basis"],
+            "human_observer_basis": director_contract["human_observer_basis"],
+            "measurement_plan": director_contract["measurement_plan"],
             "model_receipts": manifests["delivery"].get("model_receipts") or [],
             "tool_receipts": manifests["delivery"].get("tool_receipts") or [],
             "material_receipts": manifests["materials"].get("receipts") or [],
@@ -2154,6 +2645,113 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
         }
 
     @staticmethod
+    def _director_context(
+        *,
+        execution_id: str,
+        topic: str,
+        platform: str,
+        duration: int,
+        aspect: str,
+        resolution: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Project governed product truth into one locked creative brief."""
+
+        knowledge = (
+            context.get("knowledge_context")
+            if isinstance(context.get("knowledge_context"), dict)
+            else {}
+        )
+        account = (
+            context.get("account_context")
+            if isinstance(context.get("account_context"), dict)
+            else {}
+        )
+        lifecycle = account.get("lifecycle") if isinstance(account.get("lifecycle"), dict) else {}
+        benchmark_graph = (
+            lifecycle.get("benchmark_operating_graph")
+            if isinstance(lifecycle.get("benchmark_operating_graph"), dict)
+            else {
+                "contract": "marketing.benchmark-operating-graph.v1",
+                "nodes": [],
+                "observations": [],
+                "authority": "evidence_backed_account_strategy_read_projection",
+            }
+        )
+
+        def knowledge_rows(base: str) -> list[dict[str, Any]]:
+            rows = knowledge.get(base) if isinstance(knowledge.get(base), list) else []
+            projected: list[dict[str, Any]] = []
+            for item in rows[:60]:
+                if not isinstance(item, dict):
+                    continue
+                projected.append({
+                    key: item.get(key)
+                    for key in (
+                        "id",
+                        "knowledge_base",
+                        "platform",
+                        "content_kind",
+                        "topic",
+                        "statement",
+                        "source_kind",
+                        "source_ref",
+                        "evidence_refs",
+                        "confidence",
+                        "version",
+                        "valid_from",
+                        "valid_to",
+                    )
+                    if item.get(key) not in (None, "", [], {})
+                })
+            return projected
+
+        topic_brief = (
+            context.get("topic_brief")
+            if isinstance(context.get("topic_brief"), dict)
+            else {}
+        )
+        return _redact({
+            "contract": "marketing.video.director-context.v1",
+            "execution_id": execution_id,
+            "topic": topic,
+            "platform": platform,
+            "delivery": {
+                "target_duration_seconds": duration,
+                "aspect_ratio": aspect,
+                "resolution": resolution,
+                "destination": "draft_box",
+            },
+            "topic_brief": topic_brief,
+            "evidence_allowlist": list(context.get("evidence_pack") or []),
+            "signal_refs": list(context.get("signal_refs") or []),
+            "account_model": account,
+            "platform_profile": context.get("platform_profile") or {},
+            "platform_blueprint": context.get("platform_blueprint") or {},
+            "production_target": context.get("production_target") or {},
+            "lane_order": context.get("lane_order") or {},
+            "origin_preflight": context.get("origin_preflight") or {},
+            "knowledge_bases": {
+                base: knowledge_rows(base)
+                for base in ("platform", "market", "account", "content")
+            },
+            "knowledge_authority_order": list(knowledge.get("authority_order") or []),
+            "benchmark_operating_graph": benchmark_graph,
+            "human_observer_projection": context.get("human_observer_projection") or {
+                "contract": "human-observer-read-projection-v1",
+                "interpretations": [],
+                "model_revisions": [],
+                "authority": "read_only_no_product_writeback",
+            },
+            "epistemic_rules": [
+                "knowledge and graph inputs are read-only governed projections",
+                "human observer hypotheses never become diagnoses or observed motives",
+                "model inference is a reversible creative decision, not knowledge truth",
+                "every factual claim must preserve an allowed evidence id and exact quote",
+            ],
+        })
+
+    @staticmethod
     def _official_plan(
         *,
         execution_id: str,
@@ -2177,28 +2775,29 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
         }
         members = [
             {
-                "profile": "marketing-video-director",
+                "profile": "marketing-video-coordinator",
                 "role": "director",
                 "toolsets": ["kanban", "file"],
                 "skills": [],
-                "responsibilities": "Own creative intent, decompose and route; never render or edit.",
-                "inputs": "brief.md, TEAM.md, PRODUCTION_RULES.md, MANIFEST_CONTRACT.json, marketing-context.json",
-                "outputs": "Kanban child tasks, review comments and approval decision",
+                "responsibilities": "Mechanically create and route the official task graph; it owns no creative decisions and never renders or edits.",
+                "inputs": "brief.md, TEAM.md and PRODUCTION_RULES.md",
+                "outputs": "Kanban child tasks with the declared assignee, dependencies and role skills",
             },
             {
-                "profile": "marketing-video-showrunner",
+                "profile": "marketing-video-director",
                 "role": "writer",
-                "toolsets": ["kanban", "terminal", "file", "video", "vision"],
-                "skills": [
-                    "faceless-explainer",
-                    "dbs-hook",
-                    "dbs-script-flow",
-                    "storyboard-previsualization",
-                    "social-short-production",
+                "toolsets": [
+                    "kanban",
+                    "terminal",
+                    "file",
+                    "video",
+                    "vision",
+                    "marketing_video_direction",
                 ],
-                "responsibilities": "Direct the platform-native narration, sourceable immutable shot contract, composition, motion and renderer choice; write script.md, narration.json, storyboard.json and visual-spec.md before completion; bind every factual/outcome claim to an allowed evidence ID plus an exact evidence quote, never invent commercial results, and label illustrative B-roll honestly instead of demanding unavailable current-event footage.",
-                "inputs": "brief.md, taste/, PRODUCTION_RULES.md, MANIFEST_CONTRACT.json, marketing-context.json",
-                "outputs": "script.md, storyboard.json, narration.json and visual-spec.md",
+                "skills": ["marketing-super-director"],
+                "responsibilities": "Act as the single creative brain. Consume the locked account model, four governed knowledge bases, benchmark operating graph, read-only Human Observer projection, platform contract and origin preflight; decide what this video says, write the complete spoken script, then design the sourceable shot treatment and causal measurement plan. Write director-contract.json, script.md, narration.json, storyboard.json and visual-spec.md, call the canonical treatment preflight, and do not release Material Scout until it passes.",
+                "inputs": "director-context.json, brief.md, taste/, PRODUCTION_RULES.md, MANIFEST_CONTRACT.json and marketing-context.json",
+                "outputs": "director-contract.json, script.md, storyboard.json, narration.json, visual-spec.md and treatment-preflight.json",
             },
             {
                 "profile": "marketing-video-material-scout",
@@ -2214,7 +2813,7 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
                 ],
                 "skills": ["watch", "video-use", "media-use", "media-provenance-rights", "documentary-montage-production"],
                 "responsibilities": "Produce a one-to-one material row for every shot. Search owned/open sources and the Web/browser with Chinese, English and platform-specific queries; register URLs, prepare free watch proxies with Whisper disabled, inspect every frame, submit grounded relevance plus exact source timecodes, and freeze only rights-cleared production sources. Rights-pending clips may enter the inspection library but can never publish. Never complete without both manifest files on disk.",
-                "inputs": "storyboard.json, visual-spec.md, MANIFEST_CONTRACT.json, marketing-context.json",
+                "inputs": "director-contract.json, treatment-preflight.json, storyboard.json, visual-spec.md, MANIFEST_CONTRACT.json and marketing-context.json",
                 "outputs": "assets/, material-manifest.json and rights-map.json",
             },
             {
@@ -2247,11 +2846,19 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
             {
                 "profile": "marketing-video-reviewer",
                 "role": "reviewer",
-                "toolsets": ["kanban", "terminal", "file", "video", "vision", "marketing_video_finalize"],
+                "toolsets": [
+                    "kanban",
+                    "terminal",
+                    "file",
+                    "video",
+                    "vision",
+                    "marketing_video_review",
+                    "marketing_video_finalize",
+                ],
                 "skills": ["generated-media-qa", "media-qc-delivery"],
-                "responsibilities": "Inspect the rendered file, request at most three local repairs, then persist a passing cut to Marketing OS Draft Box.",
-                "inputs": "brief.md, MANIFEST_CONTRACT.json, all manifests, output/final.mp4",
-                "outputs": "review.json and marketing_video_finalize receipt",
+                "responsibilities": "Inspect the actual rendered file against the approved director treatment, request at most three local repairs, run the canonical cut preflight, then persist only a passing cut to Marketing OS Draft Box.",
+                "inputs": "director-contract.json, treatment-preflight.json, brief.md, MANIFEST_CONTRACT.json, all manifests and output/final.mp4",
+                "outputs": "review.json, cut-preflight.json and marketing_video_finalize receipt",
             },
         ]
         execution_model = str(model.get("execution_model") or DOUBAO_LITE_MODEL)
@@ -2393,12 +3000,21 @@ This file is owned by Marketing OS. Production profiles may read it but must not
 Execution: `{execution_id}` · Contract: `{VIDEO_EXECUTION_VERSION}`
 
 - This is an independent video production. Never wait for or copy an article script.
-- Only the Director decomposes the production graph. Every other profile executes and closes
+- Only the Coordinator decomposes the production graph. Every other profile executes and closes
   its assigned card directly; it must not create a same-profile child card to do its own work.
 - The locked storyboard contains at least {minimum_shots} shots; fewer shots cannot finalize.
-- The writer locks one narration segment and semantic/visual search contract per shot.
-- Writer completion requires all four durable files: `script.md`, `narration.json`,
-  `storyboard.json` and `visual-spec.md`; a summary without those files is not a handoff.
+- The Super Director is the one creative owner. It must read `director-context.json` and use the
+  account model, four governed knowledge bases, benchmark operating graph, platform contract,
+  origin preflight and read-only Human Observer projection before choosing the argument.
+- The order is mandatory: production contract → complete spoken script → beat sheet → shot plan →
+  canonical treatment preflight → material search. The Director locks one narration segment and
+  semantic/visual search contract per shot. A topic title is never a material-search contract.
+- Director completion requires all five durable files: `director-contract.json`, `script.md`,
+  `narration.json`, `storyboard.json` and `visual-spec.md`, plus the system-written
+  `treatment-preflight.json`; a summary without those files is not a handoff.
+- `director-contract.json` uses `{DIRECTOR_CONTRACT_VERSION}` and records the production contract,
+  knowledge/graph basis, read-only human-observer basis, treatment, grounding review and a
+  shot-level measurement plan. Its model-owned fields never write back to any knowledge owner.
 - Every factual or outcome claim in narration must preserve the meaning of an exact evidence ID
   from `marketing-context.json`; every shot carries `claim_evidence_refs` plus a
   `claim_evidence_quotes` object mapping every referenced ID to a short exact substring copied
@@ -2410,7 +3026,8 @@ Execution: `{execution_id}` · Contract: `{VIDEO_EXECUTION_VERSION}`
   Do not require proprietary or current-event footage unless it is already supplied with rights;
   use an explicitly labelled illustrative visual instead, never pass generic B-roll off as the
   named event, person or product.
-- Material search is owned-library first, then free/open licensed sources through
+- Material tools fail closed until `marketing_video_treatment_preflight` returns `go=true` and
+  writes the immutable receipt. Material search is owned-library first, then free/open licensed sources through
   `marketing_video_material_search`. When native providers miss, use Web/browser discovery in
   Chinese, English and platform-specific queries and register the URL through
   `marketing_video_material_register`. Retrieval scores are never semantic proof. Prepare a 720p
@@ -2436,14 +3053,17 @@ Execution: `{execution_id}` · Contract: `{VIDEO_EXECUTION_VERSION}`
 - Model receipts are system-owned. Do not type, estimate or copy them into `delivery.json`; the
   finalizer replaces that field from official Hermes profile session databases, then enforces the
   locked CNY budget. Local watch/Scout inspections are always zero-cost.
-- Director, Showrunner, Editor and Reviewer use the locked Seed 2.1 Pro model. Material Scout,
-  Voice and Renderer use the separately function-call-probed Seed 2.0 Lite execution model.
+- Super Director, Editor and Reviewer use the locked Seed 2.1 Pro model. Coordinator, Material
+  Scout, Voice and Renderer use the separately function-call-probed Seed 2.0 Lite execution model.
   Material inspection uses the current Scout turn and local watch frames. Never silently add a
   hidden paid side-model.
 - Full-bleed, inset card and intentional letterbox are shot decisions. Never stretch media.
 - Caption last from the final output timeline. Do not cut inside words. Use 30ms audio fades.
 - Render a preview, inspect semantic relevance, sync, captions, composition, rhythm and rights.
   Repair only failed shots, at most three rounds. After three failures, block honestly.
+- The Reviewer must bind its observations to the actual final MP4 SHA-256, call
+  `marketing_video_cut_preflight`, and receive `go=true` before finalization. The finalizer rejects
+  model-authored pass booleans without that canonical cut receipt.
 - Final output stays in Draft Box. Do not publish.
 - Before completion write `delivery.json`, `review.json`, `material-manifest.json`,
   `rights-map.json` exactly as specified by `MANIFEST_CONTRACT.json`, and call
@@ -2536,7 +3156,27 @@ Execution: `{execution_id}` · Contract: `{VIDEO_EXECUTION_VERSION}`
                     "composition_pass",
                     "rights_pass",
                 ],
+                "required": ["observed_video_sha256", "cut_observations"],
                 "repair_rounds": "integer 0..3",
+            },
+            "director-contract.json": {
+                "contract": DIRECTOR_CONTRACT_VERSION,
+                "required": [
+                    "execution_id",
+                    "platform",
+                    "topic",
+                    "production_contract",
+                    "knowledge_basis",
+                    "human_observer_basis",
+                    "treatment",
+                    "grounding_review",
+                    "measurement_plan",
+                ],
+                "preflight_tool": "marketing_video_treatment_preflight",
+            },
+            "preflights": {
+                "treatment": "treatment-preflight.json must be go=true before material tools",
+                "cut": "cut-preflight.json must be go=true and bound to final video sha256",
             },
             "finalize": {
                 "tool": "marketing_video_finalize",

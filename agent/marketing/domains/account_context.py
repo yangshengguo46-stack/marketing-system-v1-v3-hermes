@@ -115,6 +115,13 @@ class AccountContextRepository:
             operating_model = AccountStrategyRepository(self.paths).read_operating_model(
                 user_id=user_id, account_id=account_id, project_id=project_id
             )
+            benchmark_graph = AccountStrategyRepository(
+                self.paths
+            ).read_benchmark_operating_graph(
+                user_id=user_id,
+                account_id=account_id,
+                project_id=project_id,
+            )
             audience = operating_model["audience_hypothesis"]
             positioning_record = operating_model["positioning"]
             positioning = (
@@ -141,6 +148,7 @@ class AccountContextRepository:
                 "content_system": operating_model["content_system"],
                 "strategy_alignment": operating_model["strategy_alignment"],
                 "benchmark_readiness": operating_model["benchmark_readiness"],
+                "benchmark_operating_graph": benchmark_graph,
                 "benchmark_count": operating_model["benchmark_readiness"]["selected_count"],
                 "experiment_count": operating_model["experiment_count"],
                 "data_gaps": list(audience.get("data_gaps", [])) if audience else [],

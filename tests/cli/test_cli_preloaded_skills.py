@@ -92,6 +92,65 @@ def test_main_applies_preloaded_skills_to_system_prompt(monkeypatch):
     assert cli_obj.preloaded_skills == ["hermes-agent-dev", "github-auth"]
 
 
+def test_main_merges_profile_always_load_with_explicit_skills(monkeypatch):
+    import cli as cli_mod
+
+    created = {}
+    observed = {}
+
+    def fake_cli(**kwargs):
+        created["cli"] = _DummyCLI(**kwargs)
+        return created["cli"]
+
+    def preload(skills, task_id=None):
+        observed["skills"] = skills
+        return ("role skills", skills, [])
+
+    monkeypatch.setattr(cli_mod, "HermesCLI", fake_cli)
+    monkeypatch.setattr(cli_mod, "build_preloaded_skills_prompt", preload)
+    monkeypatch.setitem(
+        cli_mod.CLI_CONFIG,
+        "skills",
+        {"always_load": ["marketing-super-director", "storyboard-creator"]},
+    )
+
+    with pytest.raises(SystemExit):
+        cli_mod.main(skills="marketing-super-director,video-use", list_tools=True)
+
+    assert observed["skills"] == [
+        "marketing-super-director",
+        "video-use",
+        "storyboard-creator",
+    ]
+    assert created["cli"].preloaded_skills == observed["skills"]
+
+
+def test_ignore_rules_skips_profile_always_load(monkeypatch):
+    import cli as cli_mod
+
+    observed = {}
+    monkeypatch.setattr(cli_mod, "HermesCLI", lambda **kwargs: _DummyCLI(**kwargs))
+    monkeypatch.setattr(
+        cli_mod,
+        "build_preloaded_skills_prompt",
+        lambda skills, task_id=None: (
+            observed.setdefault("prompt", "explicit only"),
+            observed.setdefault("skills", skills),
+            [],
+        ),
+    )
+    monkeypatch.setitem(
+        cli_mod.CLI_CONFIG,
+        "skills",
+        {"always_load": ["marketing-super-director"]},
+    )
+
+    with pytest.raises(SystemExit):
+        cli_mod.main(skills="video-use", ignore_rules=True, list_tools=True)
+
+    assert observed["skills"] == ["video-use"]
+
+
 def test_main_raises_for_unknown_preloaded_skill(monkeypatch):
     import cli as cli_mod
 

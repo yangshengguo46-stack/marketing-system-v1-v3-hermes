@@ -17,6 +17,7 @@ const SOURCE_DIRS = [
   'locales',
   'mcp',
   'optional-mcps',
+  'optional-skills/creative/kanban-video-orchestrator',
   'acp_adapter',
   'acp_registry',
   'tui_gateway'
