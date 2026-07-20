@@ -126,6 +126,36 @@ def validate_plan(plan: dict) -> list[str]:
             errors.append("slug must be lowercase, hyphenated, "
                           "starting with [a-z0-9]")
 
+    if "minimum_shots" in plan:
+        minimum_shots = plan["minimum_shots"]
+        if (
+            not isinstance(minimum_shots, int)
+            or isinstance(minimum_shots, bool)
+            or minimum_shots < 1
+        ):
+            errors.append("minimum_shots must be a positive integer")
+
+    workspace = str(plan.get("workspace") or "").strip()
+    if workspace and not Path(workspace).expanduser().is_absolute():
+        errors.append("workspace must be an absolute path when supplied")
+
+    provider = plan.get("model_provider")
+    if provider is not None:
+        if not isinstance(provider, dict):
+            errors.append("model_provider must be an object")
+        else:
+            for key in ("name", "base_url", "key_env", "api_mode"):
+                if not str(provider.get(key) or "").strip():
+                    errors.append(f"model_provider.{key} is required")
+
+    taste = plan.get("taste")
+    if not isinstance(taste, dict):
+        errors.append("taste must be an object")
+    else:
+        for key in ("brand_guide", "emotional_dna"):
+            if not str(taste.get(key) or "").strip():
+                errors.append(f"taste.{key} is required")
+
     return errors
 
 
@@ -158,13 +188,16 @@ def render_brief(plan: dict) -> str:
         "TITLE": plan["title"],
         "SLUG": plan["slug"],
         "TENANT": plan["tenant"],
-        "WORKSPACE": f"~/projects/video-pipeline/{plan['slug']}",
+        "WORKSPACE": str(
+            plan.get("workspace") or f"~/projects/video-pipeline/{plan['slug']}"
+        ),
         "ONE_LINE_PITCH": extra.get("concept_one_liner", "_(TBD)_"),
         "EMOTIONAL_NORTH_STAR": extra.get("emotional_north_star", "_(TBD)_"),
         "DURATION_S": str(plan["duration_s"]),
         "ASPECT": plan["aspect"],
         "RESOLUTION": plan["resolution"],
         "FPS": str(plan["fps"]),
+        "MINIMUM_SHOTS": str(plan.get("minimum_shots") or 1),
         "PLATFORMS": extra.get("platforms", "_(TBD)_"),
         "DEADLINE": extra.get("deadline", "_(none)_"),
         "QUALITY_BAR": extra.get("quality_bar", "polished"),
@@ -203,6 +236,9 @@ def render_brief(plan: dict) -> str:
 
 def render_team_md(plan: dict) -> str:
     """Render TEAM.md from the team list + scene → tool mapping."""
+    workspace = str(
+        plan.get("workspace") or f"$HOME/projects/video-pipeline/{plan['slug']}"
+    )
     lines = [f"# Team & Task Graph — {plan['title']}", "", "## Team", ""]
     for t in plan["team"]:
         skills = (
@@ -221,11 +257,29 @@ def render_team_md(plan: dict) -> str:
 
     next_id = 1
     parents_for_renderer: list[str] = ["T0"]
+    writer_id = None
+
+    if "writer" in profiles_by_role:
+        cid = f"T{next_id}"
+        lines.append(
+            f"{cid:5} {profiles_by_role['writer']} — platform-native script and narration contract (parent: T0)"
+        )
+        parents_for_renderer = [cid]
+        writer_id = cid
+        next_id += 1
 
     if "cinematographer" in profiles_by_role:
         cid = f"T{next_id}"
         lines.append(
             f"{cid:5} {profiles_by_role['cinematographer']} — visual spec for all scenes (parent: T0)"
+        )
+        parents_for_renderer.append(cid)
+        next_id += 1
+
+    if "material-scout" in profiles_by_role:
+        cid = f"T{next_id}"
+        lines.append(
+            f"{cid:5} {profiles_by_role['material-scout']} — source and freeze rights-traceable shot material (parents: {', '.join(parents_for_renderer)})"
         )
         parents_for_renderer = [cid]
         next_id += 1
@@ -240,7 +294,9 @@ def render_team_md(plan: dict) -> str:
     else:
         ms_id = None
 
-    # Scenes
+    # Scenes. When the intake intentionally leaves scenes empty, the director
+    # asks the writer/cinematographer to lock a storyboard first and fans out
+    # renderer tasks from that immutable contract.
     scene_ids = []
     for s in plan["scenes"]:
         cid = f"T{next_id}"
@@ -259,10 +315,24 @@ def render_team_md(plan: dict) -> str:
         scene_ids.append(cid)
         next_id += 1
 
+    # Intake-driven pipelines intentionally do not know their scenes until the
+    # showrunner has written the shot contract. Keep one explicit renderer task
+    # in the official graph so the director can route rendering without
+    # inventing a second scheduler or silently skipping the renderer role.
+    if not scene_ids and "renderer" in profiles_by_role:
+        cid = f"T{next_id}"
+        lines.append(
+            f"{cid:5} {profiles_by_role['renderer']} — render all locked storyboard scenes "
+            f"(parents: {', '.join(parents_for_renderer)})"
+        )
+        scene_ids.append(cid)
+        next_id += 1
+
     # VO + audio mix
     if "voice-talent" in profiles_by_role:
         vo_id = f"T{next_id}"
-        lines.append(f"{vo_id:5} {profiles_by_role['voice-talent']} — narration (parent: T0)")
+        voice_parent = writer_id or next(iter(parents_for_renderer), "T0")
+        lines.append(f"{vo_id:5} {profiles_by_role['voice-talent']} — narration and measured timing (parent: {voice_parent})")
         next_id += 1
     else:
         vo_id = None
@@ -280,7 +350,8 @@ def render_team_md(plan: dict) -> str:
     # Editor
     if "editor" in profiles_by_role:
         ed_id = f"T{next_id}"
-        ed_parents = scene_ids + [p for p in [am_id, vo_id, ms_id] if p and p not in scene_ids]
+        visual_parents = scene_ids or parents_for_renderer
+        ed_parents = visual_parents + [p for p in [am_id, vo_id, ms_id] if p and p not in visual_parents]
         lines.append(
             f"{ed_id:5} {profiles_by_role['editor']} — assemble + mux (parents: {', '.join(ed_parents)})"
         )
@@ -314,7 +385,7 @@ def render_team_md(plan: dict) -> str:
         f"All `kanban_create` calls MUST pass:",
         f"```",
         f'workspace_kind="dir"',
-        f'workspace_path="$HOME/projects/video-pipeline/{plan["slug"]}"',
+        f'workspace_path="{workspace}"',
         f'tenant="{plan["tenant"]}"',
         f"```",
     ])
@@ -348,13 +419,15 @@ def render_setup_sh(plan: dict, brief_md: str, team_md: str) -> str:
     # Profile config — emit JSON arrays so the bash function can pass them
     # safely through to the Python YAML patcher.
     profile_configs = []
+    provider_json = json.dumps(plan.get("model_provider") or {})
     for t in plan["team"]:
         ts_json = json.dumps(t["toolsets"])
         sk_json = json.dumps(t["skills"])
         # Use single-quoted bash strings; JSON only contains "/[/], no single
         # quotes, so this is safe.
         profile_configs.append(
-            f"configure_profile {t['profile']!r} {ts_json!r} {sk_json!r}"
+            f"configure_profile {t['profile']!r} {ts_json!r} {sk_json!r} "
+            f"{str(t.get('model') or '')!r} {provider_json!r}"
         )
 
     # SOUL writes — uses heredocs per profile
@@ -367,17 +440,34 @@ def render_setup_sh(plan: dict, brief_md: str, team_md: str) -> str:
             f'echo "  ✓ SOUL.md for {t["profile"]}"'
         )
 
-    # Taste writes (placeholder; real content optional)
-    taste_writes = (
-        'cat > "$WORKSPACE/taste/brand-guide.md" <<\'TASTE_EOF\'\n'
-        '# Brand Guide\n\n'
-        '_(Populate with project-specific colors, typography, motion rules)_\n'
-        'TASTE_EOF\n'
-        'cat > "$WORKSPACE/taste/emotional-dna.md" <<\'DNA_EOF\'\n'
-        '# Emotional DNA\n\n'
-        '_(What this piece should FEEL like — populate from the brief.)_\n'
-        'DNA_EOF'
-    )
+    # Taste is a locked system input, not a production output. Marketing OS
+    # supplies account/platform-derived content before any worker starts.
+    taste = plan["taste"]
+
+    def heredoc_write(target: str, content: str, stem: str) -> str:
+        delimiter = stem
+        suffix = 0
+        while delimiter in content:
+            suffix += 1
+            delimiter = f"{stem}_{suffix}"
+        return (
+            f'cat > "$WORKSPACE/{target}" <<\'{delimiter}\'\n'
+            f"{content.rstrip()}\n"
+            f"{delimiter}"
+        )
+
+    taste_writes = "\n".join([
+        heredoc_write(
+            "taste/brand-guide.md",
+            str(taste["brand_guide"]),
+            "BRAND_GUIDE_EOF",
+        ),
+        heredoc_write(
+            "taste/emotional-dna.md",
+            str(taste["emotional_dna"]),
+            "EMOTIONAL_DNA_EOF",
+        ),
+    ])
 
     # Asset copies — leave empty by default; user fills in
     asset_copies = "# Add cp/rsync commands here for any provided assets"
@@ -386,7 +476,11 @@ def render_setup_sh(plan: dict, brief_md: str, team_md: str) -> str:
     out = out.replace("{{TITLE}}", plan["title"])
     out = out.replace("{{SLUG}}", plan["slug"])
     out = out.replace("{{TENANT}}", plan["tenant"])
-    out = out.replace("{{WORKSPACE}}", f"~/projects/video-pipeline/{plan['slug']}")
+    out = out.replace("{{BOARD}}", str(plan.get("board") or "default"))
+    out = out.replace(
+        "{{WORKSPACE}}",
+        str(plan.get("workspace") or f"~/projects/video-pipeline/{plan['slug']}"),
+    )
     out = out.replace("{{KEY_CHECKS}}", key_checks_str)
     out = out.replace("{{SCENE_DIRS}}", scene_dirs)
     out = out.replace("{{PROFILE_CREATE_COMMANDS}}", "\n".join(profile_creates))
@@ -396,6 +490,14 @@ def render_setup_sh(plan: dict, brief_md: str, team_md: str) -> str:
     out = out.replace("{{TEAM_CONTENTS}}", team_md)
     out = out.replace("{{TASTE_WRITES}}", taste_writes)
     out = out.replace("{{ASSET_COPIES}}", asset_copies)
+    out = out.replace(
+        "{{ROOT_IDEMPOTENCY_KEY}}",
+        str(plan.get("root_idempotency_key") or f"video-pipeline:{plan['tenant']}"),
+    )
+    director_profile = next(
+        member["profile"] for member in plan["team"] if member["role"] == "director"
+    )
+    out = out.replace("{{DIRECTOR_PROFILE}}", str(director_profile))
 
     return out
 
@@ -488,10 +590,10 @@ def main():
     print(f"Wrote {args.out}")
 
     if args.brief_out:
-        Path(args.brief_out).write_text(brief)
+        Path(args.brief_out).write_text(brief.rstrip() + "\n")
         print(f"Wrote {args.brief_out}")
     if args.team_out:
-        Path(args.team_out).write_text(team)
+        Path(args.team_out).write_text(team.rstrip() + "\n")
         print(f"Wrote {args.team_out}")
 
 

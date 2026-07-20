@@ -34,6 +34,7 @@ interface MaterialAsset {
   last_used_at?: string | null
   media_type: 'audio' | 'image' | 'video'
   metadata?: {
+    collection?: string | null
     collection_name?: string | null
     import_kind?: string
   }
@@ -67,6 +68,7 @@ export function MaterialLibraryView({ onStartOperation, requestGateway }: Materi
   const [rightsConfirmed, setRightsConfirmed] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [collectionFilter, setCollectionFilter] = useState('')
 
   const setTab = (value: LibraryTab) =>
     $marketingMaterialViewState.set({ ...$marketingMaterialViewState.get(), tab: value })
@@ -182,12 +184,18 @@ export function MaterialLibraryView({ onStartOperation, requestGateway }: Materi
 
   const temporaryAssets = assets.filter(asset => assetTier(asset) === 'temporary')
   const libraryAssets = assets.filter(asset => assetTier(asset) === 'library')
+  const collections = collectionCounts(libraryAssets)
 
   const visibleAssets = (tab === 'temporary' ? temporaryAssets : libraryAssets).filter(asset => {
     const matchesType = filter === 'all' || asset.media_type === filter
+    const matchesCollection = !collectionFilter || assetCollection(asset) === collectionFilter
     const needle = query.trim().toLowerCase()
 
-    return matchesType && (!needle || `${asset.name} ${asset.role}`.toLowerCase().includes(needle))
+    return (
+      matchesType &&
+      matchesCollection &&
+      (!needle || `${asset.name} ${asset.role} ${assetCollection(asset)}`.toLowerCase().includes(needle))
+    )
   })
 
   return (
@@ -251,7 +259,7 @@ export function MaterialLibraryView({ onStartOperation, requestGateway }: Materi
         ) : (
           <>
             <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-5">
-              <div className="flex gap-1.5">
+              <div className="flex flex-wrap gap-1.5">
                 {(['all', 'video', 'image', 'audio'] as MediaFilter[]).map(item => (
                   <button
                     className={`rounded-full px-3 py-1.5 text-[0.66rem] font-medium transition-colors duration-[var(--mos-motion-fast)] ${filter === item ? 'bg-(--ui-row-active-background) text-foreground shadow-xs' : 'text-(--ui-text-tertiary) hover:bg-(--ui-row-hover-background) hover:text-foreground'}`}
@@ -262,6 +270,30 @@ export function MaterialLibraryView({ onStartOperation, requestGateway }: Materi
                     {filterLabel(item)}
                   </button>
                 ))}
+                {tab === 'library' && collections.length ? (
+                  <span aria-hidden="true" className="mx-1 w-px bg-(--ui-stroke-tertiary)" />
+                ) : null}
+                {tab === 'library' && collections.length ? (
+                  <button
+                    className={`rounded-full px-3 py-1.5 text-[0.66rem] font-medium transition-colors duration-[var(--mos-motion-fast)] ${collectionFilter === '' ? 'bg-(--ui-row-active-background) text-foreground shadow-xs' : 'text-(--ui-text-tertiary) hover:bg-(--ui-row-hover-background) hover:text-foreground'}`}
+                    onClick={() => setCollectionFilter('')}
+                    type="button"
+                  >
+                    全部项目
+                  </button>
+                ) : null}
+                {tab === 'library'
+                  ? collections.map(([collection, count]) => (
+                      <button
+                        className={`rounded-full px-3 py-1.5 text-[0.66rem] font-medium transition-colors duration-[var(--mos-motion-fast)] ${collectionFilter === collection ? 'bg-(--ui-row-active-background) text-foreground shadow-xs' : 'text-(--ui-text-tertiary) hover:bg-(--ui-row-hover-background) hover:text-foreground'}`}
+                        key={collection}
+                        onClick={() => setCollectionFilter(collection)}
+                        type="button"
+                      >
+                        {collection} {count}
+                      </button>
+                    ))
+                  : null}
               </div>
               <p className="text-[0.66rem] text-(--ui-text-quaternary)">
                 {tab === 'temporary' ? '未使用的素材 7 天后自动清理' : '保留在这里，之后可以继续使用'}
@@ -427,7 +459,7 @@ function MaterialCard({
           />
         ) : null}
         {source && asset.media_type === 'video' ? (
-          <video className="size-full object-cover" muted preload="metadata" src={source} />
+          <video className="size-full bg-black object-contain" controls playsInline preload="metadata" src={source} />
         ) : null}
         {asset.media_type === 'audio' || !source ? <Icon className="size-9 text-(--ui-text-quaternary)" /> : null}
         <span className="absolute left-3 top-3 rounded-full bg-black/50 px-2.5 py-1 text-[0.58rem] font-medium tabular-nums text-white backdrop-blur">
@@ -444,7 +476,7 @@ function MaterialCard({
           <span className="min-w-0">
             <strong className="block truncate text-sm">{asset.name}</strong>
             <small className="mt-1 block truncate text-[0.63rem] text-(--ui-text-tertiary)">
-              {asset.metadata?.collection_name || sourceLabel(asset.source_type)} · {rightsLabel(asset.rights_status)}
+              {assetCollection(asset) || sourceLabel(asset.source_type)} · {rightsLabel(asset.rights_status)}
             </small>
           </span>
           {temporary ? (
@@ -536,9 +568,28 @@ function sourceLabel(source: string): string {
       derived: '成片派生',
       licensed_provider: '授权素材商',
       user_upload: '本地导入',
-      volcengine_trusted: '火山可信资产'
+      volcengine_trusted: '火山可信资产',
+      web_clip: '网络裁片'
     }[source] || source
   )
+}
+
+function assetCollection(asset: MaterialAsset): string {
+  return String(asset.metadata?.collection || asset.metadata?.collection_name || '').trim()
+}
+
+function collectionCounts(assets: MaterialAsset[]): [string, number][] {
+  const counts = new Map<string, number>()
+
+  for (const asset of assets) {
+    const collection = assetCollection(asset)
+
+    if (collection) {
+      counts.set(collection, (counts.get(collection) || 0) + 1)
+    }
+  }
+
+  return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
 }
 
 function rightsLabel(status: string): string {

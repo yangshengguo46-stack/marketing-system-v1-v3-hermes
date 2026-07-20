@@ -6,9 +6,13 @@ import html
 import json
 import os
 import re
+import shutil
+import subprocess
 import threading
+import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Protocol
 
 
@@ -214,7 +218,7 @@ class WikimediaCommonsMaterialProvider:
     _image_mimes = {"image/jpeg", "image/png", "image/webp"}
     _media_mimes = _video_mimes | _image_mimes
 
-    def __init__(self, *, timeout: float = 30.0) -> None:
+    def __init__(self, *, timeout: float = 15.0) -> None:
         self._timeout = timeout
 
     def search(self, request: dict[str, Any]) -> list[dict[str, Any]]:
@@ -273,21 +277,71 @@ class WikimediaCommonsMaterialProvider:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme != "https" or parsed.hostname not in self._download_hosts:
             raise ValueError("Wikimedia Commons download URL is not trusted")
-        request = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "MarketingOS/1.0 (licensed-media-resolver)",
-                "Accept": "video/mp4,video/webm,video/ogg,image/jpeg,image/png,image/webp",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=self._timeout) as response:
-            content_type = str(response.headers.get_content_type() or "").lower()
-            if content_type not in self._media_mimes:
-                raise ValueError("Wikimedia Commons material is not a supported image or video")
-            content_length = int(response.headers.get("Content-Length") or 0)
-            if content_length > MAX_PROVIDER_DOWNLOAD_BYTES:
-                raise ValueError("Wikimedia Commons material exceeds the 200 MB product limit")
-            payload = response.read(MAX_PROVIDER_DOWNLOAD_BYTES + 1)
+        suffix = Path(urllib.parse.unquote(parsed.path)).suffix.lower()
+        content_type = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".mp4": "video/mp4",
+            ".webm": "video/webm",
+            ".ogv": "video/ogg",
+            ".ogg": "video/ogg",
+        }.get(suffix, "")
+        curl = shutil.which("curl")
+        if curl and content_type in self._media_mimes:
+            result = subprocess.run(
+                [
+                    curl,
+                    "--fail",
+                    "--location",
+                    "--silent",
+                    "--show-error",
+                    "--retry",
+                    "2",
+                    "--retry-all-errors",
+                    "--retry-delay",
+                    "1",
+                    "--max-time",
+                    str(max(30, int(self._timeout * 4))),
+                    "--max-filesize",
+                    str(MAX_PROVIDER_DOWNLOAD_BYTES),
+                    "--user-agent",
+                    "MarketingOS/1.0 (licensed-media-resolver)",
+                    "--header",
+                    "Accept: video/mp4,video/webm,video/ogg,image/jpeg,image/png,image/webp",
+                    url,
+                ],
+                capture_output=True,
+                timeout=max(35, self._timeout * 4 + 5),
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    result.stderr.decode("utf-8", errors="replace")[:500]
+                    or "Wikimedia Commons download failed"
+                )
+            payload = result.stdout
+        else:
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "MarketingOS/1.0 (licensed-media-resolver)",
+                    "Accept": "video/mp4,video/webm,video/ogg,image/jpeg,image/png,image/webp",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                content_type = str(response.headers.get_content_type() or "").lower()
+                if content_type not in self._media_mimes:
+                    raise ValueError(
+                        "Wikimedia Commons material is not a supported image or video"
+                    )
+                content_length = int(response.headers.get("Content-Length") or 0)
+                if content_length > MAX_PROVIDER_DOWNLOAD_BYTES:
+                    raise ValueError(
+                        "Wikimedia Commons material exceeds the 200 MB product limit"
+                    )
+                payload = response.read(MAX_PROVIDER_DOWNLOAD_BYTES + 1)
         if not payload or len(payload) > MAX_PROVIDER_DOWNLOAD_BYTES:
             raise ValueError("Wikimedia Commons material is empty or exceeds the product limit")
         extension = {
@@ -311,8 +365,45 @@ class WikimediaCommonsMaterialProvider:
                 "Accept": "application/json",
             },
         )
-        with urllib.request.urlopen(request, timeout=self._timeout) as response:
-            payload = response.read(8 * 1024 * 1024 + 1)
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                payload = response.read(8 * 1024 * 1024 + 1)
+        except (OSError, TimeoutError, urllib.error.URLError):
+            curl = shutil.which("curl")
+            if not curl:
+                raise
+            result = subprocess.run(
+                [
+                    curl,
+                    "--fail",
+                    "--location",
+                    "--silent",
+                    "--show-error",
+                    "--retry",
+                    "2",
+                    "--retry-all-errors",
+                    "--retry-delay",
+                    "1",
+                    "--max-time",
+                    "30",
+                    "--max-filesize",
+                    str(8 * 1024 * 1024),
+                    "--user-agent",
+                    "MarketingOS/1.0 (licensed-media-resolver)",
+                    "--header",
+                    "Accept: application/json",
+                    url,
+                ],
+                capture_output=True,
+                timeout=35,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    result.stderr.decode("utf-8", errors="replace")[:500]
+                    or "Wikimedia Commons API request failed"
+                )
+            payload = result.stdout
         if len(payload) > 8 * 1024 * 1024:
             raise ValueError("Wikimedia Commons response exceeds the product limit")
         value = json.loads(payload.decode("utf-8"))
@@ -340,6 +431,12 @@ class WikimediaCommonsMaterialProvider:
         metadata = info.get("extmetadata") or {}
         license_name = _metadata_text(metadata, "LicenseShortName")
         license_url = _metadata_text(metadata, "LicenseUrl")
+        if license_name and not license_url:
+            normalized_license = license_name.strip().lower()
+            if normalized_license in {"public domain", "pdm"}:
+                license_url = "https://creativecommons.org/publicdomain/mark/1.0/"
+            elif normalized_license in {"cc0", "cc0 1.0"}:
+                license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
         if not license_name or not license_url.startswith("http"):
             return None
         provider_id = str(page.get("pageid") or info.get("sha1") or page.get("title") or "")

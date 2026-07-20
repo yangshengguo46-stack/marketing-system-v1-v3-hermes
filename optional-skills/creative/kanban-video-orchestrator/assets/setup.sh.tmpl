@@ -11,8 +11,16 @@
 set -euo pipefail
 
 PROJECT_SLUG="{{SLUG}}"
-WORKSPACE="$HOME/projects/video-pipeline/${PROJECT_SLUG}"
+WORKSPACE="{{WORKSPACE}}"
 TENANT="{{TENANT}}"
+BOARD="{{BOARD}}"
+
+# Kanban workers run under isolated Hermes profile homes. Keep Marketing OS
+# business state pointed at the canonical product store so private video tools
+# do not accidentally open a second state.db inside each profile.
+export MARKETING_CANONICAL_USER_DATA="${MARKETING_OS_USER_DATA:-${HERMES_HOME:-$HOME/.hermes}}"
+export MARKETING_CANONICAL_CONFIG_DIR="${MARKETING_OS_CONFIG_DIR:-$MARKETING_CANONICAL_USER_DATA/config}"
+export MARKETING_CANONICAL_AGENT_DB="${MARKETING_OS_AGENT_DB:-${HERMES_HOME:-$HOME/.hermes}/state.db}"
 
 # ─────────────────────────────────────────────────────────────────────
 # 1. Verify required API keys
@@ -65,7 +73,9 @@ configure_profile() {
     local profile="$1"
     local toolsets_json="$2"     # JSON array string, e.g. '["kanban","terminal","file"]'
     local skills_json="$3"       # JSON array string, e.g. '["ascii-video"]'
-    python3 - "$profile" "$toolsets_json" "$skills_json" "$WORKSPACE" <<'PY'
+    local model="$4"
+    local provider_json="$5"
+    python3 - "$profile" "$toolsets_json" "$skills_json" "$model" "$provider_json" <<'PY'
 """Patch a Hermes profile config.yaml using PyYAML so we don't depend on the
 exact default-config string format. Validates the patch took effect and exits
 non-zero if anything's off."""
@@ -79,9 +89,10 @@ except ImportError:
     print("ERROR: PyYAML required. pip install pyyaml", file=sys.stderr)
     sys.exit(1)
 
-profile, toolsets_json, skills_json, workspace = sys.argv[1:5]
+profile, toolsets_json, skills_json, model, provider_json = sys.argv[1:6]
 toolsets = json.loads(toolsets_json)
 skills = json.loads(skills_json)
+provider = json.loads(provider_json)
 
 p = os.path.expanduser(f"~/.hermes/profiles/{profile}/config.yaml")
 if not os.path.exists(p):
@@ -93,8 +104,24 @@ with open(p) as f:
 
 # Apply our changes — only the keys we actually want to set.
 cfg["toolsets"] = toolsets
+cfg.setdefault("platform_toolsets", {})["cli"] = toolsets
 cfg.setdefault("skills", {})
 cfg["skills"]["always_load"] = skills
+if model and provider:
+    # Volcengine's Responses-compatible endpoint rejects OpenAI's optional
+    # reasoning.summary request field. Disabling the protocol dial does not
+    # switch models; it only lets Seed use its native reasoning behavior.
+    cfg.setdefault("agent", {})["reasoning_effort"] = "none"
+    provider_name = str(provider["name"])
+    cfg["model"] = {"provider": provider_name, "default": model}
+    cfg.setdefault("providers", {})[provider_name] = {
+        "name": provider_name,
+        "base_url": str(provider["base_url"]),
+        "key_env": str(provider["key_env"]),
+        "transport": str(provider["api_mode"]),
+        "default_model": model,
+        "models": {model: {}},
+    }
 
 # Note: we do NOT touch cfg["approvals"] — that's a security-sensitive
 # setting (manual confirmation of tool calls). Workspace cwd is overridden
@@ -104,14 +131,61 @@ cfg["skills"]["always_load"] = skills
 with open(p, "w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
 
+# Ark's Responses endpoint can legitimately spend more than twelve seconds
+# between streamed events while doing native multimodal reasoning.  Scope the
+# larger watchdog window to these dedicated video profiles instead of changing
+# the user's global Hermes runtime.
+env_path = os.path.expanduser(f"~/.hermes/profiles/{profile}/.env")
+env_lines = []
+if os.path.exists(env_path):
+    with open(env_path) as f:
+        env_lines = [
+            line.rstrip("\n")
+            for line in f
+            if not any(
+                line.startswith(f"{key}=")
+                for key in (
+                    "HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS",
+                    "MARKETING_OS_USER_DATA",
+                    "MARKETING_OS_CONFIG_DIR",
+                    "MARKETING_OS_AGENT_DB",
+                )
+            )
+        ]
+env_lines.append("HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS=300")
+env_lines.extend([
+    f"MARKETING_OS_USER_DATA={os.environ['MARKETING_CANONICAL_USER_DATA']}",
+    f"MARKETING_OS_CONFIG_DIR={os.environ['MARKETING_CANONICAL_CONFIG_DIR']}",
+    f"MARKETING_OS_AGENT_DB={os.environ['MARKETING_CANONICAL_AGENT_DB']}",
+])
+with open(env_path, "w") as f:
+    f.write("\n".join(env_lines).rstrip() + "\n")
+
 # Validate
 with open(p) as f:
     after = yaml.safe_load(f)
 errors = []
 if after.get("toolsets") != toolsets:
     errors.append(f"toolsets mismatch: {after.get('toolsets')!r}")
+if after.get("platform_toolsets", {}).get("cli") != toolsets:
+    errors.append(f"platform_toolsets.cli mismatch: {after.get('platform_toolsets')!r}")
 if after.get("skills", {}).get("always_load") != skills:
     errors.append(f"skills.always_load mismatch: {after.get('skills', {}).get('always_load')!r}")
+if model and after.get("model", {}).get("default") != model:
+    errors.append(f"model mismatch: {after.get('model')!r}")
+if model and after.get("agent", {}).get("reasoning_effort") != "none":
+    errors.append(f"reasoning compatibility mismatch: {after.get('agent')!r}")
+with open(env_path) as f:
+    profile_env = f.read().splitlines()
+if "HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS=300" not in profile_env:
+    errors.append("profile-local Codex event watchdog was not configured")
+for key, expected in (
+    ("MARKETING_OS_USER_DATA", os.environ["MARKETING_CANONICAL_USER_DATA"]),
+    ("MARKETING_OS_CONFIG_DIR", os.environ["MARKETING_CANONICAL_CONFIG_DIR"]),
+    ("MARKETING_OS_AGENT_DB", os.environ["MARKETING_CANONICAL_AGENT_DB"]),
+):
+    if f"{key}={expected}" not in profile_env:
+        errors.append(f"canonical product path missing from profile env: {key}")
 if errors:
     print(f"  ✗ {profile}: " + "; ".join(errors), file=sys.stderr)
     sys.exit(1)
@@ -149,19 +223,34 @@ TEAM_EOF
 
 {{ASSET_COPIES}}
 
+# These files are system-owned production inputs. Read-only mode is a first
+# guard; Marketing OS also verifies their SHA-256 digests before finalization.
+chmod a-w \
+    "$WORKSPACE/plan.json" \
+    "$WORKSPACE/brief.md" \
+    "$WORKSPACE/TEAM.md" \
+    "$WORKSPACE/marketing-context.json" \
+    "$WORKSPACE/PRODUCTION_RULES.md" \
+    "$WORKSPACE/MANIFEST_CONTRACT.json" \
+    "$WORKSPACE/taste/brand-guide.md" \
+    "$WORKSPACE/taste/emotional-dna.md"
+
 # ─────────────────────────────────────────────────────────────────────
 # 7. Fire the initial kanban task
 # ─────────────────────────────────────────────────────────────────────
 echo "═══ Firing initial kanban task ═══"
 
-hermes kanban create "Direct production of {{TITLE}}" \
-    --assignee director \
+hermes kanban --board "$BOARD" create "Direct production of {{TITLE}}" \
+    --assignee "{{DIRECTOR_PROFILE}}" \
     --workspace dir:"$WORKSPACE" \
     --tenant "$TENANT" \
     --priority 2 \
     --max-runtime 4h \
+    --max-retries 1 \
+    --idempotency-key "{{ROOT_IDEMPOTENCY_KEY}}" \
+    --json \
     --body "$(cat <<EOF
-Read brief.md, TEAM.md, and taste/.
+Read brief.md, TEAM.md, PRODUCTION_RULES.md, MANIFEST_CONTRACT.json, and taste/.
 
 Decompose into the team graph defined in TEAM.md.
 
@@ -173,14 +262,23 @@ All child tasks MUST use:
 Do not execute the work yourself — route every concrete subtask to the
 appropriate profile via kanban_create.
 EOF
-)"
+)" > "$WORKSPACE/.kanban-root.json"
+
+python3 - "$WORKSPACE/.kanban-root.json" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1]))
+task_id = str(payload.get("id") or payload.get("task_id") or "").strip()
+if not task_id:
+    raise SystemExit("root kanban task id missing")
+print(f"  ✓ root task {task_id}")
+PY
 
 echo ""
 echo "═══ Setup complete ═══"
 echo ""
 echo "Monitor with:"
 echo "  hermes kanban watch --tenant $TENANT"
-echo "  hermes kanban list  --tenant $TENANT"
+echo "  hermes kanban list  --board $BOARD --tenant $TENANT"
 echo "  hermes dashboard"
 echo ""
 echo "Workspace: $WORKSPACE"

@@ -36,6 +36,7 @@ SOURCE_TYPES = {
     "volcengine_trusted",
     "licensed_provider",
     "derived",
+    "web_clip",
 }
 RIGHTS_STATUSES = {
     "user_confirmed",
@@ -43,6 +44,7 @@ RIGHTS_STATUSES = {
     "generated",
     "licensed",
     "inherited",
+    "rights_pending",
 }
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 MAX_INLINE_UPLOAD_BYTES = 32 * 1024 * 1024
@@ -56,6 +58,7 @@ _RIGHTS_BY_SOURCE = {
     "volcengine_trusted": "provider_verified",
     "licensed_provider": "licensed",
     "derived": "inherited",
+    "web_clip": "rights_pending",
 }
 _SENSITIVE_KEY = re.compile(
     r"^(?:api[_-]?key|authorization|cookie|password|secret|token)$"
@@ -646,6 +649,59 @@ class MediaAssetRepository(MarketingDomainRepository):
         return {
             "expired_asset_ids": ids,
             "expired": len(ids),
+            "reclaimed_bytes": reclaimed,
+        }
+
+    def purge_unreferenced_temporary(
+        self,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Delete every unreferenced temporary binary, regardless of TTL.
+
+        This is intentionally narrower than a generic cache sweep: durable
+        library assets and any temporary asset still owned by a draft or an
+        execution are never touched.
+        """
+
+        params: list[Any] = []
+        user_clause = ""
+        if user_id:
+            user_clause = " AND asset.user_id=?"
+            params.append(_required_text(user_id, "user_id"))
+        with self._transaction() as db:
+            rows = db.execute(
+                f"""SELECT asset.* FROM media_asset_library AS asset
+                WHERE asset.status='active' AND asset.storage_tier='temporary'
+                  {user_clause}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM media_asset_references AS ref WHERE ref.asset_id=asset.id
+                  )
+                ORDER BY asset.created_at ASC""",
+                tuple(params),
+            ).fetchall()
+            ids = [str(row["id"]) for row in rows]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                now = _now()
+                db.execute(
+                    f"""UPDATE media_asset_library
+                    SET status='deleted',deleted_at=?,updated_at=?
+                    WHERE id IN ({placeholders})""",
+                    (now, now, *ids),
+                )
+        reclaimed = 0
+        for row in rows:
+            asset = _record(row)
+            reclaimed += int(asset.get("size_bytes") or 0)
+            relative = str(asset.get("local_path") or "")
+            if relative:
+                target = (self.root / relative).resolve()
+                if self.root.resolve() in target.parents and target.exists():
+                    target.unlink()
+        return {
+            "deleted_asset_ids": ids,
+            "deleted": len(ids),
             "reclaimed_bytes": reclaimed,
         }
 

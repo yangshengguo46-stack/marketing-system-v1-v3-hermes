@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from typing import Any
@@ -25,17 +26,20 @@ class OperatingEntityRepository(MarketingDomainRepository):
 
     def __init__(self, paths: MarketingDataPaths | None = None):
         if paths is None:
-            from hermes_state import SessionDB
-
-            owner = SessionDB()
-            db_path = owner.db_path
-            owner.close()
             defaults = MarketingDataPaths.from_env()
-            paths = MarketingDataPaths(
-                user_data=defaults.user_data,
-                config_dir=defaults.config_dir,
-                agent_db=db_path,
-            )
+            if os.environ.get("MARKETING_OS_AGENT_DB"):
+                paths = defaults
+            else:
+                from hermes_state import SessionDB
+
+                owner = SessionDB()
+                db_path = owner.db_path
+                owner.close()
+                paths = MarketingDataPaths(
+                    user_data=defaults.user_data,
+                    config_dir=defaults.config_dir,
+                    agent_db=db_path,
+                )
         super().__init__(paths)
 
     def ensure_for_account(

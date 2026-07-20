@@ -60,10 +60,10 @@ def test_topic_workflow_fans_article_and_video_out_as_siblings(tmp_path, monkeyp
     assert steps["article.write.wechat_official"]["depends_on"] == [
         "topic_brief.freeze"
     ]
-    assert steps["video.direct.douyin"]["depends_on"] == ["topic_brief.freeze"]
+    assert steps["video.kanban_submit.douyin"]["depends_on"] == ["topic_brief.freeze"]
     assert not any(
         key.startswith("article.")
-        for key in steps["video.direct.douyin"]["depends_on"]
+        for key in steps["video.kanban_submit.douyin"]["depends_on"]
     )
     assert not any(
         key.startswith("video.")
@@ -71,24 +71,15 @@ def test_topic_workflow_fans_article_and_video_out_as_siblings(tmp_path, monkeyp
     )
     assert "article.write.wechat_official" in steps
     assert "article.qa.wechat_official" in steps
-    assert "video.direct.douyin" in steps
-    assert "video.preflight.douyin" in steps
+    assert "video.kanban_submit.douyin" in steps
     assert "article.write.x" in steps
-    assert "video.direct.x" in steps
+    assert "video.kanban_submit.x" in steps
     # future_social was evaluated, but was not recommended. Production must not
     # silently manufacture every platform that happened to be scored.
     assert "platform.research.future_social" not in steps
-    assert steps["video.previs.douyin"]["depends_on"] == [
-        "video.preflight.douyin",
-        "video.material.douyin",
-        "video.audio.douyin",
-    ]
-    assert steps["video.render.douyin"]["depends_on"] == ["video.previs.douyin"]
-    assert steps["video.qa.douyin"]["depends_on"] == ["video.render.douyin"]
-    assert set(steps["video.draft_box"]["depends_on"]) == {
-        "video.qa.douyin",
-        "video.qa.x",
-    }
+    assert not any(key.startswith("video.direct.") for key in steps)
+    assert not any(key.startswith("video.render.") for key in steps)
+    assert "video.draft_box" not in steps
     assert set(steps["article.draft_box"]["depends_on"]) == {
         "article.qa.wechat_official",
         "article.qa.x",
@@ -101,7 +92,8 @@ def test_topic_workflow_fans_article_and_video_out_as_siblings(tmp_path, monkeyp
     )
     assert set(steps["production.complete"]["depends_on"]) == {
         "article.draft_box",
-        "video.draft_box",
+        "video.kanban_submit.douyin",
+        "video.kanban_submit.x",
     }
 
 
@@ -128,6 +120,35 @@ def test_topic_workflow_is_idempotent_per_preflighted_candidate(tmp_path, monkey
     assert len(second["steps"]) == len(first["steps"])
 
 
+def test_explicit_fresh_revision_preserves_failed_lineage_without_reusing_outputs(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        topic_production.TopicRecommendationRepository,
+        "get_candidate",
+        lambda self, **kwargs: _candidate(),
+    )
+    paths = _paths(tmp_path)
+    first = topic_production.create_topic_production_workflow(
+        candidate_id="topic_candidate_ai_bubble",
+        user_id="default",
+        entity_id="entity-1",
+        paths=paths,
+    )
+    second = topic_production.create_topic_production_workflow(
+        candidate_id="topic_candidate_ai_bubble",
+        user_id="default",
+        entity_id="entity-1",
+        fresh_revision=True,
+        paths=paths,
+    )
+
+    assert second["id"] != first["id"]
+    assert second["source_ref"] == "topic_candidate_ai_bubble:revision:2"
+    assert second["input"]["production_revision"] == 2
+    assert second["input"]["supersedes_workflow_id"] == first["id"]
+
+
 def test_explicit_user_override_can_add_an_evaluated_platform(tmp_path, monkeypatch):
     candidate = _candidate()
     candidate["candidate"]["recommended_platforms"] = ["wechat_official"]
@@ -149,7 +170,7 @@ def test_explicit_user_override_can_add_an_evaluated_platform(tmp_path, monkeypa
     assert workflow["input"]["explicit_user_platform_override"] is True
     assert workflow["input"]["selected_platforms"] == ["wechat_official", "douyin"]
     assert "article.write.wechat_official" in keys
-    assert "video.direct.douyin" in keys
+    assert "video.kanban_submit.douyin" in keys
 
 
 def test_platform_override_must_be_explicit_and_preflighted(tmp_path, monkeypatch):

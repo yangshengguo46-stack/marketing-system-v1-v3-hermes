@@ -480,6 +480,13 @@ def build_video_treatment_preflight(
         if isinstance(treatment.get("sound_strategy"), dict)
         else {}
     )
+    grounding_review = (
+        params.get("grounding_review")
+        if isinstance(params.get("grounding_review"), dict)
+        else {}
+    )
+    grounding_reviewed = isinstance(grounding_review.get("go"), bool)
+    grounding_ok = grounding_review.get("go") is True
     public_prior_support = _clamp(
         0.46
         + min(0.18, counts.get("platform", 0) * 0.06)
@@ -556,6 +563,8 @@ def build_video_treatment_preflight(
         blockers.append("treatment_claim_evidence_missing")
     elif unmapped_claims:
         blockers.append("treatment_contains_unverified_claims")
+    if grounding_reviewed and not grounding_ok:
+        blockers.append("treatment_evidence_grounding_failed")
     if not has_audience:
         warnings.append("personal_model_missing_public_prior_cold_start")
     if profile.get("guidance_status", "").startswith("generic_"):
@@ -609,6 +618,17 @@ def build_video_treatment_preflight(
             "shot_duration": round(shot_duration, 3),
             "duration_alignment": round(duration_alignment, 3),
             "platform_contract_complete": platform_contract,
+            "evidence_grounding_reviewed": grounding_reviewed,
+            "evidence_grounding_passed": grounding_ok if grounding_reviewed else None,
+            "evidence_grounding_findings": sum(
+                len(grounding_review.get(field) or [])
+                for field in (
+                    "unsupported_claims",
+                    "stance_conflicts",
+                    "invented_personal_proof",
+                    "invented_offers",
+                )
+            ),
         },
         "influence_score": influence,
         "preflight_decision": decision,

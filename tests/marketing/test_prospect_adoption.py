@@ -101,14 +101,6 @@ def _seed_media_facts(paths, account_id="prospect_default"):
                     'pexels-1','image','broll',?,?)""",
             (account_id, now, now),
         )
-        sql.execute(
-            """INSERT INTO marketing_audio_jobs
-            (id,idempotency_key,user_id,account_id,name,script_text,script_sha256,
-             created_at,updated_at)
-            VALUES ('audio-prospect','audio-prospect-key','default',?,'首轮旁白',
-                    '这是首轮旁白。','audio-sha',?,?)""",
-            (account_id, now, now),
-        )
         sql.commit()
     finally:
         sql.close()
@@ -136,7 +128,6 @@ def test_authenticated_account_atomically_adopts_prospect_facts(tmp_path):
         assert adopted["moved_counts"]["media_asset_library"] == 1
         assert adopted["moved_counts"]["material_searches"] == 1
         assert adopted["moved_counts"]["material_candidates"] == 1
-        assert adopted["moved_counts"]["marketing_audio_jobs"] == 1
         assert adopted["entity_id"] == project["entity_id"]
         assert repeated["operation"] == "already_complete"
         assert repeated["entity_id"] == project["entity_id"]
@@ -164,7 +155,6 @@ def test_authenticated_account_atomically_adopts_prospect_facts(tmp_path):
                 "media_asset_library": "media-prospect",
                 "material_searches": "search-prospect",
                 "material_candidates": "candidate-prospect",
-                "marketing_audio_jobs": "audio-prospect",
             }
             for table, identifier in checks.items():
                 row = sql.execute(

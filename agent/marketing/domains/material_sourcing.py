@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
+import shutil
+import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.media_assets import MediaAssetRepository
@@ -22,6 +28,11 @@ from agent.marketing.providers.materials import (
 _ROLES = {"scene", "broll", "prop", "storyboard", "other"}
 _ORIENTATIONS = {"", "landscape", "portrait", "square"}
 _MEDIA_TYPES = {"either", "image", "video"}
+_FRAME_LINE = re.compile(
+    r"^- `(?P<path>[^`]+)` \(t=(?P<minutes>\d+):(?P<seconds>\d+), reason=(?P<reason>[^)]+)\)$"
+)
+_MAX_CAPTURE_SECONDS = 30 * 60
+_MAX_SOURCE_BYTES = 500 * 1024 * 1024
 
 
 def _now() -> str:
@@ -218,6 +229,520 @@ class MaterialSourcingRepository(MarketingDomainRepository):
         value["candidates"] = [_candidate_record(row) for row in rows]
         return value
 
+    def register_web_video(
+        self,
+        *,
+        search_id: str,
+        user_id: str,
+        account_id: str,
+        source_url: str,
+        title: str,
+        provider_asset_id: str,
+        download_url: str = "",
+        preview_url: str = "",
+        creator: str = "",
+        creator_url: str = "",
+        duration: float = 0,
+        width: int = 0,
+        height: int = 0,
+        discovery_query: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Attach a browser/Web-discovered video URL to one native search.
+
+        Discovery is not rights review.  The candidate remains a URL plus
+        metadata until it is inspected and a precise excerpt is imported as a
+        ``rights_pending`` library clip.
+        """
+
+        search_id = self._required(search_id, "search_id")
+        user_id = self._required(user_id, "user_id")
+        account_id = self._required(account_id, "account_id")
+        source_url = self._https_url(source_url, "source_url")
+        download_url = self._optional_https_url(download_url, "download_url")
+        preview_url = self._optional_https_url(preview_url, "preview_url")
+        title = self._required(title, "title", limit=500)
+        provider_asset_id = self._required(
+            provider_asset_id, "provider_asset_id", limit=500
+        )
+        metadata_value = dict(metadata or {})
+        metadata_value.update({
+            "title": title,
+            "discovery_query": str(discovery_query or "").strip()[:500],
+            "rights_status": "rights_pending",
+            "discovery_host": str(urlparse(source_url).hostname or ""),
+        })
+        with self._connection() as db:
+            search = db.execute(
+                """SELECT id FROM material_searches
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (search_id, user_id, account_id),
+            ).fetchone()
+            existing = db.execute(
+                """SELECT * FROM material_candidates
+                WHERE search_id=? AND user_id=? AND account_id=?
+                  AND provider='web_video' AND provider_asset_id=?""",
+                (search_id, user_id, account_id, provider_asset_id),
+            ).fetchone()
+        if search is None:
+            raise KeyError("material search not found in account scope")
+        if existing is not None:
+            return _candidate_record(existing)
+        now = _now()
+        candidate_id = f"material_candidate_{uuid.uuid4().hex}"
+        with self._transaction() as db:
+            db.execute(
+                """INSERT INTO material_candidates
+                (id,search_id,user_id,account_id,provider,provider_asset_id,
+                 media_type,role,source_url,preview_url,download_url,creator,
+                 creator_url,license_name,license_url,provider_home_url,width,
+                 height,duration,score,score_json,metadata_json,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,?)""",
+                (
+                    candidate_id,
+                    search_id,
+                    user_id,
+                    account_id,
+                    "web_video",
+                    provider_asset_id,
+                    "video",
+                    "broll",
+                    source_url,
+                    preview_url,
+                    download_url,
+                    str(creator or "").strip()[:300],
+                    str(creator_url or "").strip()[:1000],
+                    "",
+                    "",
+                    f"https://{urlparse(source_url).hostname or ''}/",
+                    max(0, int(width or 0)),
+                    max(0, int(height or 0)),
+                    max(0.0, float(duration or 0)),
+                    0.0,
+                    _json({"retrieval_only": 0.0}),
+                    _json(metadata_value),
+                    now,
+                    now,
+                ),
+            )
+            db.execute(
+                """UPDATE material_searches SET status='completed',updated_at=?
+                WHERE id=?""",
+                (now, search_id),
+            )
+            row = db.execute(
+                "SELECT * FROM material_candidates WHERE id=?", (candidate_id,)
+            ).fetchone()
+        return _candidate_record(row)
+
+    def prepare_video_analysis(
+        self,
+        *,
+        candidate_id: str,
+        user_id: str,
+        account_id: str,
+        work_dir: Path,
+        watch_script: Path | None = None,
+        max_frames: int = 18,
+    ) -> dict[str, Any]:
+        """Create a free 720p analysis proxy, frames and native-caption report.
+
+        The bundled ``watch`` skill is invoked with ``--no-whisper``.  No model
+        call occurs here; the Material Scout must inspect returned frame paths
+        and explicitly submit its grounded assessment in a separate step.
+        """
+
+        candidate = self._candidate_internal(
+            candidate_id=candidate_id, user_id=user_id, account_id=account_id
+        )
+        if str(candidate["media_type"]) != "video":
+            raise ValueError("video analysis requires a video candidate")
+        source = self._candidate_source(candidate, user_id=user_id)
+        if watch_script is None:
+            from tools.skill_manager_tool import _find_skill
+
+            skill = _find_skill("watch")
+            if not skill:
+                raise RuntimeError("the required watch skill is not installed")
+            watch_script = Path(skill["path"]) / "scripts" / "watch.py"
+        watch_script = Path(watch_script).expanduser().resolve()
+        if not watch_script.is_file():
+            raise RuntimeError("the installed watch skill has no watch.py entrypoint")
+        target = Path(work_dir).expanduser().resolve() / candidate_id
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(watch_script),
+                source,
+                "--detail",
+                "balanced",
+                "--max-frames",
+                str(max(6, min(int(max_frames), 30))),
+                "--resolution",
+                "768",
+                "--no-whisper",
+                "--out-dir",
+                str(target),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode != 0:
+            shutil.rmtree(target, ignore_errors=True)
+            raise RuntimeError(f"watch analysis failed: {result.stderr[-1200:]}")
+        report = result.stdout
+        report_path = target / "watch-report.md"
+        report_path.write_text(report, encoding="utf-8")
+        frames: list[dict[str, Any]] = []
+        for line in report.splitlines():
+            match = _FRAME_LINE.match(line.strip())
+            if not match:
+                continue
+            frame = Path(match.group("path")).expanduser().resolve()
+            if target not in frame.parents or not frame.is_file():
+                continue
+            frames.append({
+                "path": str(frame),
+                "timestamp_seconds": int(match.group("minutes")) * 60
+                + int(match.group("seconds")),
+                "reason": match.group("reason"),
+            })
+        if not frames:
+            shutil.rmtree(target, ignore_errors=True)
+            raise RuntimeError("watch analysis produced no inspectable frames")
+        media_paths = sorted(
+            path
+            for path in (target / "download").glob("video.*")
+            if path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}
+        )
+        video_path = self._first_video_path(media_paths)
+        if video_path is None:
+            raise RuntimeError("watch analysis produced no 720p proxy")
+        probe = self._probe_video(video_path)
+        if probe["duration_seconds"] > _MAX_CAPTURE_SECONDS:
+            shutil.rmtree(target, ignore_errors=True)
+            raise ValueError("source video exceeds the 30 minute analysis limit")
+        return {
+            "candidate_id": candidate_id,
+            "source_url": str(candidate["source_url"]),
+            "analysis_dir": str(target),
+            "proxy_path": str(video_path),
+            "report_path": str(report_path),
+            "frames": frames,
+            "source_probe": probe,
+            "native_captions_only": True,
+            "whisper_used": False,
+            "cost_cny": 0,
+        }
+
+    def import_video_excerpt(
+        self,
+        *,
+        candidate_id: str,
+        user_id: str,
+        account_id: str,
+        source_in: float,
+        source_out: float,
+        asset_name: str,
+        inspection_id: str,
+        relevance_score: float,
+        relevance_evidence: str,
+        collection: str,
+        work_dir: Path,
+    ) -> dict[str, Any]:
+        """Download <=1080p, cut an exact excerpt, verify it and import it.
+
+        The source download and analysis proxy are deleted only after the
+        library-owned copy has passed decode, duration and black-frame checks.
+        """
+
+        candidate = self._candidate_internal(
+            candidate_id=candidate_id, user_id=user_id, account_id=account_id
+        )
+        start = max(0.0, float(source_in))
+        end = float(source_out)
+        if end <= start or end - start < 0.5 or end - start > 30:
+            raise ValueError("excerpt must be between 0.5 and 30 seconds")
+        score = max(0.0, min(1.0, float(relevance_score)))
+        evidence = self._required(relevance_evidence, "relevance_evidence", limit=2000)
+        if score < 0.72:
+            raise ValueError("candidate did not pass the 0.72 relevance threshold")
+        work_root = Path(work_dir).expanduser().resolve() / candidate_id
+        raw_dir = work_root / "source-1080"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        source = self._candidate_source(candidate, user_id=user_id)
+        if candidate["provider"] == "user_library":
+            source_path = Path(source).resolve()
+        else:
+            template = str(raw_dir / "source.%(ext)s")
+            downloaded = subprocess.run(
+                [
+                    "yt-dlp",
+                    "-N",
+                    "8",
+                    "-f",
+                    "bv*[height<=1080]+ba/b[height<=1080]/bv+ba/b",
+                    "--merge-output-format",
+                    "mp4",
+                    "--no-playlist",
+                    "--max-filesize",
+                    str(_MAX_SOURCE_BYTES),
+                    "-o",
+                    template,
+                    "--",
+                    source,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=900,
+            )
+            source_paths = sorted(
+                path
+                for path in raw_dir.glob("source.*")
+                if path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}
+            )
+            source_path = self._first_video_path(source_paths)
+            if downloaded.returncode != 0 or source_path is None:
+                raise RuntimeError(f"1080p source download failed: {downloaded.stderr[-1200:]}")
+        source_probe = self._probe_video(source_path)
+        if end > source_probe["duration_seconds"] + 0.05:
+            raise ValueError("source_out exceeds the original video duration")
+        clip_path = work_root / "excerpt.mp4"
+        cut = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(source_path),
+                "-ss",
+                f"{start:.3f}",
+                "-t",
+                f"{end - start:.3f}",
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "18",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                str(clip_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if cut.returncode != 0 or not clip_path.is_file():
+            raise RuntimeError(f"excerpt cut failed: {cut.stderr[-1200:]}")
+        clip_probe = self._probe_video(clip_path)
+        expected_duration = end - start
+        if abs(clip_probe["duration_seconds"] - expected_duration) > 0.25:
+            raise RuntimeError("excerpt duration differs from requested timecode")
+        decoded = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(clip_path), "-f", "null", "-"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if decoded.returncode != 0 or decoded.stderr.strip():
+            raise RuntimeError("excerpt failed full decode validation")
+        black_scan = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostats",
+                "-i",
+                str(clip_path),
+                "-vf",
+                "blackdetect=d=0.4:pic_th=0.98",
+                "-an",
+                "-f",
+                "null",
+                "-",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if black_scan.returncode != 0:
+            raise RuntimeError("excerpt failed black-frame validation")
+        black_seconds = sum(
+            float(value)
+            for value in re.findall(r"black_duration:([0-9.]+)", black_scan.stderr)
+        )
+        if black_seconds > 0:
+            raise RuntimeError("excerpt contains a black segment lasting at least 0.4 seconds")
+        provider_asset_id = (
+            f"{candidate['provider_asset_id']}#t={start:.3f},{end:.3f}"
+        )
+        asset = self.media.import_generated_file(
+            user_id=user_id,
+            account_id=account_id,
+            name=self._required(asset_name, "asset_name", limit=512),
+            media_type="video",
+            role="broll",
+            path=clip_path,
+            mime_type="video/mp4",
+            provider=str(candidate["provider"]),
+            provider_asset_id=provider_asset_id,
+            source_type="web_clip",
+            rights_status="rights_pending",
+            metadata={
+                "collection": self._required(collection, "collection", limit=256),
+                "source_url": str(candidate["source_url"]),
+                "original_video_id": str(candidate["provider_asset_id"]),
+                "original_duration_seconds": source_probe["duration_seconds"],
+                "source_in": round(start, 3),
+                "source_out": round(end, 3),
+                "clip_duration_seconds": clip_probe["duration_seconds"],
+                "width": clip_probe["width"],
+                "height": clip_probe["height"],
+                "has_audio": clip_probe["has_audio"],
+                "black_seconds": round(black_seconds, 3),
+                "inspection_id": inspection_id,
+                "relevance_score": score,
+                "relevance_evidence": evidence,
+                "rights_status": "rights_pending",
+                "publish_blocked": True,
+            },
+            receipt={
+                "version": "marketing.material.clip.receipt.v1",
+                "candidate_id": candidate_id,
+                "inspection_id": inspection_id,
+                "source_url": str(candidate["source_url"]),
+                "source_in": round(start, 3),
+                "source_out": round(end, 3),
+                "cost_cny": 0,
+                "paid_services": [],
+                "watch_no_whisper": True,
+                "imported_at": _now(),
+            },
+        )
+        local_path = self.media.resolve_local_path(asset_id=asset["id"], user_id=user_id)
+        if not local_path or hashlib.sha256(Path(local_path).read_bytes()).hexdigest() != asset["sha256"]:
+            raise RuntimeError("library copy failed hash verification")
+        shutil.rmtree(work_root, ignore_errors=True)
+        return {"asset": asset, "local_path": local_path, "probe": clip_probe}
+
+    def _candidate_internal(
+        self, *, candidate_id: str, user_id: str, account_id: str
+    ) -> dict[str, Any]:
+        with self._connection() as db:
+            row = db.execute(
+                """SELECT * FROM material_candidates
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (candidate_id, user_id, account_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError("material candidate not found in account scope")
+        return dict(row)
+
+    def _candidate_source(self, candidate: dict[str, Any], *, user_id: str) -> str:
+        if candidate["provider"] == "user_library":
+            local = self.media.resolve_local_path(
+                asset_id=str(candidate["provider_asset_id"]), user_id=user_id
+            )
+            if not local:
+                raise ValueError("owned material file is unavailable")
+            return local
+        source = str(candidate.get("download_url") or candidate.get("source_url") or "")
+        return self._https_url(source, "candidate source URL")
+
+    @staticmethod
+    def _first_video_path(paths: list[Path]) -> Path | None:
+        for path in paths:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                    str(path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return path
+        return None
+
+    @staticmethod
+    def _probe_video(path: Path) -> dict[str, Any]:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                str(Path(path).resolve()),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"ffprobe failed: {result.stderr[-800:]}")
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams") or []
+        video = next((item for item in streams if item.get("codec_type") == "video"), None)
+        if not video:
+            raise ValueError("media has no video stream")
+        audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
+        duration = float((payload.get("format") or {}).get("duration") or video.get("duration") or 0)
+        return {
+            "duration_seconds": round(duration, 3),
+            "width": int(video.get("width") or 0),
+            "height": int(video.get("height") or 0),
+            "video_codec": str(video.get("codec_name") or ""),
+            "audio_codec": str(audio.get("codec_name") or "") if audio else "",
+            "has_audio": audio is not None,
+            "size_bytes": int((payload.get("format") or {}).get("size") or 0),
+        }
+
+    @staticmethod
+    def _https_url(value: Any, field: str) -> str:
+        text = str(value or "").strip()
+        parsed = urlparse(text)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError(f"{field} must be an https URL")
+        return text
+
+    @classmethod
+    def _optional_https_url(cls, value: Any, field: str) -> str:
+        text = str(value or "").strip()
+        return cls._https_url(text, field) if text else ""
+
     def materialize(
         self,
         *,
@@ -333,9 +858,18 @@ class MaterialSourcingRepository(MarketingDomainRepository):
             haystack = f"{asset['name']} {_json(asset.get('metadata') or {})}".lower()
             if not any(term in haystack for term in query_terms):
                 continue
-            semantic = 1.0
+            metadata = asset.get("metadata") or {}
+            preview_path = self.media.resolve_local_path(
+                asset_id=str(asset["id"]), user_id=user_id
+            )
+            if not preview_path:
+                continue
+            semantic = _semantic_coverage(
+                query_terms=query_terms,
+                candidate_text=haystack,
+            )
             breakdown = {
-                "source_priority": 0.32,
+                "source_priority": 0.36,
                 "semantic_fit": round(0.28 * semantic, 4),
                 "rights_confidence": 0.2,
                 "quality_fit": 0.08,
@@ -346,20 +880,26 @@ class MaterialSourcingRepository(MarketingDomainRepository):
                 "provider_asset_id": asset["id"],
                 "media_type": asset["media_type"],
                 "role": request["role"],
-                "source_url": "",
-                "preview_url": "",
+                "source_url": str(metadata.get("source_url") or ""),
+                "preview_url": str(preview_path),
                 "download_url": "",
-                "creator": "",
-                "creator_url": "",
-                "license_name": "User-confirmed rights",
-                "license_url": "",
-                "provider_home_url": "",
-                "width": int((asset.get("metadata") or {}).get("width") or 0),
-                "height": int((asset.get("metadata") or {}).get("height") or 0),
-                "duration": float((asset.get("metadata") or {}).get("duration") or 0),
+                "creator": str(metadata.get("creator") or ""),
+                "creator_url": str(metadata.get("creator_url") or ""),
+                "license_name": str(
+                    metadata.get("license_name") or "User-confirmed rights"
+                ),
+                "license_url": str(metadata.get("license_url") or ""),
+                "provider_home_url": str(metadata.get("provider_home_url") or ""),
+                "width": int(metadata.get("width") or 0),
+                "height": int(metadata.get("height") or 0),
+                "duration": float(metadata.get("duration") or 0),
                 "score_breakdown": breakdown,
                 "score": round(sum(breakdown.values()), 4),
-                "metadata": {"asset_name": asset["name"]},
+                "metadata": {
+                    "asset_name": asset["name"],
+                    "original_provider": asset.get("provider") or "",
+                    "original_provider_asset_id": asset.get("provider_asset_id") or "",
+                },
             })
         return results
 
@@ -410,9 +950,23 @@ class MaterialSourcingRepository(MarketingDomainRepository):
         actual_duration = float(candidate.get("duration") or 0)
         if target_duration and actual_duration:
             duration_fit = max(0.2, min(1.0, actual_duration / target_duration))
+        metadata = candidate.get("metadata") or {}
+        candidate_text = " ".join(
+            str(value or "")
+            for value in (
+                metadata.get("title"),
+                metadata.get("query"),
+                metadata.get("tags"),
+                candidate.get("source_url"),
+            )
+        ).lower()
+        semantic = _semantic_coverage(
+            query_terms=_semantic_query_terms(str(request.get("query") or "")),
+            candidate_text=candidate_text,
+        )
         return {
             "source_priority": 0.1,
-            "semantic_fit": 0.2,
+            "semantic_fit": round(0.3 * semantic, 4),
             "rights_confidence": 0.14,
             "quality_fit": round(0.18 * quality, 4),
             "orientation_fit": round(0.12 * orientation_fit, 4),
@@ -440,3 +994,13 @@ def _semantic_query_terms(query: str) -> set[str]:
         else:
             terms.update(run[index : index + 2] for index in range(len(run) - 1))
     return terms
+
+
+def _semantic_coverage(*, query_terms: set[str], candidate_text: str) -> float:
+    """Use lexical coverage only for retrieval ordering, never as QA proof."""
+
+    if not query_terms:
+        return 0.0
+    haystack = str(candidate_text or "").lower()
+    matched = sum(1 for term in query_terms if term and term in haystack)
+    return max(0.0, min(1.0, matched / len(query_terms)))

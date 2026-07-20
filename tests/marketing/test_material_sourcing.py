@@ -1,5 +1,7 @@
 import json
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -92,6 +94,8 @@ def test_search_ranks_user_assets_before_provider_and_hides_download_url(tmp_pat
     assert result["status"] == "completed"
     assert result["candidates"][0]["provider"] == "user_library"
     assert result["candidates"][0]["provider_asset_id"] == local["id"]
+    assert Path(result["candidates"][0]["preview_url"]).is_absolute()
+    assert Path(result["candidates"][0]["preview_url"]).read_bytes() == b"local-video"
     assert "download_url" not in json.dumps(result, ensure_ascii=False)
     assert result["candidates"][1]["license_url"] == "https://stock.test/license"
 
@@ -146,6 +150,148 @@ def test_material_search_request_ref_is_idempotent(tmp_path):
     assert repeated["id"] == first["id"]
     assert repeated["query"]["query"] == "city office"
     assert len(repeated["candidates"]) == len(first["candidates"])
+
+
+def test_browser_discovered_video_is_registered_as_rights_pending(tmp_path):
+    paths = _paths(tmp_path)
+    repo = MaterialSourcingRepository(paths)
+    search = repo.search(
+        user_id="u1",
+        account_id="acct-1",
+        query="京东 骑手 宿舍",
+        role="broll",
+        media_type="video",
+    )
+
+    candidate = repo.register_web_video(
+        search_id=search["id"],
+        user_id="u1",
+        account_id="acct-1",
+        source_url="https://example.com/videos/rider-dorm",
+        download_url="https://cdn.example.com/rider-dorm.mp4",
+        title="骑手宿舍生活",
+        provider_asset_id="rider-dorm-1",
+        discovery_query="京东 骑手 宿舍 纪录片",
+    )
+
+    assert candidate["provider"] == "web_video"
+    assert candidate["metadata"]["rights_status"] == "rights_pending"
+    assert "download_url" not in candidate
+    refreshed = repo.get_search(
+        search_id=search["id"], user_id="u1", account_id="acct-1"
+    )
+    assert refreshed["status"] == "completed"
+    assert refreshed["candidates"][0]["id"] == candidate["id"]
+
+
+def test_precise_excerpt_is_verified_and_imported_as_library_broll(tmp_path):
+    paths = _paths(tmp_path)
+    source = tmp_path / "delivery-rider-source.mp4"
+    rendered = subprocess.run(
+        [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=4",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-shortest", str(source),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    media = MediaAssetRepository(paths)
+    media.import_generated_file(
+        user_id="u1",
+        account_id="acct-1",
+        name="delivery rider source",
+        media_type="video",
+        role="broll",
+        path=source,
+        mime_type="video/mp4",
+        provider="owned-test",
+        provider_asset_id="delivery-rider-source",
+        source_type="user_upload",
+        rights_status="user_confirmed",
+    )
+    repo = MaterialSourcingRepository(paths)
+    search = repo.search(
+        user_id="u1", account_id="acct-1", query="delivery rider source", role="broll"
+    )
+    result = repo.import_video_excerpt(
+        candidate_id=search["candidates"][0]["id"],
+        user_id="u1",
+        account_id="acct-1",
+        source_in=0.75,
+        source_out=2.75,
+        asset_name="平台经济重组 · S01 · 骑手出发",
+        inspection_id="inspection-local-1",
+        relevance_score=0.91,
+        relevance_evidence="画面中骑手从配送点出发。",
+        collection="平台经济重组",
+        work_dir=tmp_path / "capture",
+    )
+
+    assert result["asset"]["source_type"] == "web_clip"
+    assert result["asset"]["rights_status"] == "rights_pending"
+    assert result["asset"]["storage_tier"] == "library"
+    assert result["probe"]["video_codec"] == "h264"
+    assert result["probe"]["audio_codec"] == "aac"
+    assert result["probe"]["duration_seconds"] == pytest.approx(2.0, abs=0.25)
+    assert not (tmp_path / "capture" / search["candidates"][0]["id"]).exists()
+
+
+def test_precise_excerpt_rejects_a_black_segment(tmp_path):
+    paths = _paths(tmp_path)
+    source = tmp_path / "black-source.mp4"
+    rendered = subprocess.run(
+        [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=black:size=640x360:rate=30:duration=2",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-shortest", str(source),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    media = MediaAssetRepository(paths)
+    media.import_generated_file(
+        user_id="u1",
+        account_id="acct-1",
+        name="black source",
+        media_type="video",
+        role="broll",
+        path=source,
+        mime_type="video/mp4",
+        provider="owned-test",
+        provider_asset_id="black-source",
+        source_type="user_upload",
+        rights_status="user_confirmed",
+    )
+    repo = MaterialSourcingRepository(paths)
+    search = repo.search(
+        user_id="u1", account_id="acct-1", query="black source", role="broll"
+    )
+
+    with pytest.raises(RuntimeError, match="black segment"):
+        repo.import_video_excerpt(
+            candidate_id=search["candidates"][0]["id"],
+            user_id="u1",
+            account_id="acct-1",
+            source_in=0,
+            source_out=1.5,
+            asset_name="rejected black excerpt",
+            inspection_id="inspection-black",
+            relevance_score=0.9,
+            relevance_evidence="Synthetic black segment must be rejected.",
+            collection="black validation",
+            work_dir=tmp_path / "capture",
+        )
 
 
 def test_materialize_requires_review_and_persists_provenance(tmp_path):
@@ -428,3 +574,85 @@ def test_wikimedia_adapter_can_request_open_licensed_images(monkeypatch):
     assert "filetype%3Abitmap" in captured["url"]
     assert result[0]["media_type"] == "image"
     assert result[0]["license_name"] == "CC BY 4.0"
+
+
+def test_wikimedia_download_uses_curl_for_stable_public_freeze(monkeypatch):
+    from agent.marketing.providers import materials
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=b"\xff\xd8\xfflicensed-image",
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(materials.shutil, "which", lambda name: "/usr/bin/curl")
+    monkeypatch.setattr(materials.subprocess, "run", fake_run)
+
+    payload, filename, mime_type = WikimediaCommonsMaterialProvider().download({
+        "provider_asset_id": "waic-2026",
+        "download_url": "https://upload.wikimedia.org/waic-2026.jpg",
+    })
+
+    assert payload.startswith(b"\xff\xd8\xff")
+    assert filename == "commons-waic-2026.jpg"
+    assert mime_type == "image/jpeg"
+    assert len(calls) == 1
+
+
+def test_wikimedia_api_falls_back_to_curl_after_urllib_transport_failure(monkeypatch):
+    import urllib.error
+
+    from agent.marketing.providers import materials
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            urllib.error.URLError("TLS handshake timed out")
+        ),
+    )
+    monkeypatch.setattr(materials.shutil, "which", lambda name: "/usr/bin/curl")
+    monkeypatch.setattr(
+        materials.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=b'{"query":{"pages":[]}}',
+            stderr=b"",
+        ),
+    )
+
+    result = WikimediaCommonsMaterialProvider()._json_request(
+        "https://commons.wikimedia.org/w/api.php?action=query"
+    )
+
+    assert result == {"query": {"pages": []}}
+
+
+def test_wikimedia_accepts_public_domain_mark_when_source_omits_license_url():
+    candidate = WikimediaCommonsMaterialProvider()._candidate({
+        "pageid": 2026,
+        "title": "File:WAIC 2026.jpg",
+        "imageinfo": [{
+            "url": "https://upload.wikimedia.org/waic-2026.jpg",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:WAIC_2026.jpg",
+            "mime": "image/jpeg",
+            "width": 1920,
+            "height": 1080,
+            "size": 1024,
+            "sha1": "waic2026",
+            "extmetadata": {
+                "LicenseShortName": {"value": "Public domain"},
+                "Artist": {"value": "Government press office"},
+            },
+        }],
+    })
+
+    assert candidate is not None
+    assert candidate["license_name"] == "Public domain"
+    assert candidate["license_url"] == (
+        "https://creativecommons.org/publicdomain/mark/1.0/"
+    )

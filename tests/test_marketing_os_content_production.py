@@ -512,12 +512,6 @@ def test_content_write_schema_cannot_override_account_scope():
     plan_properties = by_name["marketing_plan_content_production"]["parameters"][
         "properties"
     ]
-    render_properties = by_name["marketing_prepare_faceless_render"]["parameters"][
-        "properties"
-    ]
-    effect_properties = by_name["marketing_effect_faceless_render"]["parameters"][
-        "properties"
-    ]
     material_properties = by_name["marketing_search_materials"]["parameters"][
         "properties"
     ]
@@ -527,23 +521,17 @@ def test_content_write_schema_cannot_override_account_scope():
     keep_material_properties = by_name["marketing_effect_keep_material"]["parameters"][
         "properties"
     ]
-    voice_properties = by_name["marketing_prepare_video_voice"]["parameters"][
-        "properties"
-    ]
-    voice_effect_properties = by_name["marketing_effect_video_voice"]["parameters"][
-        "properties"
-    ]
 
     assert "account_id" not in create_properties
     assert "account_id" not in article_properties
     assert "account_id" not in plan_properties
-    assert "account_id" not in render_properties
-    assert "account_id" not in effect_properties
     assert "account_id" not in material_properties
     assert "account_id" not in materialize_properties
     assert "account_id" not in keep_material_properties
-    assert "account_id" not in voice_properties
-    assert "account_id" not in voice_effect_properties
+    assert "marketing_prepare_faceless_render" not in by_name
+    assert "marketing_effect_faceless_render" not in by_name
+    assert "marketing_prepare_video_voice" not in by_name
+    assert "marketing_effect_video_voice" not in by_name
     assert "reaction_scenarios" in create_properties
     assert "reaction_scenarios" in article_properties
     assert (
@@ -580,9 +568,8 @@ def test_content_write_schema_cannot_override_account_scope():
     assert "marketing_read_knowledge" in by_name
     assert "marketing_read_content_assets" in by_name
     assert "marketing_read_video_productions" in by_name
+    assert "marketing_submit_official_video" in by_name
     assert "marketing_prepare_video_from_script" not in by_name
-    assert render_properties["renderer"]["enum"] == ["ffmpeg_timeline_v1"]
-    assert effect_properties["confirmed_by_user"]["type"] == "boolean"
 
 
 def test_agent_material_and_voice_prepare_flow_uses_bound_account(
@@ -634,23 +621,10 @@ def test_agent_material_and_voice_prepare_flow_uses_bound_account(
             enabled_toolsets=["marketing"],
         )
     )
-    voice = json.loads(
-        handle_function_call(
-            "marketing_prepare_video_voice",
-            {"name": "第一版旁白", "script_text": "先展示结果，再解释方法。"},
-            task_id="session-1",
-            session_id="session-1",
-            enabled_toolsets=["marketing"],
-        )
-    )
-
     assert selected["asset"]["id"] == local["id"]
     assert selected["asset"]["account_id"] == "acct-1"
     assert kept["asset"]["id"] == local["id"]
     assert kept["asset"]["storage_tier"] == "library"
-    assert voice["effect_executed"] is False
-    assert voice["job"]["status"] == "prepared"
-    assert voice["job"]["account_id"] == "acct-1"
 
 
 def test_content_repository_rejects_reserved_provenance_keys(tmp_path):

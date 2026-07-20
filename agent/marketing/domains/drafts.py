@@ -10,6 +10,7 @@ from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.content_assets import ContentAssetRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
 from agent.marketing.domains.video_production import VideoProductionRepository
+from agent.marketing.domains.video_kanban import VideoKanbanExecutionRepository
 
 
 _ACTIVE_CONTENT_STATUSES = {"draft", "review_ready", "approved"}
@@ -23,6 +24,7 @@ class DraftBoxRepository(MarketingDomainRepository):
         super().__init__(paths)
         self.content = ContentAssetRepository(self.paths)
         self.video = VideoProductionRepository(self.paths)
+        self.video_execution = VideoKanbanExecutionRepository(self.paths)
 
     def list(
         self,
@@ -33,6 +35,9 @@ class DraftBoxRepository(MarketingDomainRepository):
         limit: int = 100,
     ) -> dict[str, Any]:
         safe_limit = max(1, min(int(limit), 200))
+        self.video_execution.reconcile_scope(
+            user_id=user_id, account_id=account_id
+        )
         with self._connection() as db:
             represented_asset_ids = {
                 str(value)
@@ -67,6 +72,13 @@ class DraftBoxRepository(MarketingDomainRepository):
                 LEFT JOIN content_assets o ON o.id=p.output_asset_id
                 WHERE p.user_id=? AND p.account_id=?
                 ORDER BY p.updated_at DESC LIMIT 500""",
+                (user_id, account_id),
+            ).fetchall()
+            execution_rows = db.execute(
+                """SELECT * FROM marketing_video_executions
+                WHERE user_id=? AND account_id=?
+                  AND (production_id IS NULL OR production_id='')
+                ORDER BY updated_at DESC LIMIT 500""",
                 (user_id, account_id),
             ).fetchall()
             publish_action_rows = db.execute(
@@ -138,6 +150,14 @@ class DraftBoxRepository(MarketingDomainRepository):
                 )
             )
 
+        for row in execution_rows:
+            if archived:
+                if row["status"] != "archived":
+                    continue
+            elif row["status"] not in {"preparing", "queued", "blocked"}:
+                continue
+            items.append(_video_execution_item(row))
+
         items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
         bounded = items[:safe_limit]
         return {
@@ -176,6 +196,13 @@ class DraftBoxRepository(MarketingDomainRepository):
                 account_id=account_id,
                 confirmed=confirmed,
             )
+        elif object_type == "video_execution":
+            item = self.video_execution.archive_blocked(
+                execution_id=object_id,
+                user_id=user_id,
+                account_id=account_id,
+                confirmed=confirmed,
+            )
         else:
             raise ValueError("unsupported draft object type")
         return {"operation": "archived", "object_type": object_type, "item": item}
@@ -202,6 +229,12 @@ class DraftBoxRepository(MarketingDomainRepository):
         elif object_type == "video_production":
             item = self.video.restore_archived(
                 production_id=object_id,
+                user_id=user_id,
+                account_id=account_id,
+            )
+        elif object_type == "video_execution":
+            item = self.video_execution.restore_archived(
+                execution_id=object_id,
                 user_id=user_id,
                 account_id=account_id,
             )
@@ -328,6 +361,46 @@ def _video_item(
         and not archived
         and row["output_status"] != "published"
         and not action_statuses.intersection({"executing", "unknown", "published"}),
+    }
+
+
+def _video_execution_item(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        context = json.loads(row["execution_json"] or "{}")
+    except (TypeError, ValueError):
+        context = {}
+    archived = row["status"] == "archived"
+    blocked = row["status"] == "blocked"
+    return {
+        "id": row["id"],
+        "object_type": "video_execution",
+        "content_kind": "video",
+        "title": str(context.get("topic") or "视频制作任务"),
+        "status": row["status"],
+        "previous_status": row["archived_from_status"] if archived else "",
+        "version": 1,
+        "human_review_status": "pending",
+        "failure_code": str(row["failure_code"] or ""),
+        "workflow_stage": "archived" if archived else ("production_blocked" if blocked else "production"),
+        "readiness": {
+            "version": "marketing.video.readiness.v2",
+            "owner": "hermes.official.kanban-video-orchestrator",
+            "ready": False,
+            "render_required": False,
+            "voice_required": False,
+            "blockers": ([{
+                "code": "official_pipeline_blocked",
+                "message": str(row["failure_code"] or "官方视频管线已阻断"),
+            }] if blocked else []),
+        },
+        "publish_asset_id": "",
+        "publish_actions": [],
+        "source_asset_id": "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "can_resume": blocked and not archived,
+        "can_archive": blocked and not archived,
+        "can_prepare_publish": False,
     }
 
 

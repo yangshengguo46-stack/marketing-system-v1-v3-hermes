@@ -14,6 +14,7 @@ from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains.article_drafts import ArticleDraftValidator
 from agent.marketing.domains.content_policy import CONTENT_KINDS, VALID_PLATFORMS
 from agent.marketing.domains.evidence import EvidenceRepository
+from agent.marketing.domains.operating_entities import OperatingEntityRepository
 from agent.marketing.domains.storage import MarketingDomainRepository
 from agent.marketing.domains.short_video_signals import ShortVideoSignalRepository
 from agent.marketing.intelligence.content_feature_snapshot import (
@@ -499,11 +500,11 @@ class ContentAssetRepository(MarketingDomainRepository):
             parent_asset_id = parent_row["id"]
             next_version = int(parent_row["version"] or 1) + 1
         target_platforms = json.loads(plan_row["platforms_json"])
-        verified_evidence = EvidenceRepository(self.paths).require_verified(
+        verified_evidence = self._require_verified_evidence_for_plan(
+            plan_row=plan_row,
             user_id=user_id,
             account_id=account_id,
-            evidence_ids=evidence_refs,
-            require_any=True,
+            evidence_refs=evidence_refs,
         )
         bundle = ArticleDraftValidator().build_bundle(
             title=title,
@@ -578,11 +579,19 @@ class ContentAssetRepository(MarketingDomainRepository):
             raise ValueError("content keys beginning with '_' are reserved")
         if "feature_snapshot" in content:
             raise ValueError("feature_snapshot is system-generated")
-        verified_evidence = EvidenceRepository(self.paths).require_verified(
+        with self._connection() as db:
+            evidence_plan_row = db.execute(
+                """SELECT * FROM content_production_plans
+                WHERE id=? AND user_id=? AND account_id=?""",
+                (plan_id_value, user_id, account_id),
+            ).fetchone()
+        if evidence_plan_row is None:
+            raise KeyError("production plan not found in account scope")
+        verified_evidence = self._require_verified_evidence_for_plan(
+            plan_row=evidence_plan_row,
             user_id=user_id,
             account_id=account_id,
-            evidence_ids=evidence_refs or [],
-            require_any=True,
+            evidence_refs=evidence_refs or [],
         )
         payload = dict(content)
         payload["_production_kind"] = production_kind
@@ -894,6 +903,47 @@ class ContentAssetRepository(MarketingDomainRepository):
                 now=now,
             )
         return self.get(asset_id=asset_id, user_id=user_id, account_id=account_id)
+
+    def _require_verified_evidence_for_plan(
+        self,
+        *,
+        plan_row: sqlite3.Row,
+        user_id: str,
+        account_id: str,
+        evidence_refs: list[str],
+    ) -> list[dict[str, Any]]:
+        """Resolve provenance at the production plan's real ownership scope."""
+
+        entity_id = str(plan_row["entity_id"] or "").strip()
+        repository = EvidenceRepository(self.paths)
+        if not entity_id:
+            return repository.require_verified(
+                user_id=user_id,
+                account_id=account_id,
+                evidence_ids=evidence_refs,
+                require_any=True,
+            )
+        entity = OperatingEntityRepository(self.paths).get(
+            entity_id=entity_id, user_id=user_id
+        )
+        account_ids = list(entity.get("account_ids") or [])
+        if account_id not in account_ids:
+            # Compatibility plans may use a synthetic prospect account which
+            # cannot be linked through marketing_accounts. Keep those records
+            # strictly account-scoped; only real linked channels gain the
+            # entity-wide provenance scope.
+            return repository.require_verified(
+                user_id=user_id,
+                account_id=account_id,
+                evidence_ids=evidence_refs,
+                require_any=True,
+            )
+        return repository.require_verified_across_accounts(
+            user_id=user_id,
+            account_ids=account_ids,
+            evidence_ids=evidence_refs,
+            require_any=True,
+        )
 
     def restore_archived(
         self,

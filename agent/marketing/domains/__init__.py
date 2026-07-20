@@ -16,21 +16,11 @@ from .material_sourcing import MaterialSourcingRepository
 from .operations import MarketingOperationRepository
 from .operating_entities import OperatingEntityRepository
 from .topic_recommendations import TopicRecommendationRepository
-from .production_audio import ProductionAudioRepository
 from .publishing import PublishingRepository
 from .public_content_observations import PublicContentObservationRepository
 from .short_video_signals import ShortVideoSignalRepository
 from .video_production import VideoProductionRepository
-from .video_quality import QUALITY_REPORT_VERSION, VideoQualityAnalyzer
-from .video_renderers import VideoRendererRuntime
-from .video_ir import (
-    VIDEO_IR_VERSION,
-    affected_scene_ids,
-    build_render_plan,
-    compile_ffmpeg_edl,
-    normalize_video_ir,
-    video_ir_from_edl,
-)
+from .video_kanban import VIDEO_EXECUTION_VERSION, VideoKanbanExecutionRepository
 
 __all__ = [
     "AccountContextRepository",
@@ -49,19 +39,11 @@ __all__ = [
     "MarketingOperationRepository",
     "OperatingEntityRepository",
     "TopicRecommendationRepository",
-    "ProductionAudioRepository",
     "PublishingRepository",
     "PublicContentObservationRepository",
     "ShortVideoSignalRepository",
     "VideoProductionRepository",
-    "VideoQualityAnalyzer",
-    "VideoRendererRuntime",
-    "QUALITY_REPORT_VERSION",
-    "VIDEO_IR_VERSION",
-    "affected_scene_ids",
-    "build_render_plan",
-    "compile_ffmpeg_edl",
-    "normalize_video_ir",
-    "video_ir_from_edl",
+    "VideoKanbanExecutionRepository",
+    "VIDEO_EXECUTION_VERSION",
     "article_stylebooks",
 ]

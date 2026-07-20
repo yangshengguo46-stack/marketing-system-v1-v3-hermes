@@ -10,7 +10,7 @@ from agent.marketing.domains.topic_recommendations import TopicRecommendationRep
 from agent.marketing.platform_catalog import platform_content_blueprints
 
 
-TOPIC_PRODUCTION_WORKFLOW_VERSION = "marketing.topic-production.workflow.v2"
+TOPIC_PRODUCTION_WORKFLOW_VERSION = "marketing.topic-production.workflow.v3"
 
 _ARTICLE_FORMATS = frozenset(
     {"long_article", "article", "image_text", "carousel", "image", "text", "document", "short_text", "thread"}
@@ -43,6 +43,7 @@ def create_topic_production_workflow(
     entity_id: str,
     selected_platforms: list[str] | None = None,
     explicit_user_override: bool = False,
+    fresh_revision: bool = False,
     paths: MarketingDataPaths | None = None,
 ) -> dict[str, Any]:
     """Create one idempotent production DAG from a preflighted candidate."""
@@ -66,20 +67,53 @@ def create_topic_production_workflow(
         selected_platforms=requested_platforms or None,
     )
     harness = HarnessRepository((paths or MarketingDataPaths.from_env()).agent_db)
+    base_source_ref = str(candidate["id"])
     existing = harness.find_by_source(
         namespace="marketing",
         source_kind="marketing.topic_candidate",
-        source_ref=str(candidate["id"]),
+        source_ref=base_source_ref,
     )
-    if existing is not None:
+    if existing is not None and not fresh_revision:
         return existing
+    source_ref = base_source_ref
+    supersedes_workflow_id = ""
+    revision = 1
+    if fresh_revision:
+        family = [
+            item
+            for item in harness.list_workflows(
+                namespace="marketing",
+                owner_user_id=user_id,
+                owner_entity_id=entity_id,
+                limit=200,
+            )
+            if item.get("source_kind") == "marketing.topic_candidate"
+            and (
+                item.get("source_ref") == base_source_ref
+                or str(item.get("source_ref") or "").startswith(
+                    f"{base_source_ref}:revision:"
+                )
+            )
+        ]
+        if family:
+            latest = max(family, key=lambda item: float(item.get("created_at") or 0))
+            supersedes_workflow_id = str(latest["id"])
+            revision = max(
+                [
+                    int(str(item.get("source_ref") or "").rsplit(":", 1)[-1])
+                    for item in family
+                    if ":revision:" in str(item.get("source_ref") or "")
+                ]
+                or [1]
+            ) + 1
+        source_ref = f"{base_source_ref}:revision:{revision}"
     automatic_voiceover = _automatic_voiceover_authorized()
     return harness.create_workflow(
         namespace="marketing",
         owner_user_id=user_id,
         owner_entity_id=entity_id,
         source_kind="marketing.topic_candidate",
-        source_ref=str(candidate["id"]),
+        source_ref=source_ref,
         kind="topic.production",
         title=str(candidate["topic"]),
         input={
@@ -92,6 +126,8 @@ def create_topic_production_workflow(
                 "plan_id": candidate["plan_id"],
                 "preflight_id": candidate["preflight_id"],
             },
+            "production_revision": revision,
+            "supersedes_workflow_id": supersedes_workflow_id,
         },
         policy={
             "branches_are_siblings": True,
@@ -304,98 +340,24 @@ def _steps(brief: dict[str, Any]) -> list[dict[str, Any]]:
         branch_terminals.append("article.draft_box")
 
     if video_platforms:
-        video_qa_keys: list[str] = []
         for platform in video_platforms:
-            direction_key = f"video.direct.{platform}"
-            preflight_key = f"video.preflight.{platform}"
-            material_key = f"video.material.{platform}"
-            audio_key = f"video.audio.{platform}"
-            previs_key = f"video.previs.{platform}"
-            render_key = f"video.render.{platform}"
-            qa_key = f"video.qa.{platform}"
-            video_qa_keys.append(qa_key)
-            steps.extend([
+            submit_key = f"video.kanban_submit.{platform}"
+            steps.append(
                 {
-                    "key": direction_key,
-                    "kind": "video.direction",
-                    "worker_role": "video_showrunner",
-                    "toolsets": ["marketing.read", "video"],
-                    "resource_scope": f"video-treatment:{brief['candidate_id']}:{platform}",
+                    "key": submit_key,
+                    "kind": "video.official_kanban",
+                    "worker_role": "video_intake",
+                    "toolsets": ["marketing.read"],
+                    "resource_scope": f"video-kanban:{brief['candidate_id']}:{platform}",
                     "input": {**reference, "platform": platform},
                     "depends_on": [
                         "topic_brief.freeze",
                         *([research_keys[platform]] if platform in research_keys else []),
                     ],
-                },
-                {
-                    "key": preflight_key,
-                    "kind": "video.treatment_preflight",
-                    "worker_role": "preflight_evaluator",
-                    "toolsets": ["marketing.read", "video", "vision"],
-                    "resource_scope": f"video-treatment-preflight:{brief['candidate_id']}:{platform}",
-                    "input": {**reference, "platform": platform},
-                    "depends_on": [direction_key],
-                    "max_attempts": 3,
-                },
-                {
-                    "key": material_key,
-                    "kind": "video.material_search",
-                    "worker_role": "material_researcher",
-                    "toolsets": ["marketing.read", "web", "video"],
-                    "resource_scope": f"material-search:{brief['candidate_id']}:{platform}",
-                    "input": {**reference, "platform": platform},
-                    "depends_on": [preflight_key],
-                },
-                {
-                    "key": audio_key,
-                    "kind": "video.audio_plan",
-                    "worker_role": "audio_director",
-                    "toolsets": ["marketing.read", "tts"],
-                    "resource_scope": f"video-audio:{brief['candidate_id']}:{platform}",
-                    "input": {**reference, "platform": platform},
-                    "depends_on": [preflight_key],
-                },
-                {
-                    "key": previs_key,
-                    "kind": "video.previsualization",
-                    "worker_role": "video_compositor",
-                    "toolsets": ["video"],
-                    "resource_scope": f"video-previs:{brief['candidate_id']}:{platform}",
-                    "input": {**reference, "platform": platform},
-                    "depends_on": [preflight_key, material_key, audio_key],
-                },
-                {
-                    "key": render_key,
-                    "kind": "video.render",
-                    "worker_role": "render_worker",
-                    "toolsets": ["video"],
-                    "resource_scope": f"video-render:{brief['candidate_id']}:{platform}",
-                    "input": {**reference, "platform": platform},
-                    "depends_on": [previs_key],
-                    "max_attempts": 3,
-                },
-                {
-                    "key": qa_key,
-                    "kind": "video.qa",
-                    "worker_role": "video_reviewer",
-                    "toolsets": ["video", "vision"],
-                    "resource_scope": f"video-qa:{brief['candidate_id']}:{platform}",
-                    "input": {**reference, "platform": platform},
-                    "depends_on": [render_key],
-                },
-            ])
-        steps.append(
-            {
-                "key": "video.draft_box",
-                "kind": "draft.settle",
-                "worker_role": "draft_reducer",
-                "toolsets": ["marketing.draft"],
-                "resource_scope": f"draft-box:video:{brief['candidate_id']}",
-                "input": {**reference, "lane": "video"},
-                "depends_on": video_qa_keys,
-            }
-        )
-        branch_terminals.append("video.draft_box")
+                    "max_attempts": 2,
+                }
+            )
+            branch_terminals.append(submit_key)
 
     if not branch_terminals:
         raise ValueError("topic has no producible content lane")

@@ -146,7 +146,7 @@ Daily signals / evidence fan-out
   → retro + governed learning
 ```
 
-`TopicBrief` 必须带原始选题、EvidencePack、预演/预测、实际推荐平台、各平台匹配、目标账号绑定和平台蓝图。图文与视频只共享这个上游事实，不共享彼此的脚本、分镜或生命周期。缺个人/账号样本时，公开平台、市场、基准和内容信息作为冷启动 prior 继续支持可逆草稿，同时降低置信且禁止精确流量承诺。Remotion、HyperFrames、FFmpeg、TTS、素材 Provider 和后续 `video-use`/OpenCut adapter 都是可替换的执行 hands，不是项目 owner。
+`TopicBrief` 必须带原始选题、EvidencePack、预演/预测、实际推荐平台、各平台匹配、目标账号绑定和平台蓝图。图文与视频只共享这个上游事实，不共享彼此的脚本、分镜或生命周期。缺个人/账号样本时，公开平台、市场、基准和内容信息作为冷启动 prior 继续支持可逆草稿，同时降低置信且禁止精确流量承诺。中央 Topic Workflow 到视频只保留一个 `video.official_kanban` 提交 Step；提交后由官方 `kanban-video-orchestrator` 独占执行图。Remotion、HyperFrames、FFmpeg、TTS、素材 Provider 和 `video-use` 都是该官方团队的执行工具，不是另一个项目 owner。
 
 ## 六、审批与恢复
 
@@ -177,12 +177,12 @@ Daily signals / evidence fan-out
 | `H1` | 原生 Harness schema/repository/event log/lease；现有 operation 先以单 Step 兼容运行 | operation 仍保留 | schema、CAS、并发、断电、重复执行测试 |
 | `H2` | `workflow.list/get/subscribe/cancel/retry/approve`，Desktop 改读后端 projection | 删除内存任务 owner 与轮询猜测 | Renderer reload、Gateway 重启、长等待恢复 |
 | `H3` | Daily Topic DAG 与 TopicBrief；图文、视频成为兄弟分支 | 删除 campaign/script → video 主入口 | 同选题并行产出两个独立 branch |
-| `H4` | 视频 Project/Revision、可信素材、可播放 proxy、声音/字幕、renderer spec、QA | 删除假阶段、假播放器、假版本和演示模板 | 真实素材/旁白/混合渲染到草稿箱 |
+| `H4` | 官方 Hermes 视频 Kanban、可信素材、真实旁白/时间码、renderer/editor/reviewer、Draft Box 结算 | 删除 Marketing 内部视频 DAG、旧音频/IR/质量/renderer 执行模块和直调 RPC | 官方七 profile 独立完成真实素材/旁白/渲染/局部返工到草稿箱 |
 | `H5` | entity-first Repository 与 schema 单 owner | 逐表删除 trigger 推断和 repo `_ensure_schema` | 双主体/多平台隔离、迁移回滚 |
 | `H6` | Cron 只 enqueue；Provider/effect 进入 leased Activity + outbox | 删除进程级后台任务 owner | 限流、崩溃、unknown effect、幂等恢复 |
 | `H7` | 最小 role toolsets、trace/eval/replay、旧 operation prompt 编排清理 | 删除自由 prompt 工作流和写型默认 core 工具 | outcome + trajectory + recovery + cost eval |
 
-每个批次必须先落兼容读模型，再迁移写入，再跑双路径对账，最后删除旧路径。不得同时重写全部领域；不得用“新框架能启动”替代真实业务状态与断点恢复证明。
+每个批次必须先落只读历史投影，再迁移写入，再跑对账，最后删除旧执行路径。兼容只允许读取历史成品，不允许保留第二个生产 owner；不得用“新框架能启动”替代真实业务状态与断点恢复证明。
 
 ### 8.1 H0 脏工作树裁决
 
@@ -192,9 +192,9 @@ H0 以重构开始前的 28 个 tracked 修改为基线。下列裁决只决定�
 |---|---|---|
 | 保留 | 草稿箱汇总、待发布统一进入草稿箱、发布前人审与 fail-closed 门禁 | 作为 `Draft/Approval/EffectIntent` 领域合同保留；改由 Workflow projection 展示 |
 | 保留 | renderer 可用性、真实成片、真实素材、旁白、版权状态的发布阻断 | 保留为领域 validator 和 QA Step，不由 UI 或模型自行判断 |
-| 迁移 | 素材检索、候选物化、声音任务、Video IR、renderer plan、版本与 receipt | 迁入独立 Video branch 的 typed Steps/Activities；补 lease、heartbeat、retry 和幂等 settlement |
+| 已迁移并删除旧执行 | 素材检索、候选物化、声音任务、Video IR、renderer plan、版本与 receipt | 生产执行迁入官方 `kanban-video-orchestrator` 七 profile；Marketing 只保留锁定合同、Reviewer 结算与历史读投影 |
 | 迁移 | Gateway 的草稿、素材、视频、发布 RPC 与 Desktop 工作台 | RPC 改为 Workflow command/query；Desktop 改读后端 projection 和真实可播放 proxy |
-| 已退出产品主链 | `cross_platform_campaign → prepare_from_campaign / prepare_from_script → local storyboard` 主路径 | Desktop/Gateway 不再暴露该入口；由 `TopicBrief → Video Director` 替代。内部兼容实现待最终死代码清理 |
+| 已删除 | `cross_platform_campaign → prepare_from_campaign / prepare_from_script → local storyboard` 主路径 | Desktop/Gateway/Tool/Repository 实现与固化旧行为的测试均已删除；由 `TopicBrief → official video Kanban` 替代 |
 | 已删除暴露 | `marketing_prepare_video_from_script` 默认 core/marketing tool | schema、registry 与 toolset 已移除；H3 由 Video Worker typed command 承担 |
 | 重写测试 | 固化“接受图文 campaign 后才能启动视频”与 storyboard 占位物的测试 | 改为同一 TopicBrief fan-out、分支独立恢复、真实素材门禁和可播放 proxy 测试 |
 
@@ -209,8 +209,8 @@ H0 以重构开始前的 28 个 tracked 修改为基线。下列裁决只决定�
 - 相同 Attempt/相同输出的结算幂等；Receipt 的相同 idempotency key 若输入不同会 fail closed。
 - 旧 `marketing.operation` 已映射为一个兼容 Workflow/Step；Gateway 重启后不再直接标错，而是结束旧 Attempt、追加 reclaim Event 并把 Step 放回可重试队列。
 - Gateway 已提供 workflow list/get/events/cancel/retry/approvals/respond RPC；取消、追加重试和审批决定均要求明确用户动作并校验 owner。Desktop task tray 已优先读取 Workflow，并在页面重载后从后端恢复活跃任务 projection，不再把 operation Session 当唯一任务事实。
-- `marketing.topic_production.start` 已能从预演通过的 candidate 创建幂等 TopicBrief DAG。中央任务只生产实际 `recommended_platforms`，并为每个平台绑定真实目标账号或明确公域冷启动。图文与视频 Worker 都只依赖 `topic_brief.freeze`；未知平台先走独立 research Step。图文按平台直接写最终交付并运行 ArticleDraft Preflight；视频按平台建立 Showrunner Treatment、Treatment Preflight、素材/声音/previs/render 和真实成片 Cut Preflight，不再把母稿或母版伪装成全平台成品。
-- `HarnessDispatcher` 已提供注册式 typed handler、限定 Step kind 领取、3 路默认并发、自动 heartbeat、资源互斥、临时/永久错误分类和 Receipt 结算。Topic DAG 的全部 Step kind 已注册真实 handler；模型只做受限创意判断，领域库负责 plan/preflight/content/media/video/draft 的事实结算。
+- `marketing.topic_production.start` 从预演通过的 candidate 创建幂等 TopicBrief DAG。中央任务只生产实际 `recommended_platforms`，并为每个平台绑定真实目标账号或明确公域冷启动。图文按平台直接写最终交付并运行 ArticleDraft Preflight；视频分支只保留一个 `video.official_kanban` 提交 Step，不再在 Marketing Harness 中复制 Showrunner/素材/TTS/渲染/审片子图。
+- 视频提交后由官方 Kanban Dispatcher 和七个 Hermes profile 提供 task/parent、lease、heartbeat、retry、共享 workspace 与结构化 handoff；Marketing Harness 不领取或结算这些视频子任务，也不镜像其 task graph。
 - 素材解析顺序已固定为：账号素材库 → 零费用开放许可 Provider 搜索/下载（默认 Wikimedia Commons 官方 API；已有免费 Key 时可叠加 Pexels）→ 已安装 `media-use` 的项目/全局本地缓存。自动流程硬禁付费云生成，`media-use` 强制 `--local-only`，返回 generated 也拒绝采用；所有零费用来源仍未命中时 Step 明确失败并允许重试，不生成占位素材。每次命中都冻结成本地文件并写入 `MediaAssetRepository` 来源、许可证/生成状态与 resolver receipt；发布仍单独复核人物、物权、商标与使用场景。
 - Desktop 工作台“制作选题”已直连 `marketing.topic_production.start`，任务托盘按 workflow Event 增量恢复进度、审批、停止和重试；结果统一进入草稿箱。图文审核页已删除“拿平台图文稿制作视频”的入口，视频不再等待或复制图文脚本。
 
@@ -221,14 +221,14 @@ H0 以重构开始前的 28 个 tracked 修改为基线。下列裁决只决定�
 ### 保留
 
 - Hermes conversation loop、SessionDB、Memory、Skill、MCP、Browser owner、Cron 触发能力。
-- Operating Entity、Evidence、Topic/Preflight、Content、Media、Video IR、Rights、Publishing、Metric、Retro、Learning、Knowledge owner。
-- Remotion、HyperFrames、FFmpeg runtime 与技术 QA；素材 Provider、TTS、发布 Provider seam。
+- Operating Entity、Evidence、Topic/Preflight、Content、Media、Rights、Publishing、Metric、Retro、Learning、Knowledge owner；Reviewer 通过后的 Video IR/Receipt 是交付事实，不是执行图。
+- 官方 Kanban/Dispatcher/Profile；Remotion、HyperFrames、FFmpeg、`video-use`、素材 Provider 与 TTS 作为 profile 工具。
 - Kanban 已验证的 CAS、Attempt、Lease、Heartbeat、stale reclaim 和熔断思想及可提炼代码。
 
-### 迁移后删除
+### 已删除或必须删除
 
 - `marketing.operation.start` 的自然语言 prompt 编排、对象前后快照猜结果和重启即失败合同。
-- 以图文 campaign/script 为视频唯一上游的产品路径。
+- 以图文 campaign/script 为视频唯一上游的产品路径，以及 Marketing 内部第二套视频 DAG/Worker/Audio/IR/QA/Renderer 执行器。
 - Electron localStorage 中的业务草稿、人物/道具/场景/声音选择和内存任务 owner。
 - 只切本地 tab 的假阶段、无事件的假播放器、没有 revision owner 的 V1/V2、未接通按钮。
 - 把 storyboard/derived 占位包装为素材或成品的兼容路径。

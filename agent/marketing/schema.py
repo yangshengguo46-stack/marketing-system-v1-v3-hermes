@@ -418,30 +418,6 @@ CREATE TABLE IF NOT EXISTS material_candidates (
 CREATE INDEX IF NOT EXISTS idx_material_candidate_scope
     ON material_candidates(user_id, account_id, search_id, score DESC);
 
-CREATE TABLE IF NOT EXISTS marketing_audio_jobs (
-    id TEXT PRIMARY KEY,
-    idempotency_key TEXT NOT NULL UNIQUE,
-    user_id TEXT NOT NULL,
-    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
-    account_id TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'voiceover',
-    name TEXT NOT NULL,
-    script_text TEXT NOT NULL,
-    script_sha256 TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'prepared',
-    approval_ref TEXT,
-    provider TEXT NOT NULL DEFAULT '',
-    output_asset_id TEXT REFERENCES media_asset_library(id),
-    receipt_json TEXT NOT NULL DEFAULT '{}',
-    failure_code TEXT,
-    created_at TEXT NOT NULL,
-    started_at TEXT,
-    settled_at TEXT,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_marketing_audio_job_scope
-    ON marketing_audio_jobs(user_id, account_id, status, updated_at);
-
 CREATE TABLE IF NOT EXISTS marketing_video_productions (
     id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
@@ -453,6 +429,8 @@ CREATE TABLE IF NOT EXISTS marketing_video_productions (
     provider TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'prepared',
     edl_json TEXT NOT NULL,
+    video_ir_json TEXT NOT NULL DEFAULT '{}',
+    render_plan_json TEXT NOT NULL DEFAULT '{}',
     approval_ref TEXT,
     voice_asset_id TEXT REFERENCES media_asset_library(id),
     final_video_asset_id TEXT REFERENCES media_asset_library(id),
@@ -468,6 +446,56 @@ CREATE TABLE IF NOT EXISTS marketing_video_productions (
 );
 CREATE INDEX IF NOT EXISTS idx_video_production_scope
     ON marketing_video_productions(user_id,account_id,status,updated_at);
+
+CREATE TABLE IF NOT EXISTS marketing_video_executions (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    contract_version TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '' REFERENCES marketing_operating_entities(id),
+    account_id TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    plan_id TEXT NOT NULL,
+    preflight_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    tenant TEXT NOT NULL UNIQUE,
+    workspace_path TEXT NOT NULL,
+    root_task_id TEXT,
+    status TEXT NOT NULL DEFAULT 'preparing',
+    model_json TEXT NOT NULL DEFAULT '{}',
+    budget_json TEXT NOT NULL DEFAULT '{}',
+    execution_json TEXT NOT NULL DEFAULT '{}',
+    receipt_json TEXT NOT NULL DEFAULT '{}',
+    source_asset_id TEXT,
+    production_id TEXT,
+    final_video_asset_id TEXT,
+    failure_code TEXT,
+    archived_from_status TEXT NOT NULL DEFAULT '',
+    archived_at TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    settled_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_video_execution_scope
+    ON marketing_video_executions(user_id,account_id,status,updated_at);
+
+CREATE TABLE IF NOT EXISTS marketing_video_material_inspections (
+    id TEXT PRIMARY KEY,
+    execution_id TEXT NOT NULL REFERENCES marketing_video_executions(id),
+    shot_id TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    semantic_contract_hash TEXT NOT NULL,
+    passed INTEGER NOT NULL,
+    score REAL NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    receipt_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(execution_id,shot_id,candidate_id,semantic_contract_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_video_material_inspection_execution
+    ON marketing_video_material_inspections(execution_id,shot_id,passed,score);
 
 CREATE TABLE IF NOT EXISTS marketing_preflight_records (
     id TEXT PRIMARY KEY,
@@ -834,6 +862,7 @@ CREATE INDEX IF NOT EXISTS idx_marketing_knowledge_retrieval
 CREATE UNIQUE INDEX IF NOT EXISTS idx_marketing_knowledge_identity
     ON marketing_knowledge_entries(knowledge_base,user_id,IFNULL(account_id,''),IFNULL(platform,''),
                                    region,content_kind,topic,version,source_kind,source_ref);
+DROP TABLE IF EXISTS marketing_audio_jobs;
 """
 
 
@@ -859,8 +888,8 @@ ENTITY_OWNED_SCOPE_COLUMNS = {
     "media_asset_library": "account_id",
     "material_searches": "account_id",
     "material_candidates": "account_id",
-    "marketing_audio_jobs": "account_id",
     "marketing_video_productions": "account_id",
+    "marketing_video_executions": "account_id",
     "marketing_preflight_records": "account_id",
     "marketing_topic_recommendation_batches": "account_id",
     "marketing_topic_recommendation_candidates": "account_id",
@@ -898,6 +927,7 @@ LEGACY_MARKETING_TABLES = (
     "content_production_plans",
     "content_assets",
     "marketing_video_productions",
+    "marketing_video_executions",
     "marketing_preflight_records",
     "marketing_topic_recommendation_batches",
     "marketing_topic_recommendation_candidates",

@@ -38,16 +38,16 @@ Memory/Skill     Marketing domain  MCP/Channels
 | 工具执行 | Hermes tool registry/middleware | 原生注册账号、证据、内容能力；预演在 action 前自动发生 |
 | 外部副作用 | Hermes approval/effect boundary | 发布、付费、敏感账号动作必须生成可验证回执 |
 | 记忆 | Hermes memory/Skill ecosystem | 只接收治理通过的候选；不保存草稿和瞬时热点 |
-| 内容半成品生命周期 | `ContentAssetRepository` / `VideoProductionRepository` | 原状态软归档与恢复；`DraftBoxRepository` 只做账号投影和分派 |
+| 内容半成品生命周期 | `ContentAssetRepository` / 官方 Hermes 视频 Kanban | 图文由领域库持久化；视频任务由官方 Kanban 执行，Reviewer 通过后才落 Draft Box；`DraftBoxRepository` 只做投影和分派 |
 | 消息渠道 | Hermes Gateway | 飞书/微信只是同一会话 surface |
 | 定时任务 | Hermes cron/scheduler | 指标 checkpoint、复盘和异常提醒 |
 | 产品界面 | `apps/desktop` | 展示结论、资产、回执和控制，不拥有第二业务状态机 |
 
 ## Desktop / Gateway 合同审计（2026-07-17）
 
-当前依赖方向是单向的：Desktop 通过 Gateway 读取或提交结构化意图，后端不导入 Desktop；账号、素材、内容、视频、发布和学习事实仍由 Hermes Repository 与 `state.db` 拥有。Renderer 当前消费 25 个 `marketing.*` RPC，Gateway 暴露 36 个；未被 Desktop 使用的 11 个入口可能供消息渠道、后续治理界面或兼容路径使用，未经调用方审计不得按“前端没用”删除。Gateway 注册器已改为重复方法名立即失败，避免后声明静默覆盖前 handler。
+当前依赖方向是单向的：Desktop 通过 Gateway 读取或提交结构化意图，后端不导入 Desktop；账号、素材、内容、发布和学习事实仍由 Hermes Repository 与 `state.db` 拥有，视频执行图由官方 Hermes Kanban 拥有。营销库只保存业务入口、锁定合同、最终草稿/素材与回执，不镜像 Kanban task graph。Gateway 注册器对重复方法名立即失败，避免后声明静默覆盖前 handler。
 
-草稿箱不建立新的 owner。`marketing.drafts.list` 只把当前账号的未完成 ContentAsset 与 VideoProduction 汇总成 bounded projection，并抑制 production source/output 的重复展示；`marketing.draft.archive/restore` 再分别委托原生内容或视频 Repository。归档字段、关联计划与视频 source/output 资产在 `state.db` 中同步结算，Electron 只收集确认并按资产/production ID 回到原图文审核或视频导演台。运行中任务不能归档，已验收成品不进入草稿投影，删除历史不属于该合同。
+草稿箱不建立新的 owner。`marketing.drafts.list` 汇总未完成 ContentAsset、官方视频执行投影与 Reviewer 已结算的 VideoProduction 结果；运行中的视频仍由 Kanban 管理，只有明确阻断的执行可软归档。`VideoProductionRepository` 只保留历史/成品读取、播放、人审与归档投影，不再包含编导、素材选择、TTS、渲染或返工执行。Electron 只收集确认并按对象 ID 回到原审核页。
 
 任务协议泄漏已在本轮收口：Desktop 只向 `marketing.operation.start` 提交账号、资产、生产任务、场景、阶段和用户真实输入，Gateway 在后端内部完成校验、附件原生化、账号作用域 session、Agent 启动和提示合同；Renderer 不再读取后端 prompt，不再调用 `session.create` / `prompt.submit`，也不再用通用 `session.status=idle` 猜测业务完成。`marketing.operation.status` 统一返回 `working / waiting / complete / error` 和新建或绑定的领域对象引用；`desktop-product` 内部 session 不进入普通 Chat 历史。UI 任务卡仍只是内存展示投影，页面切换依靠 operation id 继续读取后端状态，内容、视频和经营结果继续由原生领域 owner 持久化。operation 的产品投影现由 `state.db` 中的 `marketing_operations` 和原生 `MarketingOperationRepository` 持久化；Gateway 重启后已完成结果可继续读取，未完成 Agent turn 会明确结算为可重试错误且绝不自动重放外部副作用。
 
@@ -65,9 +65,9 @@ agent/marketing/
     content_*.py / article_drafts.py / drafts.py
     evidence.py / browser_payloads.py
     human_model.py / knowledge_*.py
-    media_assets.py / material_sourcing.py / production_audio.py
+    media_assets.py / material_sourcing.py
     public_content_observations.py / short_video_signals.py
-    video_ir.py / video_production.py / video_quality.py / video_renderers.py
+    video_kanban.py / video_production.py
     publishing.py / storage.py
   intelligence/
     content_*.py / influence_score.py / preflight_decision.py
@@ -266,17 +266,16 @@ Playwright MCP 官方 `createConnection(config, contextGetter)` 要求 `contextG
 
 - Marketing OS 只拥有图文和不露脸素材视频两条内容生产 lane；二者共享账号、证据、素材、音频、版权、回执和复盘合同。
 - Hermes 原生感知层由 `vision_analyze`、`browser_vision` 和 `video_analyze` 组成，是 Marketing Agent 在研究、采集、创作、预演、审片与普通对话中共享的底层能力，不属于某个视频工作台。产品 `marketing` 与受约束的 `marketing_code` toolset 都直接携带图片/视频理解；渐进工具披露不得隐藏这些能力，通用 Hermes 的 `video` toolset 仍保持 opt-in。小视频可直接交给视频模型，长视频或指定时间段由本机 ffprobe/FFmpeg 生成带时间戳联系表后分析；采样模式必须区分可见事实与推断，不得声称听到未转写音频或覆盖未采样连续性。读取视频二进制文件时也必须引导到 `video_analyze`，禁止按文本猜测内容。
-- 不露脸视频的业务真相由 Hermes 原生 `VideoProductionRepository` 拥有：账号隔离、不可变 EDL、渲染任务、人工批准、输入输出素材引用、最终 ContentAsset 版本与 Receipt 均进入原生状态链。Electron 只展示素材、时间线、渲染状态和审片意见。
-- 产品拥有 `ffmpeg_timeline_v1`、`remotion_scene_v1` 和 `hyperframes_scene_v1` 三个可恢复执行器。renderer-neutral `marketing.video.ir.v1`、稳定 scene/IR hash 和 `marketing.video.render_plan.v1` 位于 Hermes 原生领域层；旧 EDL 自动升级并保持原幂等键。Hermes 按镜头路由，FFmpeg 统一规格化、拼接、字幕、混音和交付；不是整条视频二选一，也不把 JSX/HTML 当作业务真相。
-- capability matrix 只开放运行时健康证据完整的 renderer。Remotion `4.0.488`、HyperFrames `0.7.57`、GSAP `3.14.2` 和 React `19.2.4` 固定进入独立离线依赖闭包，复用产品 Playwright Chromium；Node/浏览器/版本/入口任一缺失都在批准前 fail closed，不运行浮动 `npx`，不静默下载 Chromium。
-- 场景缓存绑定 scene hash、canvas、renderer 和模板源码指纹；高级 renderer 输出先转为统一 H.264 mezzanine 再合片。Render Receipt 记录每幕实际 renderer、缓存命中、输出 hash 以及整片 IR/plan hash。借鉴 Video Studio 的仅是镜头局部 hash、能力证据门、effect 前持久化审批和整片审查/最小返工思想，不导入其黑板、角色、连续性、Provider session、预算或项目 owner。
-- Electron 只把已打包的 renderer root、Electron-as-Node 路径和 Chromium 路径注入 Hermes，并展示状态；renderer 选择、素材沙箱、缓存、执行、回执和失败恢复都不在 Electron。
-- Video Use、Generative Media、Cheat on Content 和 DBSkill 只提供剪辑、质检、盲测与复盘方法，不拥有任务和状态；OpenMontage 仅作 AGPL 研究样本，DBSkill 仅作 CC BY-NC 个人研究样本，代码不得进入商业产品运行时。
-- Seedance 2 只补齐缺失镜头，不拥有时间线；生成镜头与火山 TTS 等付费效果必须经过单独明确批准，保留 Provider、成本、来源、版权和回执。UI-TARS 不属于视频渲染核心链路，只能在没有稳定 API 的界面操作中作为受控兜底候选。
+- 视频生产的唯一执行 owner 是仓库内官方 `kanban-video-orchestrator`：每个平台启动独立 tenant/workspace，由 Director、Showrunner、Material Scout、Voice、Renderer、Editor、Reviewer 七个官方 Hermes profile 在共享目录中按 Kanban task/parent/lease/heartbeat/retry 合同协作。Marketing `video.official_kanban` 只提交锁定的 TopicBrief/Plan/Preflight，不再建立第二套视频 DAG、Worker 或调度器。
+- `VideoKanbanExecutionRepository` 是业务边界而不是执行器：它探测并锁定真实可用的 Doubao Seed 2.1 Pro，生成官方 plan/setup/brief/TEAM，启动根 Kanban task，并在 Reviewer 结算时验证 `marketing.video.execution.v2`。Marketing 表只记录 execution ID、tenant、workspace、成本上限、最终资产和 Receipt；Kanban task graph 只存在于官方 Kanban DB。
+- Seed 2.1 Pro 负责平台编导、剪辑判断、局部返工与成片审查；Seed 2.0 Mini 只做批量候选素材初筛。模型不可用时明确阻断，不允许静默回退 DeepSeek；豆包只进入视频 lane，图文链路保持原模型和 Writer 合同。
+- Showrunner 先锁定逐镜头旁白、语义、主体、场景、风格、画幅与构图合同；Material Scout 按“自有素材库 → 零费用开放许可来源 → 本地 `media-use` 缓存”检索、看关键帧、评分、重搜并冻结。禁止付费生成缺失素材；不足即阻断。至少一半镜头使用独立素材，单素材最多复用两次。
+- Voice profile 使用火山 TTS 生成统一音色并记录真实分段时长；画面时间服从旁白。Renderer 使用已验证的 Remotion/HyperFrames 模板与 FFmpeg，Editor 使用 `video-use`、极简剪辑规则和最终字幕；模板表达不了时只允许在隔离 workspace 生成场景代码，不得修改核心 renderer。
+- Reviewer 必须检查真实 MP4 的语义相关性、音画同步、字幕安全区、构图、节奏、版权与技术规格，只返工失败镜头，最多三轮。通过后唯一可用的受限 `marketing_video_finalize` 工具把成片、`marketing.video.ir.v2`、权利映射、模型/TTS/素材/工具费用 Receipt 写入 Draft Box；失败或耗尽则明确阻断，绝不伪报完成。
+- `agent/marketing/domains/production_audio.py`、`video_ir.py`、`video_quality.py`、`video_renderers.py` 以及旧直调素材/TTS/本地渲染工具、Gateway RPC 和测试已删除。`video-renderers/` Node 目录继续作为官方 Renderer profile 可调用的模板/运行工具，不是第二执行系统。
+- Electron 只读取官方任务/成片投影并播放、收集人审；不能选择模型、驱动素材/TTS/渲染或修改后台闭环。
 - 真人、数字人和 AI 电影级生产由独立 `/Users/yangyucheng/projects/video-studio` 产品拥有，Marketing OS 不保存其项目画布、角色调度、Provider、预算、审批或预演状态。
 - 当前没有 Marketing OS → Video Studio 运行时接入；在独立产品提供稳定 Port/API 前，不保留假入口、host adapter 或内部 `premium_human_video` 计划。
-- 通用 TTS、平台 BGM 情报和素材版权仍服务不露脸视频，不能因为高阶视频迁出而删除。素材检索由 Hermes 原生 `MaterialSourcingRepository` 统一用户素材和已配置 Provider 候选；首个 Pexels 适配器只负责官方 API 访问，来源、许可证、下载哈希和选择状态归 `state.db`。旁白由 `ProductionAudioRepository` 固化脚本哈希并在一次性确认后复用 Hermes TTS，真实输出作为 MediaAsset 进入同一 Video IR/Render Receipt；Electron 不保存 Provider 密钥、下载地址或生成状态。
-- 五层剪辑 Agent、统一 IR、渲染路由和构建顺序见 [`VIDEO_EDITING_AGENT.md`](VIDEO_EDITING_AGENT.md)。
 
 ## 禁止架构
 

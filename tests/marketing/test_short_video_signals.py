@@ -285,6 +285,59 @@ def test_video_treatment_preflight_blocks_even_one_unverified_claim():
     ]["blockers"]
     assert result["treatment_features"]["unmapped_claim_count"] == 1
 
+
+def test_video_treatment_preflight_blocks_semantically_ungrounded_personal_proof():
+    treatment = {
+        "platform": "douyin",
+        "hook": "我靠 AI 月入过万",
+        "hook_hypothesis": {"first_three_seconds": "个人收入冲突"},
+        "aspect_ratio": "9:16",
+        "target_duration": 6,
+        "pacing": "快",
+        "caption_style": "大字",
+        "cta": "关注",
+        "voiceover_script": "我上个月接了十二个学校订单。",
+        "beat_sheet": [{"purpose": "hook"}],
+        "claim_evidence_map": [
+            {"claim": "个人可以轻松靠 AI 赚钱", "evidence_refs": ["evidence-1"]}
+        ],
+        "shot_list": [
+            {
+                "duration": 3,
+                "purpose": "hook",
+                "visual_query": "income dashboard",
+                "on_screen_text": "月入过万",
+            },
+            {
+                "duration": 3,
+                "purpose": "close",
+                "visual_query": "school orders",
+                "on_screen_text": "十二个订单",
+            },
+        ],
+    }
+
+    result = build_video_treatment_preflight({
+        "platform": "douyin",
+        "treatment": treatment,
+        "evidence_refs": ["evidence-1"],
+        "knowledge_context": {"platform": [{}], "market": [{}], "content": [{}]},
+        "account_context": {},
+        "grounding_review": {
+            "go": False,
+            "unsupported_claims": ["没有证据支持十二个学校订单"],
+            "stance_conflicts": ["证据批判暴富叙事，方案却承诺暴富"],
+            "invented_personal_proof": ["月入过万"],
+            "invented_offers": [],
+        },
+    })
+
+    assert result["preflight_decision"]["go"] is False
+    assert "treatment_evidence_grounding_failed" in result[
+        "preflight_decision"
+    ]["blockers"]
+    assert result["treatment_features"]["evidence_grounding_findings"] == 3
+
 def test_cut_preflight_requires_observed_hook_material_audio_and_treatment_parity():
     review = {
         "playable": True,

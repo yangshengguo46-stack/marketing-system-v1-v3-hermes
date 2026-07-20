@@ -120,9 +120,9 @@ def test_code_capability_is_product_scoped_instead_of_business_default():
         "marketing_search_materials",
         "marketing_effect_materialize",
         "marketing_effect_keep_material",
-        "marketing_prepare_video_voice",
-        "marketing_effect_video_voice",
     } <= set(resolve_toolset("marketing"))
+    assert "marketing_prepare_video_voice" not in resolve_toolset("marketing")
+    assert "marketing_effect_video_voice" not in resolve_toolset("marketing")
     assert {"vision_analyze", "video_analyze"} <= set(resolve_toolset("marketing_code"))
     assert is_product_perception_tool("vision_analyze") is True
     assert is_product_perception_tool("video_analyze") is True
@@ -155,6 +155,11 @@ def test_top_level_product_agent_cannot_execute_code_tools(monkeypatch):
     assert "isolated" in _product_code_block_message(top_level, "terminal")
     assert _product_code_block_message(top_level, "marketing_read_accounts") is None
     assert _product_code_block_message(code_worker, "terminal") is None
+
+    monkeypatch.setenv("HERMES_PROFILE", "marketing-video-material-scout")
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_material")
+    monkeypatch.setenv("HERMES_KANBAN_WORKSPACE", "/tmp/video-workspace")
+    assert _product_code_block_message(top_level, "read_file") is None
 
 
 def test_electron_does_not_choose_marketing_business_storage():

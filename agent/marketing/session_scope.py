@@ -44,7 +44,12 @@ def resolve_account_scope(
     platform = str((account or {}).get("platform") or "unassigned").strip().lower()
     if not re.fullmatch(r"[a-z0-9_-]{1,48}", platform):
         platform = "unknown"
-    entities = OperatingEntityRepository()
+    repository_paths = getattr(repo, "paths", None)
+    entities = (
+        OperatingEntityRepository(repository_paths)
+        if repository_paths is not None
+        else OperatingEntityRepository()
+    )
     if entity_id:
         entity = entities.get(
             entity_id=_normalize_id(entity_id, field="entity_id"),

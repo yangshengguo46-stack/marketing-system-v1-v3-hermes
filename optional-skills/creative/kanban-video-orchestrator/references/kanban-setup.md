@@ -83,10 +83,11 @@ the profile already exists.
 ### Profile config patching
 
 Each profile has a YAML config at `~/.hermes/profiles/<name>/config.yaml`. The
-setup script edits exactly two keys:
+setup script edits the role-owned keys only:
 
-1. `toolsets:` — replace the default with the role's required toolsets
-2. `skills.always_load:` — list the role's must-load skills (may be empty)
+1. `toolsets:` — keep the role's Kanban capability declaration
+2. `platform_toolsets.cli:` — pin the actual toolsets resolved by dispatcher-spawned CLI workers
+3. `skills.always_load:` — list the role's must-load skills (may be empty)
 
 **Do NOT** modify `approvals.mode` (controls user-confirmation of tool calls
 — a security setting that must stay as the user configured it). **Do NOT**
@@ -108,7 +109,9 @@ profile, ts_json, sk_json = sys.argv[1:4]
 p = os.path.expanduser(f"~/.hermes/profiles/{profile}/config.yaml")
 with open(p) as f:
     cfg = yaml.safe_load(f) or {}
-cfg["toolsets"] = json.loads(ts_json)
+toolsets = json.loads(ts_json)
+cfg["toolsets"] = toolsets
+cfg.setdefault("platform_toolsets", {})["cli"] = toolsets
 cfg.setdefault("skills", {})["always_load"] = json.loads(sk_json)
 with open(p, "w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)

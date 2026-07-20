@@ -321,3 +321,37 @@ class TestVoiceCompatibleHelper:
 
         tts_registry.register_provider(_ExplodingProvider(name="cartesia"))
         assert tts_tool._plugin_provider_is_voice_compatible("cartesia") is False
+
+
+class TestPluginReceiptHelper:
+    def test_volcengine_receipt_is_durable_and_costed(self, monkeypatch):
+        provider = _FakeTTSProvider(name="volcengine-speech")
+        provider.last_receipt = {
+            "provider": "volcengine_speech",
+            "model": "seed-tts-2.0",
+            "voice": "voice-1",
+            "request_id": "request-1",
+            "log_id": "log-1",
+            "usage": {"text_words": 4},
+            "audio_bytes": 100,
+            "secret": "must-not-leak",
+        }
+        tts_registry.register_provider(provider)
+        monkeypatch.setenv("VOLCENGINE_SPEECH_CNY_PER_10K_CHARS", "2.5")
+
+        receipt = tts_tool._plugin_provider_receipt(
+            "volcengine-speech", characters=400
+        )
+
+        assert receipt["request_id"] == "request-1"
+        assert receipt["characters"] == 400
+        assert receipt["estimated_cost_cny"] == 0.1
+        assert receipt["pricing_basis"] == {
+            "unit": "cny_per_10k_characters",
+            "rate": 2.5,
+            "kind": "estimate",
+        }
+        assert "secret" not in receipt
+
+    def test_missing_plugin_receipt_is_empty(self):
+        assert tts_tool._plugin_provider_receipt("missing", characters=10) == {}

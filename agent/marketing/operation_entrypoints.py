@@ -359,12 +359,13 @@ def _operation_copy(operation: dict[str, Any]) -> tuple[str, str, str]:
         )
     if kind == "video.setup":
         return (
-            "开始拆分视频设定",
+            "提交官方视频制作",
             "视频创作设定",
-            "读取 document_refs、note 和 selections，独立建立 faceless_video 计划并完成预演。视频 Director 自己产出"
-            "口播、镜头和节奏方案，不读取或等待图文稿。素材按用户库、已配置的许可素材搜索/下载能力、media-use 补缺的"
-            "顺序冻结到原生素材库；只有前述来源均未命中时，才把生成作为显式兜底。任何付费生成、TTS、版权例外、"
-            "真实发布都必须展示成本与影响并等待确认。",
+            "读取 document_refs、note 和 selections，先用 marketing_plan_content_production 独立建立 faceless_video 计划并"
+            "完成预演；预演 go=true 后调用 marketing_submit_official_video。后续编导、分镜、免费素材检索、豆包旁白、"
+            "Remotion/HyperFrames、video-use 剪辑和 Reviewer 返工只由官方 Hermes Kanban 团队执行。素材按用户库、已配置的许可素材搜索/下载能力、media-use"
+            "依次检索并冻结。不要创建本地第二套"
+            "EDL、渲染任务或图文从属脚本，不读取或等待图文稿；禁止付费生成缺失素材，最终只进入草稿箱，不发布。",
         )
     if kind == "video.export":
         return (

@@ -581,6 +581,65 @@ def _plugin_provider_is_voice_compatible(provider: str) -> bool:
         return False
 
 
+def _plugin_provider_receipt(provider: str, *, characters: int) -> Dict[str, Any]:
+    """Return a sanitized durable receipt from a plugin TTS provider.
+
+    The normal ``text_to_speech`` response used to discard provider request
+    identifiers and usage. That made a successful paid synthesis impossible
+    to audit later. Providers may expose ``last_receipt`` after a successful
+    call; only accounting fields are copied here.
+    """
+    if not provider:
+        return {}
+    key = provider.lower().strip()
+    if key in BUILTIN_TTS_PROVIDERS:
+        return {}
+    try:
+        from agent.tts_registry import get_provider
+
+        plugin_provider = get_provider(key)
+    except Exception:  # noqa: BLE001 - receipt absence must not break audio delivery
+        return {}
+    raw = getattr(plugin_provider, "last_receipt", None)
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    receipt = {
+        name: value
+        for name, value in raw.items()
+        if name
+        in {
+            "provider",
+            "model",
+            "voice",
+            "request_id",
+            "log_id",
+            "usage",
+            "audio_bytes",
+        }
+    }
+    receipt["characters"] = max(0, int(characters))
+    if key == "volcengine-speech":
+        # Seed TTS 2.0 public pay-as-you-go estimate. Account-specific
+        # resource-pack rates can override this without changing code.
+        try:
+            rate_per_10k = float(
+                os.getenv("VOLCENGINE_SPEECH_CNY_PER_10K_CHARS", "5.0")
+            )
+        except ValueError:
+            rate_per_10k = 5.0
+        rate_per_10k = max(0.0, rate_per_10k)
+        receipt["estimated_cost_cny"] = round(
+            receipt["characters"] * rate_per_10k / 10_000,
+            6,
+        )
+        receipt["pricing_basis"] = {
+            "unit": "cny_per_10k_characters",
+            "rate": rate_per_10k,
+            "kind": "estimate",
+        }
+    return receipt
+
+
 def _iter_command_providers(tts_config: Dict[str, Any]):
     """Yield (name, config) pairs for every declared command-type provider."""
     if not isinstance(tts_config, dict):
@@ -2417,13 +2476,17 @@ def text_to_speech_tool(
         if voice_compatible:
             media_tag = f"[[audio_as_voice]]\n{media_tag}"
 
-        return json.dumps({
+        response_payload = {
             "success": True,
             "file_path": file_str,
             "media_tag": media_tag,
             "provider": provider,
             "voice_compatible": voice_compatible,
-        }, ensure_ascii=False)
+        }
+        receipt = _plugin_provider_receipt(provider, characters=len(text))
+        if receipt:
+            response_payload["receipt"] = receipt
+        return json.dumps(response_payload, ensure_ascii=False)
 
     except ValueError as e:
         # Configuration errors (missing API keys, etc.)

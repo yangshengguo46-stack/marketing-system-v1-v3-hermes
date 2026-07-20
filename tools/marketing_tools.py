@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
+from pathlib import Path
 
+from agent.marketing.data_paths import MarketingDataPaths
 from agent.marketing.domains import (
     AccountContextRepository,
     AccountLifecycleRepository,
@@ -17,11 +20,11 @@ from agent.marketing.domains import (
     MaterialSourcingRepository,
     MediaAssetRepository,
     OperatingEntityRepository,
-    ProductionAudioRepository,
     PublishingRepository,
     PublicContentObservationRepository,
     ShortVideoSignalRepository,
     VideoProductionRepository,
+    VideoKanbanExecutionRepository,
 )
 from agent.marketing.session_scope import (
     enforce_tool_account_scope,
@@ -46,6 +49,257 @@ LIST_ACCOUNTS_SCHEMA = {
         "contains no cookies, tokens, passwords or other login secrets."
     ),
     "parameters": {"type": "object", "properties": {}, "required": []},
+}
+
+FINALIZE_OFFICIAL_VIDEO_SCHEMA = {
+    "name": "marketing_video_finalize",
+    "description": (
+        "Validate a reviewed official Hermes Kanban video and persist it to the Marketing OS "
+        "Draft Box. Only the dispatched marketing-video-reviewer profile for the matching "
+        "tenant/workspace may call this tool. It never publishes."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "execution_id": {"type": "string"},
+            "final_video_path": {
+                "type": "string",
+                "description": "MP4 path relative to the assigned Kanban workspace.",
+            },
+            "delivery_path": {"type": "string", "default": "delivery.json"},
+            "review_path": {"type": "string", "default": "review.json"},
+            "material_manifest_path": {
+                "type": "string",
+                "default": "material-manifest.json",
+            },
+            "rights_map_path": {"type": "string", "default": "rights-map.json"},
+        },
+        "required": ["execution_id", "final_video_path"],
+    },
+}
+
+SEARCH_OFFICIAL_VIDEO_MATERIALS_SCHEMA = {
+    "name": "marketing_video_material_search",
+    "description": (
+        "Search the current official video execution's owned library and zero-cost open-license "
+        "providers for one locked storyboard shot. Only the dispatched Material Scout may call it."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "execution_id": {"type": "string"},
+            "shot_id": {"type": "string"},
+            "query": {
+                "type": "string",
+                "description": "Shot-specific subject + scene + style + framing search expression.",
+            },
+            "role": {
+                "type": "string",
+                "enum": ["scene", "broll", "prop", "storyboard", "other"],
+                "default": "broll",
+            },
+            "orientation": {
+                "type": "string",
+                "enum": ["landscape", "portrait", "square"],
+            },
+            "media_type": {
+                "type": "string",
+                "enum": ["either", "image", "video"],
+                "default": "either",
+            },
+            "target_duration": {"type": "number", "minimum": 0, "maximum": 600},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 12},
+        },
+        "required": ["execution_id", "shot_id", "query"],
+    },
+}
+
+INSPECT_OFFICIAL_VIDEO_MATERIAL_SCHEMA = {
+    "name": "marketing_video_material_inspect",
+    "description": (
+        "Download a free 720p analysis proxy, extract frames with the installed watch skill, "
+        "and expose native captions without Whisper. This makes no paid model call."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "execution_id": {"type": "string"},
+            "shot_id": {"type": "string"},
+            "candidate_id": {"type": "string"},
+            "narration_text": {"type": "string"},
+            "visual_subject": {"type": "string"},
+            "scene": {"type": "string"},
+            "style": {"type": "string"},
+            "negative_conditions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 12,
+            },
+            "composition_strategy": {
+                "type": "string",
+                "enum": ["full_bleed", "inset_card", "letterbox"],
+            },
+        },
+        "required": [
+            "execution_id",
+            "shot_id",
+            "candidate_id",
+            "narration_text",
+            "visual_subject",
+        ],
+    },
+}
+
+REGISTER_OFFICIAL_VIDEO_MATERIAL_SCHEMA = {
+    "name": "marketing_video_material_register",
+    "description": (
+        "Register one browser/Web-discovered video URL inside an existing native shot search. "
+        "This records discovery only; rights remain pending."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "execution_id": {"type": "string"},
+            "shot_id": {"type": "string"},
+            "search_id": {"type": "string"},
+            "source_url": {"type": "string"},
+            "download_url": {"type": "string"},
+            "preview_url": {"type": "string"},
+            "title": {"type": "string"},
+            "provider_asset_id": {"type": "string"},
+            "creator": {"type": "string"},
+            "creator_url": {"type": "string"},
+            "duration": {"type": "number", "minimum": 0},
+            "width": {"type": "integer", "minimum": 0},
+            "height": {"type": "integer", "minimum": 0},
+            "discovery_query": {"type": "string"},
+        },
+        "required": [
+            "execution_id", "shot_id", "search_id", "source_url", "title",
+            "provider_asset_id"
+        ],
+    },
+}
+
+ASSESS_OFFICIAL_VIDEO_MATERIAL_SCHEMA = {
+    "name": "marketing_video_material_assess",
+    "description": (
+        "Persist the Material Scout's grounded judgment after it reads the extracted watch "
+        "frames. Passing clips require an exact source_in/source_out range."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "execution_id": {"type": "string"},
+            "inspection_id": {"type": "string"},
+            "relevance_score": {"type": "number", "minimum": 0, "maximum": 1},
+            "semantic_evidence": {"type": "string"},
+            "observed_subjects": {
+                "type": "array", "items": {"type": "string"}, "minItems": 1
+            },
+            "rejection_reasons": {"type": "array", "items": {"type": "string"}},
+            "source_in": {"type": "number", "minimum": 0},
+            "source_out": {"type": "number", "minimum": 0},
+        },
+        "required": [
+            "execution_id", "inspection_id", "relevance_score",
+            "semantic_evidence", "observed_subjects"
+        ],
+    },
+}
+
+CLIP_OFFICIAL_VIDEO_MATERIAL_SCHEMA = {
+    "name": "marketing_video_material_clip",
+    "description": (
+        "Download at up to 1080p, cut the approved source range, verify H.264/AAC playback, "
+        "and import it as rights-pending video/B-roll. It does not render a finished video."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "execution_id": {"type": "string"},
+            "inspection_id": {"type": "string"},
+            "asset_name": {"type": "string"},
+            "collection": {"type": "string"},
+        },
+        "required": ["execution_id", "inspection_id", "asset_name", "collection"],
+    },
+}
+
+FREEZE_OFFICIAL_VIDEO_MATERIAL_SCHEMA = {
+    "name": "marketing_video_material_freeze",
+    "description": (
+        "Download and freeze one zero-cost material candidate into the assigned official video "
+        "workspace after the Material Scout verifies its source and license metadata."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "execution_id": {"type": "string"},
+            "shot_id": {"type": "string"},
+            "candidate_id": {"type": "string"},
+            "inspection_id": {
+                "type": "string",
+                "description": "Passing id returned by marketing_video_material_inspect.",
+            },
+            "license_verified": {
+                "type": "boolean",
+                "description": "True only after checking the returned source and license evidence.",
+            },
+        },
+        "required": [
+            "execution_id",
+            "shot_id",
+            "candidate_id",
+            "inspection_id",
+            "license_verified",
+        ],
+    },
+}
+
+SUBMIT_OFFICIAL_VIDEO_SCHEMA = {
+    "name": "marketing_submit_official_video",
+    "description": (
+        "Submit one preflight-approved faceless-video plan to the official Hermes Kanban video "
+        "team. This is the only video execution entrypoint. It queues the Director, Showrunner, "
+        "Material Scout, Voice, Renderer, Editor and Reviewer profiles and never publishes."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "candidate_id": {
+                "type": "string",
+                "description": "Stable topic recommendation ID or stable manual brief ID.",
+            },
+            "plan_id": {"type": "string"},
+            "preflight_id": {"type": "string"},
+            "platform": {"type": "string"},
+            "topic": {"type": "string"},
+            "evidence_refs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+            "target_duration": {
+                "type": "integer",
+                "minimum": 15,
+                "maximum": 180,
+                "default": 60,
+            },
+            "aspect_ratio": {
+                "type": "string",
+                "enum": ["9:16", "16:9", "1:1", "3:4", "4:5"],
+            },
+        },
+        "required": [
+            "candidate_id",
+            "plan_id",
+            "preflight_id",
+            "platform",
+            "topic",
+            "evidence_refs",
+        ],
+    },
 }
 
 READ_ACCOUNT_CONTEXT_SCHEMA = {
@@ -342,16 +596,22 @@ READ_CONTENT_ASSETS_SCHEMA = {
 READ_VIDEO_PRODUCTIONS_SCHEMA = {
     "name": "marketing_read_video_productions",
     "description": (
-        "List durable faceless-video render jobs for the account bound to this conversation. "
-        "Use it to recover prepared, running, completed or failed work and inspect the approved "
-        "EDL, final media asset, immutable content revision and render receipt."
+        "List official Hermes Kanban video executions and reviewed video results for the account "
+        "bound to this conversation. Use it to inspect queued or blocked official work and the "
+        "immutable Draft Box revision, final media asset and receipts after Reviewer settlement."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "status": {
                 "type": "string",
-                "enum": ["prepared", "approved", "running", "completed", "failed"],
+                "enum": [
+                    "preparing",
+                    "queued",
+                    "blocked",
+                    "completed",
+                    "archived",
+                ],
             },
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
         },
@@ -906,49 +1166,6 @@ CREATE_ARTICLE_DRAFT_SCHEMA = {
     },
 }
 
-PREPARE_FACELESS_RENDER_SCHEMA = {
-    "name": "marketing_prepare_faceless_render",
-    "description": (
-        "Validate and persist an immutable renderer-neutral Video IR or legacy edit decision "
-        "list for an existing faceless-video ContentAsset in the current account. This prepares "
-        "no external effect and performs no render. Every referenced media asset must already be "
-        "materialized locally with approved rights. Repeating the same request returns the same "
-        "production job."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "source_asset_id": {
-                "type": "string",
-                "description": "Current faceless-video ContentAsset revision to render.",
-            },
-            "renderer": {
-                "type": "string",
-                "enum": ["ffmpeg_timeline_v1"],
-                "default": "ffmpeg_timeline_v1",
-            },
-            "edl": {
-                "type": "object",
-                "description": (
-                    "marketing.faceless_video.edl.v1 object with width, height, fps, 1-100 clips "
-                    "and optional voice_asset_id, music_asset_id and captions. Each clip requires "
-                    "media_asset_id, source_in and duration. Provide exactly one of edl or video_ir."
-                ),
-            },
-            "video_ir": {
-                "type": "object",
-                "description": (
-                    "marketing.video.ir.v1 object with canvas, stable scenes, visuals, motion "
-                    "intent, renderer policy, review rules, captions and audio references. "
-                    "Unsupported renderer capabilities fail before approval. Provide exactly "
-                    "one of video_ir or edl."
-                ),
-            },
-        },
-        "required": ["source_asset_id"],
-    },
-}
-
 SEARCH_MATERIALS_SCHEMA = {
     "name": "marketing_search_materials",
     "description": (
@@ -1024,65 +1241,6 @@ KEEP_MATERIAL_SCHEMA = {
             },
         },
         "required": ["asset_id", "target_tier", "confirmed"],
-    },
-}
-
-PREPARE_VIDEO_VOICE_SCHEMA = {
-    "name": "marketing_prepare_video_voice",
-    "description": (
-        "Prepare an immutable voiceover intent for the current account. This stores the exact "
-        "script hash but does not call TTS or incur provider cost."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string"},
-            "script_text": {"type": "string", "maxLength": 4000},
-        },
-        "required": ["name", "script_text"],
-    },
-}
-
-EXECUTE_VIDEO_VOICE_SCHEMA = {
-    "name": "marketing_effect_video_voice",
-    "description": (
-        "After explicit human approval of the exact prepared script, call the user's configured "
-        "Hermes TTS provider once and import the real audio output as a voice MediaAsset. Paid and "
-        "local providers use the same receipt-bound state machine."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "job_id": {"type": "string"},
-            "approval_ref": {"type": "string"},
-            "confirmed_by_user": {"type": "boolean"},
-        },
-        "required": ["job_id", "approval_ref", "confirmed_by_user"],
-    },
-}
-
-EXECUTE_FACELESS_RENDER_SCHEMA = {
-    "name": "marketing_effect_faceless_render",
-    "description": (
-        "After explicit human review, execute one prepared faceless-video render through the native "
-        "Hermes FFmpeg timeline. The effect is account-scoped and idempotent: completion creates a "
-        "derived final-video MediaAsset, an immutable ContentAsset revision and a render receipt. "
-        "No paid generation provider is called by this tool."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "production_id": {"type": "string"},
-            "approval_ref": {
-                "type": "string",
-                "description": "Audit reference for the user's review of this exact EDL.",
-            },
-            "confirmed_by_user": {
-                "type": "boolean",
-                "description": "Must be true only after the user explicitly approves rendering.",
-            },
-        },
-        "required": ["production_id", "approval_ref", "confirmed_by_user"],
     },
 }
 
@@ -1701,7 +1859,7 @@ def _read_video_productions(args: dict, **kwargs) -> str:
         session_id=kwargs.get("session_id"),
         require_bound=True,
     )
-    result = VideoProductionRepository().list(
+    result = VideoProductionRepository().list_review_summaries(
         user_id=user_id,
         account_id=account_id,
         status=str(args.get("status") or "") or None,
@@ -1933,24 +2091,6 @@ def _create_article_draft(args: dict, **kwargs) -> str:
     return json.dumps({**result, "preflight_id": preflight["id"]}, ensure_ascii=False)
 
 
-def _prepare_faceless_render(args: dict, **kwargs) -> str:
-    user_id, account_id = enforce_tool_account_scope(
-        {},
-        task_id=kwargs.get("task_id"),
-        session_id=kwargs.get("session_id"),
-        require_bound=True,
-    )
-    result = VideoProductionRepository().prepare(
-        user_id=user_id,
-        account_id=account_id,
-        source_asset_id=str(args.get("source_asset_id") or ""),
-        edl=args.get("edl") if "edl" in args else None,
-        video_ir=args.get("video_ir") if "video_ir" in args else None,
-        renderer=str(args.get("renderer") or "ffmpeg_timeline_v1"),
-    )
-    return json.dumps(result, ensure_ascii=False)
-
-
 def _search_materials(args: dict, **kwargs) -> str:
     user_id, account_id = enforce_tool_account_scope(
         {},
@@ -2008,76 +2148,6 @@ def _keep_material(args: dict, **kwargs) -> str:
         target_tier=str(args.get("target_tier") or "library"),
     )
     return json.dumps({"asset": result}, ensure_ascii=False)
-
-
-def _prepare_video_voice(args: dict, **kwargs) -> str:
-    user_id, account_id = enforce_tool_account_scope(
-        {},
-        task_id=kwargs.get("task_id"),
-        session_id=kwargs.get("session_id"),
-        require_bound=True,
-    )
-    result = ProductionAudioRepository().prepare_voice(
-        user_id=user_id,
-        account_id=account_id,
-        name=str(args.get("name") or ""),
-        script_text=str(args.get("script_text") or ""),
-    )
-    return json.dumps(
-        {
-            "job": result,
-            "effect_executed": False,
-            "next_action": "Request one-shot approval for this exact script before TTS generation.",
-        },
-        ensure_ascii=False,
-    )
-
-
-def _execute_video_voice(args: dict, **kwargs) -> str:
-    user_id, account_id = enforce_tool_account_scope(
-        {},
-        task_id=kwargs.get("task_id"),
-        session_id=kwargs.get("session_id"),
-        require_bound=True,
-    )
-    repository = ProductionAudioRepository()
-    repository.approve(
-        job_id=str(args.get("job_id") or ""),
-        user_id=user_id,
-        account_id=account_id,
-        approval_ref=str(args.get("approval_ref") or ""),
-        confirmed_by_user=args.get("confirmed_by_user") is True,
-    )
-    result = repository.execute(
-        job_id=str(args.get("job_id") or ""),
-        user_id=user_id,
-        account_id=account_id,
-    )
-    return json.dumps(result, ensure_ascii=False)
-
-
-def _execute_faceless_render(args: dict, **kwargs) -> str:
-    user_id, account_id = enforce_tool_account_scope(
-        {},
-        task_id=kwargs.get("task_id"),
-        session_id=kwargs.get("session_id"),
-        require_bound=True,
-    )
-    repository = VideoProductionRepository()
-    repository.approve(
-        production_id=str(args.get("production_id") or ""),
-        user_id=user_id,
-        account_id=account_id,
-        approval_ref=str(args.get("approval_ref") or ""),
-        confirmed_by_user=args.get("confirmed_by_user") is True,
-    )
-    result = repository.execute(
-        production_id=str(args.get("production_id") or ""),
-        user_id=user_id,
-        account_id=account_id,
-        session_id=str(kwargs.get("session_id") or kwargs.get("task_id") or ""),
-    )
-    return json.dumps(result, ensure_ascii=False)
 
 
 def _prepare_publish(args: dict, **kwargs) -> str:
@@ -2233,6 +2303,243 @@ def _query_publish(args: dict, **kwargs) -> str:
     )
 
 
+def _official_video_finalizer_available() -> bool:
+    return (
+        os.environ.get("HERMES_PROFILE") == "marketing-video-reviewer"
+        and bool(os.environ.get("HERMES_KANBAN_TASK"))
+        and bool(os.environ.get("HERMES_TENANT"))
+        and bool(os.environ.get("HERMES_KANBAN_WORKSPACE"))
+    )
+
+
+# Profile/task environment changes between dispatched processes; availability
+# must never reuse another process context through the registry TTL cache.
+_official_video_finalizer_available._hermes_uncached = True
+
+
+def _official_video_materials_available() -> bool:
+    return (
+        os.environ.get("HERMES_PROFILE") == "marketing-video-material-scout"
+        and bool(os.environ.get("HERMES_KANBAN_TASK"))
+        and bool(os.environ.get("HERMES_TENANT"))
+        and bool(os.environ.get("HERMES_KANBAN_WORKSPACE"))
+    )
+
+
+_official_video_materials_available._hermes_uncached = True
+
+
+def _official_video_repository() -> VideoKanbanExecutionRepository:
+    """Resolve canonical Marketing OS state from a dispatched Kanban workspace.
+
+    Hermes isolates each worker under its profile home, so relying on that
+    process's default ``HERMES_HOME`` would open a second state.db. The official
+    workspace is always ``<product-user-data>/marketing-video-kanban/<execution>``;
+    derive the product root from the runtime-owned workspace rather than any
+    model argument.
+    """
+
+    raw_workspace = str(os.environ.get("HERMES_KANBAN_WORKSPACE") or "").strip()
+    if not raw_workspace:
+        return VideoKanbanExecutionRepository()
+    workspace = Path(raw_workspace).expanduser().resolve()
+    if workspace.parent.name != "marketing-video-kanban":
+        raise PermissionError("official video workspace is outside the product execution root")
+    user_data = workspace.parent.parent
+    return VideoKanbanExecutionRepository(
+        MarketingDataPaths(
+            user_data=user_data,
+            config_dir=user_data / "config",
+            agent_db=user_data / "state.db",
+        )
+    )
+
+
+def _submit_official_video(args: dict, **kwargs) -> str:
+    user_id, account_id = enforce_tool_account_scope(
+        {},
+        task_id=kwargs.get("task_id"),
+        session_id=kwargs.get("session_id"),
+        require_bound=True,
+    )
+    scope = read_tool_session_scope(
+        task_id=kwargs.get("task_id"), session_id=kwargs.get("session_id")
+    )
+    entity_id = str((scope or {}).get("entity_id") or "").strip()
+    if not entity_id:
+        raise ValueError("official video submission requires an operating-entity scope")
+    plan_id = str(args.get("plan_id") or "").strip()
+    preflight_id = str(args.get("preflight_id") or "").strip()
+    platform = str(args.get("platform") or "").strip()
+    evidence_refs = [
+        str(item).strip() for item in args.get("evidence_refs") or [] if str(item).strip()
+    ]
+    plan = ContentAssetRepository().get_production_plan(
+        plan_id=plan_id, user_id=user_id, account_id=account_id
+    )
+    if plan.get("kind") != "faceless_video":
+        raise ValueError("official video submission requires a faceless_video plan")
+    if platform not in (plan.get("target_platforms") or []):
+        raise ValueError("official video platform is outside the production plan")
+    preflight = OperatingLoopRepository().get_preflight(preflight_id)
+    if (
+        str(preflight.get("user_id") or "") != user_id
+        or str(preflight.get("account_id") or "") != account_id
+        or str(preflight.get("plan_id") or "") != plan_id
+    ):
+        raise ValueError("official video preflight does not belong to the current plan")
+    decision = preflight.get("decision") or {}
+    product_decision = decision.get("preflight_decision") or decision
+    if product_decision.get("go") is not True:
+        raise ValueError("official video submission is blocked by preflight")
+    entity = OperatingEntityRepository().get(entity_id=entity_id, user_id=user_id)
+    EvidenceRepository().require_verified_across_accounts(
+        user_id=user_id,
+        account_ids=list(entity.get("account_ids") or [account_id]),
+        evidence_ids=evidence_refs,
+        require_any=True,
+    )
+    account_context = AccountContextRepository().read_operating_entity(
+        user_id=user_id,
+        entity_id=entity_id,
+        focus_account_id=account_id,
+    )
+    knowledge_context = KnowledgeBaseRepository().retrieve_for_preflight(
+        user_id=user_id,
+        account_id=account_id,
+        platforms=[platform],
+        content_kind="faceless_video",
+    )
+    execution = VideoKanbanExecutionRepository().submit(
+        user_id=user_id,
+        entity_id=entity_id,
+        account_id=account_id,
+        candidate_id=str(args.get("candidate_id") or "").strip(),
+        plan_id=plan_id,
+        preflight_id=preflight_id,
+        platform=platform,
+        topic=str(args.get("topic") or "").strip(),
+        context={
+            "source": "marketing_submit_official_video",
+            "plan": plan,
+            "preflight": preflight,
+            "evidence_refs": evidence_refs,
+            "account_context": account_context,
+            "knowledge_context": knowledge_context,
+            "target_duration": int(args.get("target_duration") or 60),
+            "aspect_ratio": str(args.get("aspect_ratio") or "").strip(),
+        },
+    )
+    return json.dumps(
+        {
+            "contract": execution["contract_version"],
+            "execution_id": execution["id"],
+            "root_task_id": execution.get("root_task_id"),
+            "status": execution["status"],
+            "destination": "draft_box",
+        },
+        ensure_ascii=False,
+    )
+
+
+def _finalize_official_video(args: dict, **_kwargs) -> str:
+    result = _official_video_repository().finalize(
+        execution_id=str(args.get("execution_id") or ""),
+        final_video_path=str(args.get("final_video_path") or ""),
+        delivery_path=str(args.get("delivery_path") or "delivery.json"),
+        review_path=str(args.get("review_path") or "review.json"),
+        material_manifest_path=str(
+            args.get("material_manifest_path") or "material-manifest.json"
+        ),
+        rights_map_path=str(args.get("rights_map_path") or "rights-map.json"),
+    )
+    return json.dumps({"marketing_video_finalized": result}, ensure_ascii=False)
+
+
+def _search_official_video_materials(args: dict, **_kwargs) -> str:
+    result = _official_video_repository().search_materials(
+        execution_id=str(args.get("execution_id") or ""),
+        shot_id=str(args.get("shot_id") or ""),
+        query=str(args.get("query") or ""),
+        role=str(args.get("role") or "broll"),
+        orientation=str(args.get("orientation") or ""),
+        media_type=str(args.get("media_type") or "either"),
+        target_duration=float(args.get("target_duration") or 0),
+        limit=int(args.get("limit") or 12),
+    )
+    return json.dumps({"marketing_video_material_search": result}, ensure_ascii=False)
+
+
+def _inspect_official_video_material(args: dict, **_kwargs) -> str:
+    result = _official_video_repository().inspect_material(
+        execution_id=str(args.get("execution_id") or ""),
+        shot_id=str(args.get("shot_id") or ""),
+        candidate_id=str(args.get("candidate_id") or ""),
+        narration_text=str(args.get("narration_text") or ""),
+        visual_subject=str(args.get("visual_subject") or ""),
+        scene=str(args.get("scene") or ""),
+        style=str(args.get("style") or ""),
+        negative_conditions=list(args.get("negative_conditions") or []),
+        composition_strategy=str(args.get("composition_strategy") or ""),
+    )
+    return json.dumps({"marketing_video_material_inspection": result}, ensure_ascii=False)
+
+
+def _register_official_video_material(args: dict, **_kwargs) -> str:
+    result = _official_video_repository().register_web_material(
+        execution_id=str(args.get("execution_id") or ""),
+        shot_id=str(args.get("shot_id") or ""),
+        search_id=str(args.get("search_id") or ""),
+        source_url=str(args.get("source_url") or ""),
+        title=str(args.get("title") or ""),
+        provider_asset_id=str(args.get("provider_asset_id") or ""),
+        download_url=str(args.get("download_url") or ""),
+        preview_url=str(args.get("preview_url") or ""),
+        creator=str(args.get("creator") or ""),
+        creator_url=str(args.get("creator_url") or ""),
+        duration=float(args.get("duration") or 0),
+        width=int(args.get("width") or 0),
+        height=int(args.get("height") or 0),
+        discovery_query=str(args.get("discovery_query") or ""),
+    )
+    return json.dumps({"marketing_video_material_registered": result}, ensure_ascii=False)
+
+
+def _assess_official_video_material(args: dict, **_kwargs) -> str:
+    result = _official_video_repository().assess_material(
+        execution_id=str(args.get("execution_id") or ""),
+        inspection_id=str(args.get("inspection_id") or ""),
+        relevance_score=float(args.get("relevance_score") or 0),
+        semantic_evidence=str(args.get("semantic_evidence") or ""),
+        observed_subjects=list(args.get("observed_subjects") or []),
+        rejection_reasons=list(args.get("rejection_reasons") or []),
+        source_in=args.get("source_in"),
+        source_out=args.get("source_out"),
+    )
+    return json.dumps({"marketing_video_material_assessed": result}, ensure_ascii=False)
+
+
+def _clip_official_video_material(args: dict, **_kwargs) -> str:
+    result = _official_video_repository().clip_material(
+        execution_id=str(args.get("execution_id") or ""),
+        inspection_id=str(args.get("inspection_id") or ""),
+        asset_name=str(args.get("asset_name") or ""),
+        collection=str(args.get("collection") or ""),
+    )
+    return json.dumps({"marketing_video_material_clipped": result}, ensure_ascii=False)
+
+
+def _freeze_official_video_material(args: dict, **_kwargs) -> str:
+    result = _official_video_repository().freeze_material(
+        execution_id=str(args.get("execution_id") or ""),
+        shot_id=str(args.get("shot_id") or ""),
+        candidate_id=str(args.get("candidate_id") or ""),
+        inspection_id=str(args.get("inspection_id") or ""),
+        license_verified=args.get("license_verified") is True,
+    )
+    return json.dumps({"marketing_video_material_frozen": result}, ensure_ascii=False)
+
+
 registry.register(
     name="marketing_read_accounts",
     toolset="marketing",
@@ -2240,6 +2547,85 @@ registry.register(
     handler=_list_accounts,
     description="List connected Marketing OS accounts without exposing login secrets.",
     emoji="📣",
+)
+
+registry.register(
+    name="marketing_video_finalize",
+    toolset="marketing_video_finalize",
+    schema=FINALIZE_OFFICIAL_VIDEO_SCHEMA,
+    handler=_finalize_official_video,
+    check_fn=_official_video_finalizer_available,
+    description="Persist one fully reviewed official-Kanban video to Draft Box.",
+    emoji="✅",
+)
+
+registry.register(
+    name="marketing_video_material_search",
+    toolset="marketing_video_materials",
+    schema=SEARCH_OFFICIAL_VIDEO_MATERIALS_SCHEMA,
+    handler=_search_official_video_materials,
+    check_fn=_official_video_materials_available,
+    description="Search the zero-cost native material stack for one official video shot.",
+    emoji="🔎",
+)
+
+registry.register(
+    name="marketing_video_material_register",
+    toolset="marketing_video_materials",
+    schema=REGISTER_OFFICIAL_VIDEO_MATERIAL_SCHEMA,
+    handler=_register_official_video_material,
+    check_fn=_official_video_materials_available,
+    description="Register one browser-discovered material candidate in native state.",
+    emoji="🔗",
+)
+
+registry.register(
+    name="marketing_video_material_inspect",
+    toolset="marketing_video_materials",
+    schema=INSPECT_OFFICIAL_VIDEO_MATERIAL_SCHEMA,
+    handler=_inspect_official_video_material,
+    check_fn=_official_video_materials_available,
+    description="Prepare a free watch proxy and frames for Material Scout review.",
+    emoji="👁️",
+)
+
+registry.register(
+    name="marketing_video_material_assess",
+    toolset="marketing_video_materials",
+    schema=ASSESS_OFFICIAL_VIDEO_MATERIAL_SCHEMA,
+    handler=_assess_official_video_material,
+    check_fn=_official_video_materials_available,
+    description="Record a frame-grounded material relevance judgment and time range.",
+    emoji="🧭",
+)
+
+registry.register(
+    name="marketing_video_material_clip",
+    toolset="marketing_video_materials",
+    schema=CLIP_OFFICIAL_VIDEO_MATERIAL_SCHEMA,
+    handler=_clip_official_video_material,
+    check_fn=_official_video_materials_available,
+    description="Cut and import an approved rights-pending B-roll excerpt.",
+    emoji="✂️",
+)
+
+registry.register(
+    name="marketing_video_material_freeze",
+    toolset="marketing_video_materials",
+    schema=FREEZE_OFFICIAL_VIDEO_MATERIAL_SCHEMA,
+    handler=_freeze_official_video_material,
+    check_fn=_official_video_materials_available,
+    description="Freeze one rights-reviewed material into an official video workspace.",
+    emoji="📥",
+)
+
+registry.register(
+    name="marketing_submit_official_video",
+    toolset="marketing",
+    schema=SUBMIT_OFFICIAL_VIDEO_SCHEMA,
+    handler=_submit_official_video,
+    description="Queue the official Hermes Kanban video team for one approved video plan.",
+    emoji="🎬",
 )
 
 registry.register(
@@ -2395,42 +2781,6 @@ registry.register(
     handler=_keep_material,
     description="Keep one explicit temporary material in the local library or connected cloud.",
     emoji="📌",
-)
-
-registry.register(
-    name="marketing_prepare_video_voice",
-    toolset="marketing",
-    schema=PREPARE_VIDEO_VOICE_SCHEMA,
-    handler=_prepare_video_voice,
-    description="Prepare a hash-bound voiceover intent without calling TTS.",
-    emoji="🗣️",
-)
-
-registry.register(
-    name="marketing_effect_video_voice",
-    toolset="marketing",
-    schema=EXECUTE_VIDEO_VOICE_SCHEMA,
-    handler=_execute_video_voice,
-    description="Generate one approved voiceover and import its real audio receipt.",
-    emoji="🎙️",
-)
-
-registry.register(
-    name="marketing_prepare_faceless_render",
-    toolset="marketing",
-    schema=PREPARE_FACELESS_RENDER_SCHEMA,
-    handler=_prepare_faceless_render,
-    description="Persist and validate an immutable faceless-video edit decision list.",
-    emoji="🎬",
-)
-
-registry.register(
-    name="marketing_effect_faceless_render",
-    toolset="marketing",
-    schema=EXECUTE_FACELESS_RENDER_SCHEMA,
-    handler=_execute_faceless_render,
-    description="Render one explicitly approved faceless-video EDL and settle its receipt.",
-    emoji="🎥",
 )
 
 registry.register(

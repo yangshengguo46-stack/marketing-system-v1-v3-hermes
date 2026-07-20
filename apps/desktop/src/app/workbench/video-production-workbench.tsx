@@ -157,26 +157,6 @@ interface MediaAssetProjection {
   source_type: string
 }
 
-interface MaterialCandidateProjection {
-  creator?: string
-  id: string
-  license_name?: string
-  license_url?: string
-  media_type?: 'image' | 'video'
-  preview_url?: string
-  provider?: string
-  score?: number
-  source_url?: string
-}
-
-interface MaterialSearchProjection {
-  candidates?: MaterialCandidateProjection[]
-  id: string
-  scene_id?: string
-  status?: string
-  visual_query?: string
-}
-
 interface VideoRenderReadiness {
   blockers?: Array<{
     code?: string
@@ -230,7 +210,7 @@ interface ContentAssetProjection {
 }
 
 interface VideoReviewProjection {
-  material_searches?: MaterialSearchProjection[]
+  material_searches?: never[]
   media_assets: MediaAssetProjection[]
   output_asset?: ContentAssetProjection | null
   production: VideoProductionDetail
@@ -407,7 +387,6 @@ export function VideoProductionWorkbench({
   const [error, setError] = useState('')
   const [reviewNote, setReviewNote] = useState('')
   const [reviewing, setReviewing] = useState<'accepted' | 'changes_requested' | null>(null)
-  const [stageConfirming, setStageConfirming] = useState(false)
   const [activeStage, setActiveStage] = useState<DirectorStage>('setup')
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>(initialView.inspectorTab)
   const [setupCategory, setSetupCategory] = useState<SetupCategory | null>(null)
@@ -438,8 +417,6 @@ export function VideoProductionWorkbench({
   const [setupSubmitting, setSetupSubmitting] = useState(false)
   const [setupStatus, setSetupStatus] = useState('')
   const [setupError, setSetupError] = useState('')
-  const [selectingCandidateId, setSelectingCandidateId] = useState('')
-  const [generatingVoice, setGeneratingVoice] = useState(false)
   const setupOperation = operationProgress?.kind === 'video.setup' ? operationProgress : null
 
   const setupRunning = Boolean(
@@ -748,65 +725,6 @@ export function VideoProductionWorkbench({
     }
   }
 
-  const selectMaterialCandidate = async (sceneId: string, candidateId: string) => {
-    if (!selectedId || selectingCandidateId) {
-      return
-    }
-
-    setSelectingCandidateId(candidateId)
-    setError('')
-
-    try {
-      const result = await requestGateway<{ projection: VideoReviewProjection; production: { id: string } }>(
-        'marketing.video.production.material.select',
-        {
-          account_id: accountId,
-          candidate_id: candidateId,
-          confirmed: true,
-          production_id: selectedId,
-          scene_id: sceneId
-        }
-      )
-
-      await refresh()
-      setSelectedId(result.production.id)
-      setDetail(result.projection)
-      setSelectedSceneId(sceneId)
-    } catch (cause) {
-      setError(userFacingError(cause, '素材绑定失败，请核对来源、授权和媒体类型。'))
-    } finally {
-      setSelectingCandidateId('')
-    }
-  }
-
-  const generateVoiceover = async () => {
-    if (!selectedId || generatingVoice) {
-      return
-    }
-
-    setGeneratingVoice(true)
-    setError('')
-
-    try {
-      const result = await requestGateway<{ projection: VideoReviewProjection; production: { id: string } }>(
-        'marketing.video.production.voice.generate',
-        {
-          account_id: accountId,
-          confirmed: true,
-          production_id: selectedId
-        }
-      )
-
-      await refresh()
-      setSelectedId(result.production.id)
-      setDetail(result.projection)
-    } catch (cause) {
-      setError(userFacingError(cause, '旁白生成失败，请检查语音服务配置后重试。'))
-    } finally {
-      setGeneratingVoice(false)
-    }
-  }
-
   const selectDefaultVoice = async (voiceId: string) => {
     if (!voiceId || selectingVoiceId) {
       return
@@ -830,7 +748,7 @@ export function VideoProductionWorkbench({
   }
 
   const confirmStage = async () => {
-    if (!summary || stageConfirming) {
+    if (!summary) {
       return
     }
 
@@ -840,32 +758,7 @@ export function VideoProductionWorkbench({
       return
     }
 
-    const activeIndex = DIRECTOR_STAGES.findIndex(stage => stage.id === activeStage)
-
-    if (activeStage !== 'edit') {
-      setActiveStage(DIRECTOR_STAGES[Math.min(activeIndex + 1, DIRECTOR_STAGES.length - 1)].id)
-
-      return
-    }
-
-    setStageConfirming(true)
-    setError('')
-
-    try {
-      const result = await requestGateway<VideoReviewProjection>('marketing.video.production.render', {
-        account_id: accountId,
-        confirmed: true,
-        production_id: summary.id
-      })
-
-      setDetail(result)
-      setProductions(current => current.map(item => (item.id === result.summary.id ? result.summary : item)))
-      setActiveStage('final')
-    } catch (cause) {
-      setError(userFacingError(cause, '本地渲染失败，项目和时间线已保留，可以重试。'))
-    } finally {
-      setStageConfirming(false)
-    }
+    setError('官方 Hermes 视频团队仍在执行，成片通过 Reviewer 后会自动进入草稿箱。')
   }
 
   const pickSetupPaths = async (options: Parameters<NonNullable<typeof window.hermesDesktop>['selectPaths']>[0]) => {
@@ -1008,7 +901,6 @@ export function VideoProductionWorkbench({
   const selectedVisual = detail?.media_assets.find(asset => asset.id === selectedVisualId)
   const scenePlan = production?.render_plan?.scenes?.find(item => item.scene_id === selectedScene?.id)
   const readiness = detail?.readiness || summary?.readiness
-  const selectedMaterialSearch = detail?.material_searches?.find(search => search.scene_id === selectedScene?.id)
   const ratio = ratioLabel(canvas)
   const accepted = detail?.output_asset?.human_review_status === 'accepted'
   const activeReferenceCategory: SetupCategory = inspectorTab === 'materials' ? 'scenes' : inspectorTab
@@ -1324,14 +1216,9 @@ export function VideoProductionWorkbench({
 
           <VersionStrip
             assets={detail?.media_assets || []}
-            materialCandidates={selectedMaterialSearch?.candidates || []}
-            onSelectCandidate={(candidateId: string) =>
-              selectedScene?.id ? void selectMaterialCandidate(selectedScene.id, candidateId) : undefined
-            }
             onStartOperation={startOperation}
             scene={selectedScene}
             selectedAsset={selectedVisual}
-            selectingCandidateId={selectingCandidateId}
             summary={summary}
           />
 
@@ -1375,10 +1262,8 @@ export function VideoProductionWorkbench({
               activeStage={activeStage}
               canvas={canvas}
               completed={summary?.status === 'completed' && Boolean(detail?.output_asset?.id)}
-              confirming={stageConfirming}
-              generatingVoice={generatingVoice}
+              confirming={false}
               onConfirm={() => void confirmStage()}
-              onGenerateVoice={() => void generateVoiceover()}
               quality={quality}
               readiness={readiness}
               rendered={summary?.status === 'completed'}
@@ -1410,20 +1295,14 @@ export function VideoProductionWorkbench({
 
 function VersionStrip({
   assets,
-  materialCandidates,
-  onSelectCandidate,
   onStartOperation,
   scene,
-  selectingCandidateId,
   selectedAsset,
   summary
 }: {
   assets: MediaAssetProjection[]
-  materialCandidates: MaterialCandidateProjection[]
-  onSelectCandidate: (candidateId: string) => void
   onStartOperation: StartVideoOperation
   scene?: VideoScene
-  selectingCandidateId: string
   selectedAsset?: MediaAssetProjection
   summary?: VideoProductionSummary
 }) {
@@ -1465,25 +1344,6 @@ function VersionStrip({
       ) : (
         <span className="text-[0.62rem] text-[#a0978a]">当前镜头还没有可切换版本</span>
       )}
-      {materialCandidates.slice(0, 4).map(candidate => (
-        <button
-          className="flex h-12 max-w-40 shrink-0 items-center gap-2 rounded-lg border border-dashed border-[#cfc5b6] px-3 text-left text-[0.6rem] text-[#796f63] transition hover:border-[#ef704f]/50 hover:text-[#dc603f] disabled:opacity-50"
-          disabled={Boolean(selectingCandidateId)}
-          key={candidate.id}
-          onClick={() => onSelectCandidate(candidate.id)}
-          title={candidate.license_name || '采用前请核对素材来源与授权'}
-          type="button"
-        >
-          {selectingCandidateId === candidate.id ? (
-            <Loader2 className="size-3.5 shrink-0 animate-spin" />
-          ) : (
-            <FileImage className="size-3.5 shrink-0" />
-          )}
-          <span className="min-w-0 truncate">
-            采用 {candidate.provider || '候选素材'} · 确认来源
-          </span>
-        </button>
-      ))}
       <button
         className="flex h-12 shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-[#cfc5b6] px-3 text-[0.62rem] text-[#796f63] transition hover:border-[#ef704f]/50 hover:text-[#dc603f]"
         onClick={() =>
@@ -1758,9 +1618,7 @@ function VideoProductionRailSummary({
   canvas,
   completed,
   confirming,
-  generatingVoice,
   onConfirm,
-  onGenerateVoice,
   quality,
   readiness,
   rendered,
@@ -1773,9 +1631,7 @@ function VideoProductionRailSummary({
   canvas: CanvasSpec
   completed: boolean
   confirming: boolean
-  generatingVoice: boolean
   onConfirm: () => void
-  onGenerateVoice: () => void
   quality?: VideoQualityReport
   readiness?: VideoRenderReadiness
   rendered: boolean
@@ -1783,10 +1639,6 @@ function VideoProductionRailSummary({
   summary?: VideoProductionSummary
   totalDuration: number
 }) {
-  const activeIndex = DIRECTOR_STAGES.findIndex(stage => stage.id === activeStage)
-  const currentStage = DIRECTOR_STAGES[Math.max(0, activeIndex)]
-  const nextStage = DIRECTOR_STAGES[Math.min(DIRECTOR_STAGES.length - 1, Math.max(0, activeIndex) + 1)]
-
   const qualityLabel = quality
     ? { hold: '需人工复核', ready: '自动质检通过', reject: '技术拒收' }[quality.disposition]
     : rendered
@@ -1795,23 +1647,19 @@ function VideoProductionRailSummary({
 
   const confirmLabel = confirming
     ? '正在本地渲染…'
-    : activeStage === 'edit' && readiness?.ready === false
-      ? '先补齐真实素材与声音'
-      : completed
+    : completed
         ? accepted
           ? '成片已确认'
           : '确认成片'
-        : `确认${currentStage.label}并进入${nextStage.label}`
+        : '官方 Hermes 管线运行中'
 
   const compactConfirmLabel = confirming
     ? '渲染中'
-    : activeStage === 'edit' && readiness?.ready === false
-      ? '待补齐'
-      : completed
+    : completed
         ? accepted
           ? '已确认'
           : '确认成片'
-        : `进入${nextStage.label}`
+        : '制作中'
 
   return (
     <section
@@ -1897,19 +1745,6 @@ function VideoProductionRailSummary({
                 </span>
               ))}
             </div>
-            {readiness.voice_required &&
-            (readiness.blockers || []).some(item => item.code === 'voiceover_missing') ? (
-              <Button
-                className="mt-1.5 h-8 w-full px-1 text-[0.52rem]"
-                disabled={generatingVoice}
-                onClick={onGenerateVoice}
-                size="sm"
-                variant="outline"
-              >
-                {generatingVoice ? <Loader2 className="size-3 animate-spin" /> : <Mic className="size-3" />}
-                {generatingVoice ? '生成中' : '生成旁白'}
-              </Button>
-            ) : null}
           </div>
         ) : null}
       </div>
@@ -1921,6 +1756,7 @@ function VideoProductionRailSummary({
           disabled={
             accepted ||
             confirming ||
+            !completed ||
             quality?.disposition === 'reject' ||
             (activeStage === 'edit' && readiness?.ready === false)
           }

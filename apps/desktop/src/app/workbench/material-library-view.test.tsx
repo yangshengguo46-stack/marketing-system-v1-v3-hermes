@@ -145,4 +145,52 @@ describe('material library view', () => {
     )
     expect(await screen.findByText('“城市空镜”已保留到本地素材库。')).toBeTruthy()
   })
+
+  it('groups captured excerpts by collection and exposes playable video controls', async () => {
+    selectMarketingAccount('acct-1')
+
+    const requestGateway = async <T,>(): Promise<T> =>
+      ({
+        assets: [
+          {
+            account_id: 'acct-1',
+            id: 'media-platform-1',
+            media_type: 'video',
+            metadata: { collection: '平台经济重组' },
+            name: '平台经济重组 · S01 · 骑手集结',
+            playback_path: '/marketing/media/media-platform-1',
+            rights_status: 'rights_pending',
+            role: 'broll',
+            size_bytes: 4096,
+            source_type: 'web_clip',
+            storage_tier: 'library',
+            updated_at: '2026-07-20T00:00:00Z'
+          },
+          {
+            account_id: 'acct-1',
+            id: 'media-other-1',
+            media_type: 'video',
+            metadata: { collection: '其他项目' },
+            name: '其他项目 · S01',
+            rights_status: 'rights_pending',
+            role: 'broll',
+            size_bytes: 2048,
+            source_type: 'web_clip',
+            storage_tier: 'library',
+            updated_at: '2026-07-20T00:00:00Z'
+          }
+        ]
+      }) as T
+
+    const { container } = render(
+      <MaterialLibraryView onStartOperation={onStartOperation} requestGateway={requestGateway} />
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: /本地库/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '平台经济重组 1' }))
+
+    expect(screen.getByText('平台经济重组 · S01 · 骑手集结')).toBeTruthy()
+    expect(screen.queryByText('其他项目 · S01')).toBeNull()
+    expect(container.querySelector('video[controls]')).toBeTruthy()
+  })
 })

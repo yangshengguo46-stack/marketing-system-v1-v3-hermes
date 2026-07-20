@@ -13319,195 +13319,6 @@ def _marketing_worker_json(text: str) -> dict[str, Any]:
     return value
 
 
-_MARKETING_DOUBAO_TEXT_ROLES = {
-    "platform_video_showrunner",
-    "platform_video_showrunner_revision",
-    "video_platform_adapter",
-}
-
-
-def _run_marketing_doubao_text_worker(
-    *, role: str, instruction: str, context: dict[str, Any]
-) -> dict[str, Any]:
-    """Run bounded video planning on the configured low-cost vision lane."""
-
-    from agent.auxiliary_client import call_llm, extract_content_or_reasoning
-
-    response = call_llm(
-        task="vision",
-        messages=[{
-            "role": "user",
-            "content": (
-                "You are the Marketing OS visual-production worker. Return one JSON "
-                "object and no markdown. Never invent evidence or claim execution success.\n\n"
-                f"Worker role: {role}\n{instruction}\n\nCanonical input JSON:\n"
-                + json.dumps(context, ensure_ascii=False, sort_keys=True)
-            ),
-        }],
-        temperature=0.15,
-        max_tokens=5000,
-        timeout=240,
-    )
-    return _marketing_worker_json(extract_content_or_reasoning(response))
-
-
-def _run_marketing_doubao_cut_reviewer(
-    *, instruction: str, context: dict[str, Any]
-) -> dict[str, Any]:
-    """Inspect the rendered cut directly with the configured multimodal model."""
-
-    import asyncio
-
-    from tools.vision_tools import video_analyze_tool
-
-    final_path = str(context.get("final_video_path") or "").strip()
-    if not final_path:
-        raise ValueError("video cut reviewer requires final_video_path")
-    prompt_context = {key: value for key, value in context.items() if key != "final_video_path"}
-    prompt = (
-        f"{instruction}\n\nReturn exactly the requested JSON object and no markdown. "
-        "Treat contact sheets as sampled visual evidence and never infer unheard audio.\n\n"
-        "Canonical review context JSON:\n"
-        + json.dumps(prompt_context, ensure_ascii=False, sort_keys=True)
-    )
-    raw = asyncio.run(
-        video_analyze_tool(
-            final_path,
-            prompt,
-            analysis_mode="sampled",
-            max_frames=12,
-        )
-    )
-    envelope = json.loads(raw)
-    if envelope.get("success") is not True:
-        raise RuntimeError(str(envelope.get("error") or "multimodal cut review failed"))
-    return _marketing_worker_json(str(envelope.get("analysis") or ""))
-
-
-def _marketing_visual_source(value: str, media_type: str) -> str:
-    """Convert one bounded local candidate into a vision-safe data URL."""
-
-    import base64
-
-    source = str(value or "").strip()
-    if source.startswith("https://"):
-        return source
-    path = Path(source).expanduser().resolve()
-    if not path.is_file():
-        raise ValueError("material preview is unavailable")
-    if str(media_type or "").strip().lower() == "video":
-        ffmpeg = shutil.which("ffmpeg")
-        if not ffmpeg:
-            raise RuntimeError("ffmpeg is required to inspect local video material")
-        result = subprocess.run(
-            [
-                ffmpeg,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-ss",
-                "0.5",
-                "-i",
-                str(path),
-                "-frames:v",
-                "1",
-                "-vf",
-                "scale='min(640,iw)':-2",
-                "-f",
-                "image2pipe",
-                "-vcodec",
-                "mjpeg",
-                "pipe:1",
-            ],
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-        payload = result.stdout
-        mime_type = "image/jpeg"
-    else:
-        if path.stat().st_size > 12 * 1024 * 1024:
-            raise ValueError("material preview exceeds the 12 MB visual-review limit")
-        payload = path.read_bytes()
-        mime_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-    if not payload:
-        raise RuntimeError("material preview produced no image bytes")
-    return f"data:{mime_type};base64,{base64.b64encode(payload).decode('ascii')}"
-
-
-def _run_marketing_material_judge(
-    *,
-    shot: dict[str, Any],
-    candidates: list[dict[str, Any]],
-    aspect_ratio: str,
-    task_id: str,
-) -> dict[str, Any]:
-    """Rank at most six candidate thumbnails in one low-cost multimodal call."""
-
-    from agent.auxiliary_client import call_llm, extract_content_or_reasoning
-
-    bounded = list(candidates or [])[:6]
-    if not bounded:
-        raise ValueError("material judge requires candidates")
-    content: list[dict[str, Any]] = [{
-        "type": "text",
-        "text": (
-            "You are the visual director for a faceless short video. Judge only what is "
-            "visibly present in each candidate. Rank every candidate by whether it directly "
-            "communicates this shot's narration/purpose, not merely whether it shares a loose "
-            "keyword. Also choose its composition. full_bleed is allowed only when the source "
-            "aspect and subject safety genuinely support the target canvas; otherwise use "
-            "inset_card or letterbox with contain. Return JSON only: ranked_candidates array of "
-            "{candidate_id,relevance_score (0..1),presentation "
-            "(full_bleed|inset_card|letterbox),fit (cover|contain),subject_anchor "
-            "(center|left|right|top|bottom),reason}. Do not add candidates.\n\n"
-            f"Target aspect ratio: {aspect_ratio}\nShot JSON:\n"
-            + json.dumps(shot, ensure_ascii=False, sort_keys=True)
-        ),
-    }]
-    for candidate in bounded:
-        candidate_id = str(candidate.get("id") or "")
-        content.append({
-            "type": "text",
-            "text": "Candidate metadata:\n" + json.dumps(
-                {
-                    key: value
-                    for key, value in candidate.items()
-                    if key != "preview_url"
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-        })
-        content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": _marketing_visual_source(
-                    str(candidate.get("preview_url") or ""),
-                    str(candidate.get("media_type") or "image"),
-                ),
-                "detail": "low",
-            },
-        })
-        if not candidate_id:
-            raise ValueError("material candidate has no id")
-    response = call_llm(
-        task="vision",
-        messages=[{"role": "user", "content": content}],
-        temperature=0.1,
-        max_tokens=900,
-        timeout=180,
-    )
-    result = _marketing_worker_json(extract_content_or_reasoning(response))
-    result["budget"] = {
-        "task_id": task_id,
-        "candidate_count": len(bounded),
-        "image_detail": "low",
-        "max_output_tokens": 900,
-    }
-    return result
-
-
 def _run_marketing_creative_worker(
     *,
     role: str,
@@ -13517,18 +13328,6 @@ def _run_marketing_creative_worker(
     toolsets: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Run an isolated Hermes Agent as one bounded Harness Worker role."""
-
-    if role in _MARKETING_DOUBAO_TEXT_ROLES:
-        return _run_marketing_doubao_text_worker(
-            role=role,
-            instruction=instruction,
-            context=context,
-        )
-    if role == "platform_video_cut_reviewer":
-        return _run_marketing_doubao_cut_reviewer(
-            instruction=instruction,
-            context=context,
-        )
 
     sid = f"marketing-worker-{task_id}"
     role_prompt = (
@@ -13565,85 +13364,6 @@ def _run_marketing_creative_worker(
             pass
 
 
-def _resolve_marketing_media_skill(
-    *, intent: str, media_type: str, task_id: str
-) -> dict[str, Any]:
-    """Resolve media through the installed media-use skill and freeze its file."""
-
-    if media_type not in {"image", "icon", "logo", "bgm", "sfx", "voice"}:
-        raise ValueError(f"media-use does not resolve this media type: {media_type}")
-    script_candidates = [
-        Path.home() / ".codex/skills/media-use/scripts/resolve.mjs",
-        Path.home() / ".agents/skills/media-use/scripts/resolve.mjs",
-    ]
-    script = next((path for path in script_candidates if path.is_file()), None)
-    if script is None:
-        raise RuntimeError("media-use skill is not installed")
-    node = shutil.which("node")
-    if not node:
-        raise RuntimeError("Node.js is required by the installed media-use skill")
-    project_root = (get_hermes_home() / "marketing-media-resolver").resolve()
-    project_root.mkdir(parents=True, exist_ok=True)
-    resolver_env = hermes_subprocess_env()
-    local_bin = str(Path.home() / ".local/bin")
-    resolver_env["PATH"] = os.pathsep.join(
-        value for value in (local_bin, resolver_env.get("PATH", "")) if value
-    )
-    resolver_env["DO_NOT_TRACK"] = "1"
-    result = subprocess.run(
-        [
-            node,
-            str(script),
-            "--type",
-            media_type,
-            "--intent",
-            str(intent or "").strip(),
-            "--project",
-            str(project_root),
-            # Automatic production is zero-cost by policy. This keeps
-            # media-use on project/global cache and installed local open-source
-            # providers; remote HeyGen/Codex/other cloud providers are skipped.
-            "--local-only",
-            "--json",
-        ],
-        cwd=str(project_root),
-        env=resolver_env,
-        capture_output=True,
-        text=True,
-        timeout=240,
-        check=False,
-    )
-    stdout = str(result.stdout or "").strip().splitlines()
-    payload: dict[str, Any] = {}
-    if stdout:
-        try:
-            parsed = json.loads(stdout[-1])
-            if isinstance(parsed, dict):
-                payload = parsed
-        except json.JSONDecodeError:
-            payload = {}
-    if result.returncode != 0 or payload.get("ok") is not True:
-        message = str(payload.get("error") or result.stderr or "media-use resolve failed").strip()
-        raise RuntimeError(message[:1000])
-    if str(payload.get("_source") or "") == "generated":
-        raise RuntimeError(
-            "automatic material generation is disabled; no reusable zero-cost asset matched"
-        )
-    relative = str(payload.get("path") or "").strip()
-    if not relative:
-        raise RuntimeError("media-use resolved no local file")
-    absolute = (project_root / relative).resolve()
-    if project_root not in absolute.parents or not absolute.is_file():
-        raise RuntimeError("media-use output escaped or disappeared from its project cache")
-    mime_type = mimetypes.guess_type(absolute.name)[0] or "application/octet-stream"
-    return {
-        **payload,
-        "absolute_path": str(absolute),
-        "mime_type": mime_type,
-        "resolver_task_id": task_id,
-    }
-
-
 def _marketing_workflow_loop() -> None:
     while not _marketing_workflow_stop.wait(0.35):
         dispatcher = _marketing_workflow_dispatcher
@@ -13673,8 +13393,6 @@ def _ensure_marketing_workflow_dispatcher():
             repository,
             handlers=build_topic_production_handlers(
                 creative_runner=_run_marketing_creative_worker,
-                media_resolver=_resolve_marketing_media_skill,
-                material_judge=_run_marketing_material_judge,
             ),
             max_concurrency=3,
             lease_seconds=900,
@@ -14763,10 +14481,13 @@ def _(rid, params: dict) -> dict:
     candidate_id = str(values.get("candidate_id") or "").strip()
     user_id = str(values.get("user_id") or "default").strip() or "default"
     selected_platforms = values.get("selected_platforms")
+    fresh_revision = values.get("fresh_revision") is True
     if selected_platforms is not None and not isinstance(selected_platforms, list):
         return _err(rid, -32602, "selected_platforms must be an array")
     if not account_id or not candidate_id:
         return _err(rid, -32602, "account_id and candidate_id are required")
+    if fresh_revision and values.get("confirmed") is not True:
+        return _err(rid, 4095, "fresh topic production revision requires confirmation")
     try:
         scope = resolve_account_scope(user_id=user_id, account_id=account_id)
         workflow = create_topic_production_workflow(
@@ -14779,6 +14500,7 @@ def _(rid, params: dict) -> dict:
                 else None
             ),
             explicit_user_override=values.get("explicit_user_override") is True,
+            fresh_revision=fresh_revision,
         )
         _ensure_marketing_workflow_dispatcher().dispatch_once(
             workflow_id=str(workflow["id"])
@@ -14996,213 +14718,6 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5036, str(exc))
 
 
-def _(rid, params: dict) -> dict:
-    """Deterministically prepare a video when the script already belongs to content.
-
-    A pure-text setup should not require the model to serialize another large
-    content object.  The script is matched to its existing campaign so evidence,
-    reaction hypotheses and an actionable faceless-video preflight stay attached.
-    """
-    from agent.marketing.domains import ContentAssetRepository, VideoProductionRepository
-
-    params = params if isinstance(params, dict) else {}
-    user_id = str(params.get("user_id") or "default")
-    account_id = str(params.get("account_id") or "").strip()
-    script = str(params.get("script") or "").strip()
-    platform = str(params.get("platform") or "douyin").strip()
-    if not account_id or not script:
-        return _err(rid, -32602, "account_id and script are required")
-    if len(script) > 20_000:
-        return _err(rid, -32602, "script must not exceed 20000 characters")
-    try:
-        content = ContentAssetRepository()
-        assets = content.list(
-            user_id=user_id,
-            account_id=account_id,
-            limit=100,
-        ).get("assets", [])
-        normalized_script = " ".join(script.split())
-        campaign = None
-        for asset in assets:
-            payload = asset.get("content") if isinstance(asset.get("content"), dict) else {}
-            if payload.get("_production_kind") != "cross_platform_campaign":
-                continue
-            variants = payload.get("platform_variants") or {}
-            variant = variants.get(platform) if isinstance(variants, dict) else None
-            variant = variant if isinstance(variant, dict) else {}
-            candidate_script = str(
-                variant.get("body_markdown")
-                or variant.get("script")
-                or variant.get("voiceover")
-                or ""
-            ).strip()
-            if candidate_script and " ".join(candidate_script.split()) == normalized_script:
-                campaign = asset
-                break
-        if campaign is None:
-            raise ValueError(
-                "当前脚本尚未关联到已核验证据的内容资产，请先从图文/选题资产进入视频制作。"
-            )
-        campaign_content = campaign.get("content") or {}
-        evidence_refs = list(campaign_content.get("_provenance_evidence_refs") or [])
-        if not evidence_refs:
-            raise ValueError("当前内容资产没有可用于视频制作的核验证据。")
-
-        title = str(campaign.get("title") or campaign.get("topic") or "视频作品")
-        plans = content.list_production_plans(
-            user_id=user_id,
-            account_id=account_id,
-            limit=100,
-        ).get("plans", [])
-        title_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())
-        title_fragments = {
-            title_key[index : index + 4]
-            for index in range(max(0, len(title_key) - 3))
-        }
-        ranked_plans = []
-        for item in plans:
-            if (
-                item.get("kind") != "faceless_video"
-                or platform not in (item.get("target_platforms") or [])
-                or item.get("recommendation_eligible") is not True
-            ):
-                continue
-            objective_key = re.sub(
-                r"[^a-z0-9\u4e00-\u9fff]+",
-                "",
-                str(item.get("objective") or "").lower(),
-            )
-            score = sum(fragment in objective_key for fragment in title_fragments)
-            if score:
-                ranked_plans.append((score, item))
-        plan = max(ranked_plans, key=lambda pair: pair[0])[1] if ranked_plans else None
-        if plan is None:
-            raise ValueError(
-                "当前视频脚本还没有通过预演的视频计划，请先在视频设定中补齐目标受众。"
-            )
-        result = VideoProductionRepository().prepare_from_script(
-            user_id=user_id,
-            account_id=account_id,
-            plan_id=str(plan["plan_id"]),
-            title=title,
-            script=script,
-            platform=platform,
-            evidence_refs=evidence_refs,
-            source_campaign_asset_id=str(campaign["id"]),
-        )
-    except KeyError as exc:
-        return _err(rid, 4044, str(exc))
-    except ValueError as exc:
-        return _err(rid, 4096, str(exc))
-    return _ok(rid, result)
-
-
-def _(rid, params: dict) -> dict:
-    """Prepare a platform-native video directly from an existing campaign asset."""
-    from agent.marketing.domains import VideoProductionRepository
-
-    params = params if isinstance(params, dict) else {}
-    user_id = str(params.get("user_id") or "default")
-    account_id = str(params.get("account_id") or "").strip()
-    asset_id = str(params.get("asset_id") or "").strip()
-    platform = str(params.get("platform") or "").strip()
-    if not account_id or not asset_id or not platform:
-        return _err(rid, -32602, "account_id, asset_id and platform are required")
-    try:
-        repository = VideoProductionRepository()
-        result = repository.prepare_from_campaign(
-            user_id=user_id,
-            account_id=account_id,
-            campaign_asset_id=asset_id,
-            platform=platform,
-        )
-        projection = repository.get_review_projection(
-            production_id=result["production"]["id"],
-            user_id=user_id,
-            account_id=account_id,
-        )
-    except KeyError as exc:
-        return _err(rid, 4044, str(exc))
-    except ValueError as exc:
-        return _err(rid, 4096, str(exc))
-    return _ok(rid, {**result, "projection": projection})
-
-
-@method("marketing.video.production.material.select")
-def _(rid, params: dict) -> dict:
-    """Bind one rights-reviewed material candidate as an immutable IR revision."""
-    from agent.marketing.domains import VideoProductionRepository
-
-    params = params if isinstance(params, dict) else {}
-    if params.get("confirmed") is not True:
-        return _err(rid, 4095, "explicit material-source review is required")
-    user_id = str(params.get("user_id") or "default")
-    account_id = str(params.get("account_id") or "").strip()
-    production_id = str(params.get("production_id") or "").strip()
-    scene_id = str(params.get("scene_id") or "").strip()
-    candidate_id = str(params.get("candidate_id") or "").strip()
-    if not account_id or not production_id or not scene_id or not candidate_id:
-        return _err(
-            rid,
-            -32602,
-            "account_id, production_id, scene_id and candidate_id are required",
-        )
-    try:
-        repository = VideoProductionRepository()
-        result = repository.select_material_candidate(
-            production_id=production_id,
-            scene_id=scene_id,
-            candidate_id=candidate_id,
-            user_id=user_id,
-            account_id=account_id,
-            rights_reviewed=True,
-        )
-        projection = repository.get_review_projection(
-            production_id=result["production"]["id"],
-            user_id=user_id,
-            account_id=account_id,
-        )
-    except KeyError as exc:
-        return _err(rid, 4044, str(exc))
-    except ValueError as exc:
-        return _err(rid, 4096, str(exc))
-    return _ok(rid, {**result, "projection": projection})
-
-
-@method("marketing.video.production.voice.generate")
-def _(rid, params: dict) -> dict:
-    """Generate the prepared voiceover after one explicit user confirmation."""
-    from agent.marketing.domains import VideoProductionRepository
-
-    params = params if isinstance(params, dict) else {}
-    if params.get("confirmed") is not True:
-        return _err(rid, 4095, "explicit voice-generation approval is required")
-    user_id = str(params.get("user_id") or "default")
-    account_id = str(params.get("account_id") or "").strip()
-    production_id = str(params.get("production_id") or "").strip()
-    if not account_id or not production_id:
-        return _err(rid, -32602, "account_id and production_id are required")
-    try:
-        repository = VideoProductionRepository()
-        result = repository.generate_and_bind_voiceover(
-            production_id=production_id,
-            user_id=user_id,
-            account_id=account_id,
-            approval_ref=f"desktop-video-voice:{production_id}",
-            confirmed_by_user=True,
-        )
-        projection = repository.get_review_projection(
-            production_id=result["production"]["id"],
-            user_id=user_id,
-            account_id=account_id,
-        )
-    except KeyError as exc:
-        return _err(rid, 4044, str(exc))
-    except (RuntimeError, ValueError) as exc:
-        return _err(rid, 4096, str(exc))
-    return _ok(rid, {**result, "projection": projection})
-
-
 @method("marketing.drafts.list")
 def _(rid, params: dict) -> dict:
     """Project unfinished content and video work for one account."""
@@ -15297,46 +14812,6 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 4044, str(exc))
     except ValueError as exc:
         return _err(rid, -32602, str(exc))
-    return _ok(rid, projection)
-
-
-@method("marketing.video.production.render")
-def _(rid, params: dict) -> dict:
-    """Render one reviewed local Video IR after explicit product confirmation."""
-    from agent.marketing.domains import VideoProductionRepository
-
-    params = params if isinstance(params, dict) else {}
-    if params.get("confirmed") is not True:
-        return _err(rid, 4095, "explicit video render confirmation is required")
-    user_id = str(params.get("user_id") or "default")
-    account_id = str(params.get("account_id") or "").strip()
-    production_id = str(params.get("production_id") or "").strip()
-    if not account_id or not production_id:
-        return _err(rid, -32602, "account_id and production_id are required")
-    try:
-        repository = VideoProductionRepository()
-        repository.approve(
-            production_id=production_id,
-            user_id=user_id,
-            account_id=account_id,
-            approval_ref=f"desktop-director-review:{production_id}",
-            confirmed_by_user=True,
-        )
-        repository.execute(
-            production_id=production_id,
-            user_id=user_id,
-            account_id=account_id,
-            session_id="desktop-video-director",
-        )
-        projection = repository.get_review_projection(
-            production_id=production_id,
-            user_id=user_id,
-            account_id=account_id,
-        )
-    except KeyError as exc:
-        return _err(rid, 4044, str(exc))
-    except (RuntimeError, ValueError) as exc:
-        return _err(rid, 4096, str(exc))
     return _ok(rid, projection)
 
 

@@ -115,14 +115,25 @@ class OperatingLoopRepository(MarketingDomainRepository):
         return _preflight(row)
 
     def latest_preflight_for_plan(
-        self, *, plan_id: str, user_id: str, account_id: str
+        self,
+        *,
+        plan_id: str,
+        user_id: str,
+        account_id: str,
+        formula_version: str = "",
     ) -> dict[str, Any]:
+        formula_value = str(formula_version or "").strip()
+        formula_clause = " AND formula_version=?" if formula_value else ""
+        params: list[str] = [plan_id, user_id, account_id]
+        if formula_value:
+            params.append(formula_value)
         with self._connection() as db:
             row = db.execute(
                 """SELECT * FROM marketing_preflight_records
-                WHERE plan_id=? AND user_id=? AND account_id=?
-                ORDER BY created_at DESC,id DESC LIMIT 1""",
-                (plan_id, user_id, account_id),
+                WHERE plan_id=? AND user_id=? AND account_id=?"""
+                + formula_clause
+                + " ORDER BY created_at DESC,id DESC LIMIT 1",
+                params,
             ).fetchone()
         if row is None:
             raise ValueError("content production requires a persisted preflight")

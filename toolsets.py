@@ -120,15 +120,38 @@ TOOLSETS = {
             "marketing_interpret_public_content",
             "marketing_read_knowledge",
             "marketing_read_content_assets",
+            "marketing_read_video_productions",
             "marketing_draft_article_create",
             "marketing_draft_content_create",
+            "marketing_submit_official_video",
             "marketing_search_materials",
             "marketing_effect_materialize",
             "marketing_effect_keep_material",
-            "marketing_prepare_video_voice",
-            "marketing_effect_video_voice",
             "marketing_prepare_publish",
             "marketing_read_publish_state",
+        ],
+        "includes": [],
+    },
+
+    # Private settlement surface for the official video Kanban reviewer.
+    # The tool's runtime check additionally requires the dispatched reviewer
+    # profile/task/tenant/workspace env, so naming this toolset in any ordinary
+    # session still exposes nothing.
+    "marketing_video_finalize": {
+        "description": "Reviewer-only settlement of an official Hermes Kanban video into Draft Box",
+        "tools": ["marketing_video_finalize"],
+        "includes": [],
+    },
+
+    "marketing_video_materials": {
+        "description": "Material-Scout-only search and freezing for an official Hermes video execution",
+        "tools": [
+            "marketing_video_material_search",
+            "marketing_video_material_register",
+            "marketing_video_material_inspect",
+            "marketing_video_material_assess",
+            "marketing_video_material_clip",
+            "marketing_video_material_freeze",
         ],
         "includes": [],
     },

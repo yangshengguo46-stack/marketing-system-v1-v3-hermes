@@ -7,7 +7,11 @@ import pytest
 
 from agent.account_registry import AccountRegistry
 from agent.marketing.data_paths import MarketingDataPaths
-from agent.marketing.domains import AccountLifecycleRepository
+from agent.marketing.domains import (
+    AccountLifecycleRepository,
+    ContentAssetRepository,
+    EvidenceRepository,
+)
 from agent.marketing.domains.operating_entities import OperatingEntityRepository
 from agent.marketing.schema import ENTITY_OWNED_SCOPE_COLUMNS
 from hermes_state import SessionDB
@@ -207,3 +211,64 @@ def test_two_platform_accounts_share_one_entity_strategy(tmp_path):
     assert second["operation"] == "existing"
     assert second["entity_id"] == first_entity["id"]
     assert second["account_id"] == douyin["id"]
+
+
+def test_linked_platform_plan_can_cite_verified_entity_evidence(tmp_path):
+    paths = _paths(tmp_path)
+    owner = SessionDB(db_path=paths.agent_db)
+    registry = AccountRegistry(owner)
+    douyin = registry.register_pending(platform="douyin")
+    wechat = registry.register_pending(platform="wechat_official")
+    owner.close()
+
+    entities = OperatingEntityRepository(paths)
+    entity = entities.ensure_for_account(
+        user_id="default", account_id=douyin["id"]
+    )
+    entities.link_account(
+        entity_id=entity["id"],
+        user_id="default",
+        account_id=wechat["id"],
+    )
+    evidence = EvidenceRepository(paths).capture_web_extract_result(
+        user_id="default",
+        account_id=wechat["id"],
+        session_id="entity-evidence",
+        result={
+            "results": [
+                {
+                    "url": "https://example.com/entity-evidence",
+                    "title": "跨平台证据",
+                    "content": "同一经营主体的公众号证据可被抖音制作任务引用。",
+                }
+            ]
+        },
+    )[0]
+    repository = ContentAssetRepository(paths)
+    plan = repository.save_production_plan(
+        user_id="default",
+        account_id=douyin["id"],
+        plan={
+            "status": "planned",
+            "kind": "faceless_video",
+            "objective": "制作一条跨平台证据短视频",
+            "target_platforms": ["douyin"],
+            "constraints": {},
+            "audience_model": {"target_audience": "AI 创业者"},
+        },
+    )
+
+    asset = repository.create_draft(
+        user_id="default",
+        account_id=douyin["id"],
+        title="跨平台证据短视频",
+        plan_id=plan["plan_id"],
+        asset_type="script",
+        platform="douyin",
+        production_kind="faceless_video",
+        content={"script": "先看公众号历史证据，再设计短视频表达。"},
+        evidence_refs=[evidence["id"]],
+    )
+
+    assert asset["entity_id"] == entity["id"]
+    assert asset["content"]["_provenance_evidence_refs"] == [evidence["id"]]

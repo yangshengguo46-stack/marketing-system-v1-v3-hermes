@@ -8,6 +8,7 @@ migrations move into the fork, without introducing a second JSON/SQLite store.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -24,29 +25,49 @@ class AccountContextRepository:
     """Produce a bounded, secret-free account context from canonical storage."""
 
     def __init__(self, paths: MarketingDataPaths | None = None, session_db: Any = None):
-        self._native_accounts = paths is None or session_db is not None
         self._session_db = session_db
-        self.paths = paths or MarketingDataPaths.from_env()
+        resolved = paths or MarketingDataPaths.from_env()
+        if paths is None and session_db is None and not os.environ.get(
+            "MARKETING_OS_AGENT_DB"
+        ):
+            # SessionDB owns the canonical account database location.  Honor
+            # its live default as well as tests/embedders which deliberately
+            # replace that default, instead of reconstructing a parallel path.
+            from hermes_state import DEFAULT_DB_PATH
+
+            resolved = MarketingDataPaths(
+                user_data=resolved.user_data,
+                config_dir=resolved.config_dir,
+                agent_db=Path(DEFAULT_DB_PATH),
+            )
+        if session_db is not None:
+            resolved = MarketingDataPaths(
+                user_data=resolved.user_data,
+                config_dir=resolved.config_dir,
+                agent_db=Path(session_db.db_path),
+            )
+        self.paths = resolved
 
     def list_accounts(self) -> dict[str, Any]:
-        if self._native_accounts:
-            accounts = self._list_native_accounts()
-            return {"accounts": accounts, "total": len(accounts), "source": "hermes_state"}
-        raw = _read_json(self.paths.config_dir / "accounts.json", {"accounts": []})
-        rows = raw.get("accounts") if isinstance(raw, dict) else []
-        accounts = [_sanitize_account(item) for item in rows if isinstance(item, dict)]
-        accounts = [item for item in accounts if item.get("id")]
-        return {"accounts": accounts, "total": len(accounts), "source": "marketing_store"}
+        accounts = self._list_native_accounts()
+        return {"accounts": accounts, "total": len(accounts), "source": "hermes_state"}
 
     def _list_native_accounts(self) -> list[dict[str, Any]]:
         from agent.account_registry import AccountRegistry
         from hermes_state import SessionDB
 
-        db = self._session_db or SessionDB()
+        legacy_accounts = self.paths.config_dir / "accounts.json"
+        if (
+            self._session_db is None
+            and not self.paths.agent_db.is_file()
+            and not legacy_accounts.is_file()
+        ):
+            return []
+        db = self._session_db or SessionDB(db_path=self.paths.agent_db)
         owns_db = self._session_db is None
         registry = AccountRegistry(db)
         try:
-            registry.import_legacy_accounts(self.paths.config_dir / "accounts.json")
+            registry.import_legacy_accounts(legacy_accounts)
             registry.reconcile_unverified_legacy_accounts()
             rows = registry.list()
             return [_sanitize_account(item) for item in rows]
@@ -152,7 +173,9 @@ class AccountContextRepository:
         # Operating-entity membership is Hermes session state. It may live in
         # the native SessionDB while legacy content evidence still points at a
         # separately configured MarketingDataPaths database.
-        entity = OperatingEntityRepository().get(entity_id=entity_id, user_id=user_id)
+        entity = OperatingEntityRepository(self.paths).get(
+            entity_id=entity_id, user_id=user_id
+        )
         contexts = [
             self.read(user_id=user_id, account_id=account_id)
             for account_id in entity.get("account_ids", [])
@@ -257,13 +280,6 @@ def _next_action(model: dict[str, Any]) -> str:
 
 def _sanitize_account(value: dict[str, Any]) -> dict[str, Any]:
     return {key: value.get(key) for key in _ACCOUNT_FIELDS if key in value}
-
-
-def _read_json(path: Path, default: Any) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else default
-    except (OSError, json.JSONDecodeError):
-        return default
 
 
 def _json_object(value: Any, default: Any) -> Any:

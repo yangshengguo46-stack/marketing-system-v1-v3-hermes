@@ -101,7 +101,8 @@ Generate a setup script (`setup.sh`) and run it. The script:
 2. Copies any provided assets into `taste/`, `audio/`, `assets/`
 3. Creates each Hermes profile via `hermes profile create --clone`
 4. Writes per-profile `SOUL.md` (personality + role definition)
-5. Configures profile YAML (toolsets, always_load skills, cwd)
+5. Configures profile YAML (role toolsets for CLI workers, always_load skills,
+   and any project-pinned model provider)
 6. Writes `brief.md`, `TEAM.md`, and `taste/` content
 7. Fires the initial `hermes kanban create` task assigned to the director
 

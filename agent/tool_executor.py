@@ -240,6 +240,18 @@ def _product_code_block_message(agent, function_name: str) -> str | None:
         return None
     if getattr(agent, "_delegate_depth", 0) > 0:
         return None
+    # Official video Kanban workers are already isolated to a dispatcher-owned
+    # workspace and an explicit role profile. They need file/terminal tools to
+    # inspect storyboard artifacts and run the approved renderer/editor stack;
+    # treating them as the user-facing depth-0 Marketing Agent makes the
+    # official pipeline unable to execute its own cards.
+    profile = str(os.environ.get("HERMES_PROFILE") or "")
+    if (
+        profile.startswith("marketing-video-")
+        and os.environ.get("HERMES_KANBAN_TASK")
+        and os.environ.get("HERMES_KANBAN_WORKSPACE")
+    ):
+        return None
     return (
         f"'{function_name}' is isolated from the top-level Marketing Agent. "
         "Do not use code, shell, project files, or generated scripts to replace "
