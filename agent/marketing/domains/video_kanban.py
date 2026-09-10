@@ -32,6 +32,8 @@ from agent.marketing.domains.storage import MarketingDomainRepository
 
 VIDEO_EXECUTION_VERSION = "marketing.video.execution.v2"
 DIRECTOR_CONTRACT_VERSION = "marketing.video.director.v1"
+NARRATION_CONTRACT_VERSION = "marketing.video.narration.v1"
+NARRATION_TIMING_VERSION = "marketing.video.narration-timing.v1"
 # Emergency owner-level cost stop. This is intentionally not a user setting:
 # production cannot issue paid model/TTS calls until a pre-call durable budget
 # reservation is implemented and this code-level interlock is reviewed.
@@ -633,6 +635,23 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
             contract=contract,
             director_context=director_context,
         )
+        narration = self._read_workspace_json(workspace, "narration.json")
+        self._validate_narration_contract(
+            execution=execution,
+            workspace=workspace,
+            director_contract=contract,
+            narration=narration,
+        )
+        artifact_hashes = {
+            relative: hashlib.sha256((workspace / relative).read_bytes()).hexdigest()
+            for relative in (
+                "director-contract.json",
+                "script.md",
+                "narration.json",
+                "storyboard.json",
+                "visual-spec.md",
+            )
+        }
         result = create_video_treatment_preflight(
             OperatingLoopRepository(self.paths),
             {
@@ -660,6 +679,7 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
             "execution_id": execution_id,
             "kanban_task_id": task_id,
             "director_contract_sha256": contract_sha,
+            "artifact_sha256": artifact_hashes,
             "recorded_at": _now(),
         }
         receipt_path.write_text(
@@ -673,11 +693,185 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
                 "go": result["preflight_decision"].get("go") is True,
                 "status": result["preflight_decision"].get("status"),
                 "director_contract_sha256": contract_sha,
+                "artifact_sha256": artifact_hashes,
                 "receipt_path": "treatment-preflight.json",
                 "kanban_task_id": task_id,
             },
         )
         return receipt
+
+    def synthesize_narration_segment(
+        self,
+        *,
+        execution_id: str,
+        segment_id: str,
+        actor_profile: str | None = None,
+        tenant: str | None = None,
+        kanban_task_id: str | None = None,
+        tts_runner: Callable[[str, str], str | dict[str, Any]] | None = None,
+        audio_probe: Callable[[Path], dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Synthesize exactly one approved spoken segment, never timeline metadata."""
+
+        execution, workspace, task_id = self._require_dispatched_role(
+            execution_id=execution_id,
+            expected_profile="marketing-video-voice",
+            actor_profile=actor_profile,
+            tenant=tenant,
+            kanban_task_id=kanban_task_id,
+        )
+        self._require_treatment_gate(execution, workspace)
+        director_contract = self._read_workspace_json(
+            workspace, "director-contract.json"
+        )
+        narration = self._read_workspace_json(workspace, "narration.json")
+        self._validate_narration_contract(
+            execution=execution,
+            workspace=workspace,
+            director_contract=director_contract,
+            narration=narration,
+        )
+        stable_segment_id = str(segment_id or "").strip()
+        segment = next(
+            (
+                item
+                for item in narration["segments"]
+                if str(item.get("id") or "") == stable_segment_id
+            ),
+            None,
+        )
+        if segment is None:
+            raise KeyError("narration segment is outside the approved spoken script")
+        text = str(segment["text"]).strip()
+        text_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        narration_path = workspace / "narration.json"
+        narration_sha = hashlib.sha256(narration_path.read_bytes()).hexdigest()
+        timing_path = workspace / "narration-timing.json"
+        timing = (
+            self._read_workspace_json(workspace, "narration-timing.json")
+            if timing_path.is_file()
+            else {
+                "contract": NARRATION_TIMING_VERSION,
+                "execution_id": execution_id,
+                "source_narration_sha256": narration_sha,
+                "language": narration["language"],
+                "segments": [],
+                "receipts": [],
+                "actual_duration_seconds": 0.0,
+            }
+        )
+        if timing.get("source_narration_sha256") != narration_sha:
+            raise ValueError("narration changed after voice work started")
+        existing = next(
+            (
+                item
+                for item in timing.get("segments") or []
+                if str(item.get("id") or "") == stable_segment_id
+                and item.get("source_text_sha256") == text_sha
+            ),
+            None,
+        )
+        if isinstance(existing, dict):
+            existing_path = self._workspace_file(
+                workspace, str(existing.get("audio_path") or "")
+            )
+            if existing_path.is_file():
+                return {
+                    "contract": NARRATION_TIMING_VERSION,
+                    "execution_id": execution_id,
+                    "kanban_task_id": task_id,
+                    "segment": existing,
+                    "reused": True,
+                }
+        if not PAID_VIDEO_EXECUTION_ARMED:
+            raise RuntimeError("paid video voice execution is not armed")
+
+        audio_dir = workspace / "audio" / "voiceover"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        safe_segment = re.sub(r"[^a-zA-Z0-9._-]+", "-", stable_segment_id)[:80]
+        requested_path = audio_dir / f"{safe_segment}.mp3"
+        if tts_runner is None:
+            from tools.tts_tool import text_to_speech_tool
+
+            tts_runner = lambda spoken_text, output_path: text_to_speech_tool(
+                spoken_text, output_path=output_path
+            )
+        raw_result = tts_runner(text, str(requested_path))
+        result = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
+        if not isinstance(result, dict) or result.get("success") is not True:
+            raise RuntimeError(
+                str((result or {}).get("error") or "TTS synthesis failed")
+            )
+        if str(result.get("provider") or "") != "volcengine-speech":
+            raise ValueError("official video voice must use Volcengine Speech")
+        audio_path = self._workspace_file(
+            workspace, str(result.get("file_path") or "")
+        )
+        if not audio_path.is_file():
+            raise ValueError("TTS provider did not create the narration audio")
+        probe = (audio_probe or self._probe_audio)(audio_path)
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+        request_id = str(receipt.get("request_id") or "").strip()
+        log_id = str(receipt.get("log_id") or "").strip()
+        if not request_id and not log_id:
+            raise ValueError("Volcengine TTS receipt has no request or log id")
+        stable_receipt = {
+            **receipt,
+            "segment_id": stable_segment_id,
+            "source_text_sha256": text_sha,
+            "characters": len(text),
+            "provider_task_id": request_id or log_id,
+            "estimated_cost_cny": float(receipt.get("estimated_cost_cny") or 0),
+        }
+        relative_audio = str(audio_path.relative_to(workspace))
+        timing_segment = {
+            "id": stable_segment_id,
+            "source_text_sha256": text_sha,
+            "characters": len(text),
+            "audio_path": relative_audio,
+            "duration_seconds": float(probe["duration_seconds"]),
+            "audio_sha256": str(probe["sha256"]),
+            "provider": "volcengine-speech",
+            "voice": str(receipt.get("voice") or ""),
+        }
+        segments = [
+            item
+            for item in timing.get("segments") or []
+            if str(item.get("id") or "") != stable_segment_id
+        ]
+        segments.append(timing_segment)
+        segment_order = {
+            str(item["id"]): index for index, item in enumerate(narration["segments"])
+        }
+        segments.sort(key=lambda item: segment_order.get(str(item.get("id") or ""), 9999))
+        receipts = [
+            item
+            for item in timing.get("receipts") or []
+            if str(item.get("segment_id") or "") != stable_segment_id
+        ]
+        receipts.append(stable_receipt)
+        receipts.sort(key=lambda item: segment_order.get(str(item.get("segment_id") or ""), 9999))
+        timing.update(
+            {
+                "segments": segments,
+                "receipts": receipts,
+                "actual_duration_seconds": round(
+                    sum(float(item["duration_seconds"]) for item in segments), 3
+                ),
+                "updated_at": _now(),
+            }
+        )
+        timing_path.write_text(
+            json.dumps(timing, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return {
+            "contract": NARRATION_TIMING_VERSION,
+            "execution_id": execution_id,
+            "kanban_task_id": task_id,
+            "segment": timing_segment,
+            "receipt": stable_receipt,
+            "reused": False,
+        }
 
     def preflight_cut(
         self,
@@ -956,6 +1150,77 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
         if not allowed_human and human_basis.get("cold_start") is not True:
             raise ValueError("empty human observer input must be declared as cold start")
 
+    @classmethod
+    def _validate_narration_contract(
+        cls,
+        *,
+        execution: dict[str, Any],
+        workspace: Path,
+        director_contract: dict[str, Any],
+        narration: dict[str, Any],
+    ) -> None:
+        """Keep spoken copy separate from shots, timecodes, captions and direction."""
+
+        required_top = {"contract", "execution_id", "language", "segments"}
+        if set(narration) != required_top:
+            raise ValueError(
+                "narration.json may contain only contract, execution_id, language and segments"
+            )
+        if narration.get("contract") != NARRATION_CONTRACT_VERSION:
+            raise ValueError("unsupported narration contract version")
+        if str(narration.get("execution_id") or "") != execution["id"]:
+            raise ValueError("narration contract belongs to another execution")
+        if not str(narration.get("language") or "").strip():
+            raise ValueError("narration language is required")
+        segments = narration.get("segments")
+        shots = (director_contract.get("treatment") or {}).get("shot_list")
+        if not isinstance(segments, list) or not isinstance(shots, list):
+            raise ValueError("narration segments and director shots are required")
+        if len(segments) != len(shots) or not segments:
+            raise ValueError("narration must map one-to-one to director shots")
+        allowed_segment_fields = {"id", "text", "pronunciation_hints"}
+        timecode_markup = re.compile(
+            r"(?im)^\s*(?:"
+            r"\[?\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?\]?\s*"
+            r"(?:-->|[-–—至到])\s*\[?\d{1,2}:\d{2}"
+            r"(?::\d{2})?(?:[.,]\d{1,3})?\]?|"
+            r"(?:镜头|分镜|时间码|开始时间|结束时间)\s*(?:[#：:]|\d))"
+        )
+        spoken: list[str] = []
+        for segment, shot in zip(segments, shots, strict=True):
+            if not isinstance(segment, dict):
+                raise ValueError("every narration segment must be an object")
+            if not set(segment).issubset(allowed_segment_fields):
+                raise ValueError("narration segments cannot contain timing or shot metadata")
+            segment_id = str(segment.get("id") or "").strip()
+            text = str(segment.get("text") or "").strip()
+            if segment_id != str(shot.get("id") or "").strip():
+                raise ValueError("narration segment ids must match director shot ids in order")
+            if not text or len(text) > 1_500:
+                raise ValueError("every narration segment needs bounded spoken text")
+            if text != str(shot.get("narration_text") or "").strip():
+                raise ValueError("narration text drifted from the approved director treatment")
+            if timecode_markup.search(text):
+                raise ValueError("spoken narration contains timeline or shot-label metadata")
+            hints = segment.get("pronunciation_hints") or []
+            if not isinstance(hints, list) or any(
+                not isinstance(item, str) or not item.strip() for item in hints
+            ):
+                raise ValueError("pronunciation hints must be a list of non-empty strings")
+            spoken.append(text)
+
+        def normalized(value: Any) -> str:
+            return re.sub(r"\s+", "", str(value or "")).strip()
+
+        spoken_text = "".join(spoken)
+        if normalized((director_contract.get("treatment") or {}).get("voiceover_script")) != normalized(spoken_text):
+            raise ValueError("voiceover_script must contain only the approved spoken copy")
+        script_path = workspace / "script.md"
+        if not script_path.is_file() or normalized(
+            script_path.read_text(encoding="utf-8")
+        ) != normalized(spoken_text):
+            raise ValueError("script.md must be the same plain spoken copy as narration.json")
+
     @staticmethod
     def _require_treatment_gate(
         execution: dict[str, Any], workspace: Path
@@ -965,13 +1230,23 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
             raise PermissionError(
                 "material work is locked until the director treatment preflight passes"
             )
-        contract_path = workspace / "director-contract.json"
         receipt_path = workspace / str(gate.get("receipt_path") or "")
-        if not contract_path.is_file() or not receipt_path.is_file():
+        artifact_hashes = gate.get("artifact_sha256")
+        if not isinstance(artifact_hashes, dict) or not receipt_path.is_file():
             raise ValueError("treatment preflight artifacts are missing")
-        actual_sha = hashlib.sha256(contract_path.read_bytes()).hexdigest()
-        if actual_sha != str(gate.get("director_contract_sha256") or ""):
-            raise ValueError("director contract changed after treatment preflight")
+        for relative in (
+            "director-contract.json",
+            "script.md",
+            "narration.json",
+            "storyboard.json",
+            "visual-spec.md",
+        ):
+            path = workspace / relative
+            if not path.is_file():
+                raise ValueError(f"treatment artifact is missing: {relative}")
+            actual_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+            if actual_sha != str(artifact_hashes.get(relative) or ""):
+                raise ValueError(f"treatment artifact changed after preflight: {relative}")
         return gate
 
     @staticmethod
@@ -2604,6 +2879,48 @@ class VideoKanbanExecutionRepository(MarketingDomainRepository):
                 raise ValueError(
                     "material manifest does not match the durable visual inspection"
                 )
+
+    @staticmethod
+    def _probe_audio(path: Path) -> dict[str, Any]:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,codec_name,sample_rate,channels",
+                "-show_entries",
+                "format=duration,size",
+                "-of",
+                "json",
+                str(path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise ValueError("ffprobe could not inspect narration audio")
+        payload = json.loads(result.stdout)
+        streams = list(payload.get("streams") or [])
+        audio = next(
+            (item for item in streams if item.get("codec_type") == "audio"), {}
+        )
+        if not audio:
+            raise ValueError("narration artifact has no audio stream")
+        format_info = payload.get("format") or {}
+        duration = round(float(format_info.get("duration") or 0), 3)
+        if duration <= 0:
+            raise ValueError("narration audio has no measurable duration")
+        return {
+            "duration_seconds": duration,
+            "size_bytes": int(format_info.get("size") or path.stat().st_size),
+            "codec": str(audio.get("codec_name") or ""),
+            "sample_rate": int(audio.get("sample_rate") or 0),
+            "channels": int(audio.get("channels") or 0),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
 
     @staticmethod
     def _probe_final_video(path: Path) -> dict[str, Any]:
